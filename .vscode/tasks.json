@@ -1,0 +1,18 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "task_build",
+            "type": "shell",
+            "command": "bash .vscode/build.sh",
+            "args": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "cwd": "${workspaceFolder}",  // 指定工作目录为工作区根目录
+            "problemMatcher": ["$gcc"],  // 如果是 C++ 项目，可以使用 gcc 的问题匹配器
+            "showOutput": "always"  // 总是显示终端输出
+        }
+    ]
+}

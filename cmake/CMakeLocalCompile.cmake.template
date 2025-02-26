@@ -1,0 +1,10 @@
+# 本地环境配置模板
+
+message("================== 设置应用安装根目录")
+set(CMAKE_INSTALL_PREFIX "../install" CACHE PATH "安装根目录" FORCE)
+
+# 设置 OpenCV 的cmake路径 （若没在Windows环境变量中添加，则需在此处设置）
+set(OpenCV_DIR "E:/BaseMode/opencv/build")
+
+# 设置PCL路径  （若没在Windows环境变量中添加，则需在此处设置）
+set(PCL_PATH "E:/BaseMode/PCL 1.13.0")
