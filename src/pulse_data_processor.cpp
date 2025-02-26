@@ -2,8 +2,8 @@
  * @Author       : baizs zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-21 15:10:40
  * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-02-14 14:03:40
- * @FilePath     : /calib_r_offset/src/pulse_data_processor.cpp
+ * @LastEditTime : 2025-02-26 09:46:23
+ * @FilePath     : /pcl_viewer/src/pulse_data_processor.cpp
  * @Description  : 读本地的脉冲回波数据
  *
  * Copyright (c) 2024 by vitalchem, All Rights Reserved.
@@ -139,9 +139,9 @@ namespace alog_lidar {
 				float slot_ang_rad = slot_ang * M_PI / 180.0f;
 
 				PointData point = {
-					pixel_idx,
-					slot_index,
-					peaks[select_index],
+					static_cast<uint16_t>(pixel_idx),                // 显式转换为 uint16_t
+					static_cast<uint16_t>(slot_index),              // 显式转换为 uint16_t
+					static_cast<uint16_t>(std::round(peaks[select_index])), // 显式转换为 uint16_t，并四舍五入
 					r,
 					theta_rad,
 					slot_ang_rad,

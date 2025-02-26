@@ -2,8 +2,8 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-28 10:30:48
  * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-02-26 09:08:52
- * @FilePath     : /repair_ground/src/debug_visual.cpp
+ * @LastEditTime : 2025-02-26 09:49:07
+ * @FilePath     : /pcl_viewer/src/debug_visual.cpp
  * @Description  : PCL可视化方法 （算法测试用）
  *
  * Copyright (c) 2024 by vitalchem, All Rights Reserved.
