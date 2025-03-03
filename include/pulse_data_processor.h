@@ -2,8 +2,8 @@
  * @Author       : baizs zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-21 15:08:45
  * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2024-12-16 17:01:27
- * @FilePath     : /calib_r_offset/include/pulse_data_processor.h
+ * @LastEditTime : 2025-03-03 10:09:36
+ * @FilePath     : /pcl_viewer/include/pulse_data_processor.h
  * @Description  : 读本地的脉冲回波数据
  *
  * Copyright (c) 2024 by vitalchem, All Rights Reserved.
@@ -24,5 +24,7 @@ namespace alog_lidar {
 	bool saveListToFile(const std::vector<float> &list, const std::string &filename);
 
 	bool loadListFromFile(std::vector<float> &list, const std::string &filename);
+
+	void readPulseData3(const std::string &filename, PointMatrix3 &mat);
 	
 }

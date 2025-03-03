@@ -2,8 +2,8 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-02-26 08:57:59
- * @FilePath     : /repair_ground/src/main.cpp
+ * @LastEditTime : 2025-03-03 11:14:39
+ * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
  * Copyright (c) 2024 by vitalchem, All Rights Reserved.
@@ -105,12 +105,44 @@ int testShowCloud()
 	// showCloud4in1port(mat2pcl(list_mat[0]), mat2pcl(list_mat[1]), mat2pcl(list_mat[2]), mat2pcl(list_mat[3]));
 	return 0;
 }
+// 解析回波数据3，可视化原始点云
+void testShowCloud3()
+{
+	PclHelperB pclHelper;
+	// 设置文件夹路径和文件后缀
+	std::string folder = "../data"; // 数据文件夹路径
+	std::string postfix = ".txt";	// 文件后缀，按需求替换
 
+	std::vector<float> list_r;
+	std::vector<float> list_sa;
+	loadListFromFile(list_r, "../data/param/list_r.txt"); // 读取距离标定参数
+	loadListFromFile(list_sa, "../data/param/list_sa.txt"); // 读取水平角标定参数
+
+	// 读取点云
+	std::vector<std::string> filePaths = getFullFilePath(folder, postfix);
+
+	for (size_t i = 0; i < filePaths.size(); ++i)
+	{
+		std::cout << "Processing file: " << filePaths[i] << std::endl;
+
+		std::string filename = filePaths[i];
+		// 读取脉冲数据文件
+		PointMatrix mat_src;
+		PointMatrix3 mat_3;
+		readPulseData(filename, mat_src); // 全0为无效点
+		readPulseData3(filename, mat_3); // 全0为无效点
+		// mat_src = applyRsaOffset(mat_origin, list_r, list_sa); // 应用距离和水平角标定参数
+		// mat_src = applyROffset(mat_origin, list_r);
+		showCloud2(mat2xyzi(mat_src, true), mat3toxyzi(mat_3, true), "mat_src"); // 可视化
+	}
+	return ;
+}
 int main()
 {
 
 	// MSVC 设置控制台输出为 UTF-8
 	//  SetConsoleOutputCP(CP_UTF8);
-	testShowCloud();
+	// testShowCloud();
+	testShowCloud3();
 	// testConvert(); // 测试debug模拟点云格式转化
 }

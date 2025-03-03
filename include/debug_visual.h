@@ -2,8 +2,8 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-28 10:32:20
  * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-02-14 15:36:52
- * @FilePath     : /calib_r_offset/include/debug_visual.h
+ * @LastEditTime : 2025-03-03 10:12:42
+ * @FilePath     : /pcl_viewer/include/debug_visual.h
  * @Description  : PCL可视化方法 （算法测试用）
  *
  * Copyright (c) 2024 by vitalchem, All Rights Reserved.
@@ -29,6 +29,7 @@ namespace alog_lidar
     pcl::PointCloud<pcl::PointXYZI>::Ptr mat2xyzi(const PointMatrix &matrix, bool pick_src = false);
     // 重载方法，强度，对向量点云
     pcl::PointCloud<pcl::PointXYZI>::Ptr mat2xyzi(const std::vector<PointData>& pts);
+    pcl::PointCloud<pcl::PointXYZI>::Ptr mat3toxyzi(const PointMatrix3 &matrix, bool pick_src = false);
     // 重载方法：将 PointMatrix 转换为 pcl::PointCloud<pcl::PointXYZ>::Ptr 并输出索引到 PointData 的映射
     pcl::PointCloud<pcl::PointXYZ>::Ptr mat2pcl(const PointMatrix &matrix, std::map<size_t, PointData> &map);
     //

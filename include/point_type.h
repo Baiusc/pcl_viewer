@@ -2,8 +2,8 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-28 14:41:19
  * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-01-02 12:02:43
- * @FilePath     : /calib_r_offset/include/point_type.h
+ * @LastEditTime : 2025-03-03 10:03:07
+ * @FilePath     : /pcl_viewer/include/point_type.h
  * @Description  : 点云格式定义，格式转换，按行列截取操作
  *
  * Copyright (c) 2024 by vitalchem, All Rights Reserved.
@@ -57,8 +57,9 @@ namespace alog_lidar
         bool is_valid; // 点的回波数据是否有效
     };
 
-    using PointMatrix = std::vector<std::vector<PointData>>;
-
+    using PointMatrix = std::vector<std::vector<PointData>>; // 二维矩阵
+	using PointMatrix3 = std::vector<std::vector<std::vector<PointData>>>;  // 三维矩阵 不筛选回波
+	
     // 将 PointMatrix 转换为 8 位单通道灰度图并保存为 BMP 格式
     void saveMatAsBMP(const PointMatrix &mat, const std::string &filename);
 

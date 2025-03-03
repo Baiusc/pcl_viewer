@@ -2,7 +2,7 @@
  * @Author       : baizs zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-21 15:10:40
  * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-02-26 09:46:23
+ * @LastEditTime : 2025-03-03 10:09:58
  * @FilePath     : /pcl_viewer/src/pulse_data_processor.cpp
  * @Description  : 读本地的脉冲回波数据
  *
@@ -226,4 +226,137 @@ namespace alog_lidar {
 		// 如果既不是单行也不是单列，则返回空的 squeezed，表示无法压缩
 		return squeezed;
 	}
+
+
+
+	void readPulseData3(const std::string &filename, PointMatrix3 &mat)
+	{
+		const double LIGHT_SPEED = 299792458e-9; // 单位：m/ns
+		const int PIXEL_NUM = 96;
+		const int SLOT_NUM = 800;
+	
+		mat.resize(PIXEL_NUM, std::vector<std::vector<PointData>>(SLOT_NUM));
+	
+		std::ifstream infile(filename);
+		if (!infile.is_open())
+		{
+			std::cerr << "Failed to open file: " << filename << std::endl;
+			return;
+		}
+	
+		std::string line;
+		int slot_index = 0, last_slot_dics = 0, pixel_cnt = 0;
+		float slot_ang = 0.0f;
+		bool bDataBegin = false;
+	
+		while (std::getline(infile, line))
+		{
+			if (line.find("start of slot") != std::string::npos)
+			{
+				size_t f1 = line.find('[');
+				size_t f2 = line.find(']');
+				slot_index = std::stoi(line.substr(f1 + 1, f2 - f1 - 1));
+				bDataBegin = false;
+				pixel_cnt = 0;
+				continue;
+			}
+	
+			if (line.find("angle") != std::string::npos)
+			{
+				auto tokens = splitString(line, ' ');
+				int slot_dics = std::stoi(tokens.back());
+				if (slot_index == 0)
+				{
+					slot_ang = -60.0f;
+				}
+				else if (slot_index == 1)
+				{
+					slot_ang = -59.85f;
+					last_slot_dics = slot_dics;
+				}
+				else
+				{
+					int delta_dics = (slot_dics >= last_slot_dics) ? (slot_dics - last_slot_dics) : (slot_dics + 65536 - last_slot_dics);
+					slot_ang += delta_dics * 360.0f / 65536.0f * 2.0f;
+					last_slot_dics = slot_dics;
+				}
+				bDataBegin = true;
+				continue;
+			}
+	
+			if (bDataBegin)
+			{
+				pixel_cnt++;
+				if (pixel_cnt > PIXEL_NUM || slot_index >= SLOT_NUM)
+				{
+					continue;
+				}
+	
+				auto tokens = splitString(line, ' ');
+				if (tokens.size() < 9)
+					continue;
+	
+				std::vector<double> peaks = {
+					std::stod(tokens[2 + 2]), // 第3、6、9个元素是峰值
+					std::stod(tokens[5 + 2]),
+					std::stod(tokens[8 + 2])
+				};
+				std::vector<double> tofs = {
+					std::stod(tokens[0 + 2]) / 1000, // TOF1
+					std::stod(tokens[3 + 2]) / 1000, // TOF2
+					std::stod(tokens[6 + 2]) / 1000  // TOF3
+				};
+				std::vector<double> widths = {
+					std::stod(tokens[1 + 2]) / 1000, // 宽度1
+					std::stod(tokens[4 + 2]) / 1000, // 宽度2
+					std::stod(tokens[7 + 2]) / 1000  // 宽度3
+				};
+	
+				int pixel_roi_start = 0;
+				int pixel_idx = pixel_cnt - 1 + pixel_roi_start;
+				int u = 47;
+	
+				float theta = (pixel_idx - u) / 96.0f * 20.0f - 2.5f;
+				float theta_rad = theta * M_PI / 180.0f;
+				float slot_ang_rad = slot_ang * M_PI / 180.0f;
+	
+				// 处理三个回波
+				for (int i = 0; i < 3; ++i)
+				{
+					if (tofs[i] == 0.016)
+						continue; // 跳过无效数据
+	
+					float r = tofs[i] * LIGHT_SPEED / 2.0f;
+					float intensity_val = std::min(255.0, std::round(peaks[i] * widths[i] / 702.0 / 5.0 * 256.0));
+					uint8_t intensity = static_cast<uint8_t>(intensity_val);
+					float reflect = intensity_val / 255.0f;
+	
+					PointData point{
+						static_cast<uint16_t>(pixel_idx),
+						static_cast<uint16_t>(slot_index),
+						static_cast<uint16_t>(std::round(peaks[i])),
+						r,
+						theta_rad,
+						slot_ang_rad,
+						theta,
+						slot_ang,
+						reflect,
+						intensity,
+						r * std::cos(theta_rad) * std::cos(slot_ang_rad),
+						r * std::cos(theta_rad) * std::sin(slot_ang_rad),
+						r * std::sin(theta_rad),
+						true};
+	
+					// 检查边界后添加点到三维矩阵
+					if (pixel_idx < PIXEL_NUM && slot_index < SLOT_NUM)
+					{
+						mat[pixel_idx][slot_index].push_back(point);
+					}
+				}
+			}
+		}
+	
+		infile.close();
+	}
+
 }

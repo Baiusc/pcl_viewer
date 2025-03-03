@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-28 10:30:48
  * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-02-26 09:49:07
+ * @LastEditTime : 2025-03-03 11:22:55
  * @FilePath     : /pcl_viewer/src/debug_visual.cpp
  * @Description  : PCL可视化方法 （算法测试用）
  *
@@ -230,6 +230,49 @@ namespace alog_lidar
                 cloud->points.push_back(pcl_point);
                 if (pick_src)
                     index_to_pointdata[point_index++] = point; // 建立索引到 PointData 的映射 仅用于可视化
+            }
+        }
+
+        // 返回点云对象
+        return cloud;
+    }
+    pcl::PointCloud<pcl::PointXYZI>::Ptr mat3toxyzi(const PointMatrix3 &matrix, bool pick_src)
+    {
+        int point_index = 0; // 用于记录索引
+        // 创建一个新的 pcl 点云对象
+        pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZI>);
+
+        // 遍历 PointMatrix3 中的每个点
+        for (size_t pixel_idx = 0; pixel_idx < matrix.size(); ++pixel_idx)
+        {
+            for (size_t slot_idx = 0; slot_idx < matrix[pixel_idx].size(); ++slot_idx)
+            {
+                // 遍历每个位置的回波点
+                for (size_t echo_idx = 0; echo_idx < matrix[pixel_idx][slot_idx].size(); ++echo_idx)
+                {
+                    const PointData &point = matrix[pixel_idx][slot_idx][echo_idx];
+                    if (!point.is_valid)
+                        continue; // 跳过无效点
+
+                    // 创建 pcl 点并赋值
+                    pcl::PointXYZI pcl_point;
+                    pcl_point.x = point.x;
+                    pcl_point.y = point.y;
+                    pcl_point.z = point.z;
+                    if(echo_idx != 0)
+                    {
+                        std::cout << "pixel_idx: " << pixel_idx << ", slot_idx: " << slot_idx << ", echo_idx: " << echo_idx << std::endl;
+                        continue;
+                    }
+                    
+                    pcl_point.intensity = point.peak; // 设置反射率值
+                    // pcl_point.intensity = static_cast<float>(echo_idx); // 将 intensity 赋值为回波索引 (0, 1, 2)
+
+                    // 添加到点云中
+                    cloud->points.push_back(pcl_point);
+                    if (pick_src)
+                        index_to_pointdata[point_index++] = point; // 建立索引到 PointData 的映射 仅用于可视化
+                }
             }
         }
 

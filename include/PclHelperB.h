@@ -2,8 +2,8 @@
  * @Author       : baizs zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-21 09:44:32
  * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-02-26 16:26:26
- * @FilePath     : /repair_ground/include/PclHelperB.h
+ * @LastEditTime : 2025-03-03 12:01:13
+ * @FilePath     : /pcl_viewer/include/PclHelperB.h
  * @Description  : PCL库算法助手
  *
  * Copyright (c) 2024 by vitalchem, All Rights Reserved.
@@ -841,7 +841,7 @@ public:
 	void initViewer(pcl::visualization::PCLVisualizer::Ptr &viewer, pcl::PointCloud<PointT>::Ptr &cloud)
 	{
 		viewer->initCameraParameters();
-		viewer->setBackgroundColor(255, 255, 255);
+		viewer->setBackgroundColor(37, 37, 37);
 		Eigen::Vector4f centroid;
 		pcl::compute3DCentroid(*cloud, centroid);
 		viewer->setCameraPosition(centroid[0], centroid[1], centroid[2] + 10.0f, centroid[0], centroid[1], centroid[2], 0, 1, 0);
@@ -850,13 +850,13 @@ public:
 	void initViewer(pcl::visualization::PCLVisualizer::Ptr &viewer, pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud)
 	{
 		viewer->initCameraParameters();
-		viewer->setBackgroundColor(255, 255, 255);
+		viewer->setBackgroundColor(37, 37, 37);
 		Eigen::Vector4f centroid;
 		pcl::compute3DCentroid(*cloud, centroid);
 		viewer->setCameraPosition(centroid[0], centroid[1], centroid[2] + 10.0f, centroid[0], centroid[1], centroid[2], 0, 1, 0);
 	}
 	// 添加viewport (从1开始)
-	void addViewport(pcl::visualization::PCLVisualizer::Ptr &viewer, int viewport, int count = 1, float r = 1.0, float g = 1.0, float b = 1.0)
+	void addViewport(pcl::visualization::PCLVisualizer::Ptr &viewer, int viewport, int count = 1, float r = 50.f/255.f, float g = 48.f/255.f, float b = 48.f/255.f)
 	{
 		float x_min = (viewport - 1) * (1.0 / count);
 		float x_max = viewport * (1.0 / count);
@@ -867,14 +867,14 @@ public:
 		std::string x_label = "x_label_v" + std::to_string(viewport);
 		std::string y_label = "y_label_v" + std::to_string(viewport);
 		std::string z_label = "z_label_v" + std::to_string(viewport);
-		viewer->addText3D("x", pcl::PointXYZ(11, 0, 0), 1.0, 1.0, 0.0, 0.0, x_label, viewport);
-		viewer->addText3D("y", pcl::PointXYZ(0, 11, 0), 1.0, 0.0, 1.0, 0.0, y_label, viewport);
-		viewer->addText3D("z", pcl::PointXYZ(0, 0, 11), 1.0, 0.0, 0.0, 1.0, z_label, viewport);
+		// viewer->addText3D("x", pcl::PointXYZ(11, 0, 0), 1.0, 1.0, 0.0, 0.0, x_label, viewport);
+		// viewer->addText3D("y", pcl::PointXYZ(0, 11, 0), 1.0, 0.0, 1.0, 0.0, y_label, viewport);
+		// viewer->addText3D("z", pcl::PointXYZ(0, 0, 11), 1.0, 0.0, 0.0, 1.0, z_label, viewport);
 		// 标题
 		viewer->addText("viewport " + std::to_string(viewport), 10, 10, std::to_string(viewport), viewport);
 	}
 	// 添加viewport (从1开始)
-	void addViewport(std::string name, pcl::visualization::PCLVisualizer::Ptr& viewer, int viewport, int count = 1, float r = 1.0, float g = 1.0, float b = 1.0)
+	void addViewport(std::string name, pcl::visualization::PCLVisualizer::Ptr& viewer, int viewport, int count = 1, float r = 50.f/255.f, float g = 48.f/255.f, float b = 48.f/255.f)
 	{
 		float x_min = (viewport - 1) * (1.0 / count);
 		float x_max = viewport * (1.0 / count);
@@ -885,9 +885,9 @@ public:
 		std::string x_label = "x_label_v" + std::to_string(viewport);
 		std::string y_label = "y_label_v" + std::to_string(viewport);
 		std::string z_label = "z_label_v" + std::to_string(viewport);
-		viewer->addText3D("x", pcl::PointXYZ(11, 0, 0), 1.0, 1.0, 0.0, 0.0, x_label, viewport);
-		viewer->addText3D("y", pcl::PointXYZ(0, 11, 0), 1.0, 0.0, 1.0, 0.0, y_label, viewport);
-		viewer->addText3D("z", pcl::PointXYZ(0, 0, 11), 1.0, 0.0, 0.0, 1.0, z_label, viewport);
+		// viewer->addText3D("x", pcl::PointXYZ(11, 0, 0), 1.0, 1.0, 0.0, 0.0, x_label, viewport);
+		// viewer->addText3D("y", pcl::PointXYZ(0, 11, 0), 1.0, 0.0, 1.0, 0.0, y_label, viewport);
+		// viewer->addText3D("z", pcl::PointXYZ(0, 0, 11), 1.0, 0.0, 0.0, 1.0, z_label, viewport);
 		// 标题
 		viewer->addText(name, 10, 10, std::to_string(viewport), viewport);
 	}
@@ -1045,8 +1045,8 @@ public:
 
 			// HSV 映射：H 从 0 (红色) -> 240 (蓝色)，S 和 V 固定为 1
 			float h = (1.f - normalized_intensity) * 240.0f / 360.0f; // 反向映射：强度越大，H 越接近 0 ，为红色
-			float s = 1.0f;
-			float v = 1.0f;
+			float s = 0.8f;
+			float v = 0.8f;
 
 			// 转换 HSV 到 RGB
 			float r, g, b;
