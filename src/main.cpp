@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-03-03 11:14:39
+ * @LastEditTime : 2025-03-04 17:21:20
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -139,10 +139,9 @@ void testShowCloud3()
 }
 int main()
 {
-
 	// MSVC 设置控制台输出为 UTF-8
 	//  SetConsoleOutputCP(CP_UTF8);
-	// testShowCloud();
-	testShowCloud3();
+	testShowCloud();
+	// testShowCloud3();
 	// testConvert(); // 测试debug模拟点云格式转化
 }
