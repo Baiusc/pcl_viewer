@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-28 10:30:48
  * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-03-03 11:22:55
+ * @LastEditTime : 2025-03-05 17:12:19
  * @FilePath     : /pcl_viewer/src/debug_visual.cpp
  * @Description  : PCL可视化方法 （算法测试用）
  *
@@ -262,7 +262,7 @@ namespace alog_lidar
                     if(echo_idx != 0)
                     {
                         std::cout << "pixel_idx: " << pixel_idx << ", slot_idx: " << slot_idx << ", echo_idx: " << echo_idx << std::endl;
-                        continue;
+                        continue; // 只选取第一个回波点
                     }
                     
                     pcl_point.intensity = point.peak; // 设置反射率值

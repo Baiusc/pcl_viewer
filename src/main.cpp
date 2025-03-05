@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-03-04 17:21:20
+ * @LastEditTime : 2025-03-05 17:04:41
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -87,16 +87,17 @@ int testShowCloud()
 		std::string filename = filePaths[i];
 		// 读取脉冲数据文件
 		PointMatrix mat_origin;
+		PointMatrix mat_src;
 		readPulseData(filename, mat_origin); // 全0为无效点
-		// mat_src = applyRsaOffset(mat_origin, list_r, list_sa); // 应用距离和水平角标定参数
-		auto mat_edge_0 = extractData(mat_origin, {0}, list_slot_idx);
-		auto mat_edge_95 = extractData(mat_origin, {95}, list_slot_idx);
-		std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> list_cloud;
-		list_cloud.push_back(mat2pcl(mat_edge_0));
-		list_cloud.push_back(mat2pcl(mat_edge_95));
+		mat_src = applyRsaOffset(mat_origin, list_r, list_sa); // 应用距离和水平角标定参数
+		// auto mat_edge_0 = extractData(mat_origin, {0}, list_slot_idx);
+		// auto mat_edge_95 = extractData(mat_origin, {95}, list_slot_idx);
+		// std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> list_cloud;
+		// list_cloud.push_back(mat2pcl(mat_edge_0));
+		// list_cloud.push_back(mat2pcl(mat_edge_95));
 		// showListCloudRGB(mat2pcl(mat_origin, true),list_cloud); // 可视化 背景和目标点云们
 
-		auto mat_src = mat_origin;
+		// auto mat_src = mat_origin;
 		// mat_src = applyROffset(mat_origin, list_r);
 		showCloud(mat2xyzi(mat_src, true), "mat_src"); // 可视化
 		// list_mat.push_back(mat_src);
@@ -134,6 +135,8 @@ void testShowCloud3()
 		// mat_src = applyRsaOffset(mat_origin, list_r, list_sa); // 应用距离和水平角标定参数
 		// mat_src = applyROffset(mat_origin, list_r);
 		showCloud2(mat2xyzi(mat_src, true), mat3toxyzi(mat_3, true), "mat_src"); // 可视化
+		// showCloud(mat3toxyzi(mat_3, true), "mat_src_3"); // 可视化
+
 	}
 	return ;
 }
@@ -141,7 +144,7 @@ int main()
 {
 	// MSVC 设置控制台输出为 UTF-8
 	//  SetConsoleOutputCP(CP_UTF8);
-	testShowCloud();
-	// testShowCloud3();
+	// testShowCloud();
+	testShowCloud3();
 	// testConvert(); // 测试debug模拟点云格式转化
 }

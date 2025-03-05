@@ -2,7 +2,7 @@
  * @Author       : baizs zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-21 09:44:32
  * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-03-03 13:41:50
+ * @LastEditTime : 2025-03-05 17:10:49
  * @FilePath     : /pcl_viewer/include/PclHelperB.h
  * @Description  : PCL库算法助手
  *
@@ -1035,7 +1035,7 @@ public:
 		}
 
 		// min_intensity = 0; // DEBUG可视化 自定义强度区间
-		max_intensity = 1600; 
+		max_intensity > 1600 ? max_intensity = 1600: max_intensity = max_intensity; // DEBUG可视化 自定义强度区间
 
 		// 映射强度值到颜色
 		for (size_t i = 0; i < cloud->points.size(); ++i)
@@ -1067,7 +1067,7 @@ public:
 
 		// 添加点云到可视化器
 		viewer->addPointCloud<pcl::PointXYZRGB>(cloud_colored, cloud_id, viewport);
-		viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 4, cloud_id);
+		viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, cloud_id);
 	}
 
 	// 可视化簇群
