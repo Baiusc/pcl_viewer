@@ -1,8 +1,8 @@
 /*
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
- * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-03-05 17:04:41
+ * @LastEditors  : error: error: git config user.name & please set dead value or install git && error: git config user.email & please set dead value or install git & please set dead value or install git
+ * @LastEditTime : 2025-03-06 16:02:39
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -144,7 +144,7 @@ int main()
 {
 	// MSVC 设置控制台输出为 UTF-8
 	//  SetConsoleOutputCP(CP_UTF8);
-	// testShowCloud();
-	testShowCloud3();
+	testShowCloud();
+	// testShowCloud3();
 	// testConvert(); // 测试debug模拟点云格式转化
 }
