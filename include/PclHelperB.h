@@ -1,8 +1,8 @@
 /*
  * @Author       : baizs zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-21 09:44:32
- * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-03-05 17:10:49
+ * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
+ * @LastEditTime : 2025-03-10 16:19:52
  * @FilePath     : /pcl_viewer/include/PclHelperB.h
  * @Description  : PCL库算法助手
  *
@@ -1044,7 +1044,7 @@ public:
 			float normalized_intensity = (point.intensity - min_intensity) / (max_intensity - min_intensity);
 
 			// HSV 映射：H 从 0 (红色) -> 240 (蓝色)，S 和 V 固定为 1
-			float h = (1.f - normalized_intensity) * 240.0f / 360.0f; // 反向映射：强度越大，H 越接近 0 ，为红色
+			float h = (1.f - normalized_intensity) * 200.0f / 360.0f; // 反向映射：强度越大，H 越接近 0 ，为红色
 			float s = 0.8f;
 			float v = 0.8f;
 
