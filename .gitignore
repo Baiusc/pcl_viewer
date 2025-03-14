@@ -89,5 +89,5 @@ external/
 *.jpg
 *.pcd
 build_gdb/
-# data/
+data/
 

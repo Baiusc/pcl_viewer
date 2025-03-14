@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-28 10:30:48
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-03-10 15:25:47
+ * @LastEditTime : 2025-03-13 17:13:44
  * @FilePath     : /pcl_viewer/src/debug_visual.cpp
  * @Description  : PCL可视化方法 （算法测试用）
  *
@@ -265,8 +265,8 @@ namespace alog_lidar
                         // continue; // 只选取第一个回波点
                     }
                     
-                    // pcl_point.intensity = point.peak; // 设置反射率值
-                    pcl_point.intensity = static_cast<float>(echo_idx); // 将 intensity 赋值为回波索引 (0, 1, 2)
+                    pcl_point.intensity = point.peak; // 设置反射率值
+                    // pcl_point.intensity = static_cast<float>(echo_idx); // 将 intensity 赋值为回波索引 (0, 1, 2)
 
                     // 添加到点云中
                     cloud->points.push_back(pcl_point);

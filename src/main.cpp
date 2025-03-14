@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-03-10 15:24:43
+ * @LastEditTime : 2025-03-13 10:22:28
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -64,7 +64,7 @@ int testShowCloud()
 {
 	PclHelperB pclHelper;
 	// 设置文件夹路径和文件后缀
-	std::string folder = "../data"; // 数据文件夹路径
+	std::string folder = "../data/far_distance"; // 数据文件夹路径
 	std::string postfix = ".txt";	// 文件后缀，按需求替换
 
 	std::vector<float> list_r;
@@ -89,7 +89,7 @@ int testShowCloud()
 		PointMatrix mat_origin;
 		PointMatrix mat_src;
 		readPulseData(filename, mat_origin); // 全0为无效点
-		mat_src = applyRsaOffset(mat_origin, list_r, list_sa); // 应用距离和水平角标定参数
+		// mat_src = applyRsaOffset(mat_origin, list_r, list_sa); // 应用距离和水平角标定参数
 		// auto mat_edge_0 = extractData(mat_origin, {0}, list_slot_idx);
 		// auto mat_edge_95 = extractData(mat_origin, {95}, list_slot_idx);
 		// std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> list_cloud;
@@ -99,7 +99,7 @@ int testShowCloud()
 
 		// auto mat_src = mat_origin;
 		// mat_src = applyROffset(mat_origin, list_r);
-		showCloud(mat2xyzi(mat_src, true), "mat_src"); // 可视化
+		showCloud(mat2xyzi(mat_origin, true), "mat_src"); // 可视化
 		// list_mat.push_back(mat_src);
 	}
 	//showCloud2in1port(mat2pcl(list_mat[0]), mat2pcl(list_mat[1]), "view_result");
