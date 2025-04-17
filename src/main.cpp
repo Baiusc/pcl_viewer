@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-04-10 09:42:41
+ * @LastEditTime : 2025-04-17 10:28:58
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -90,8 +90,8 @@ int testShowCloud()
 		PointMatrix mat_origin;
 		PointMatrix mat_src;
 		readPulseData(filename, mat_origin); // 全0为无效点
-		mat_src = applyRsaOffset(mat_origin, list_r, list_sa); // 应用距离和水平角标定参数
-
+		// mat_src = applyRsaOffset(mat_origin, list_r, list_sa); // 应用距离和水平角标定参数
+		mat_src = mat_origin;
 		// showCloud(mat2xyzi(mat_src, true), "mat_src"); // 可视化
 		list_mat.push_back(mat_src);
 		list_cloud.push_back(mat2xyzi(mat_src));
@@ -134,7 +134,7 @@ void testShowCloud3()
 		readPulseData3(filename, mat_3); // 全0为无效点
 		// mat_src = applyRsaOffset(mat_src, list_r, list_sa); // 应用距离和水平角标定参数
 		// mat_src = applyROffset(mat_origin, list_r);
-		// showCloud2(mat2xyzi(mat_src, true), mat3toxyzi(mat_3, true), "mat_src"); // 可视化
+		showCloud2(mat2xyzi(mat_src, true), mat3toxyzi(mat_3, true), "mat_src"); // 可视化
 		showCloud(mat3toxyzi(mat_3, true), "mat_src_3"); // 可视化
 
 	}
