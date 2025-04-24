@@ -3,13 +3,13 @@
  * @Date         : 2025-02-26 16:36:30
  * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @LastEditTime : 2025-02-26 16:36:30
- * @FilePath     : /pcl_viewer/src/alog_interface.cpp
+ * @FilePath     : /pcl_viewer/src/algo_interface.cpp
  * @Description  : 
  * 
  * Copyright (c) 2025 by vitalchem, All Rights Reserved. 
  */
 
-#include "alog_interface.h"
+#include "algo_interface.h"
 
 #include <stdexcept>
 #include <algorithm>
@@ -17,7 +17,7 @@
 
 #include <debug_visual.h>
 
-namespace alog_lidar
+namespace algo_lidar
 {
 	// 计算一个浮点数组的中位数 若数组为空 则定义 median 为 0
 	float getMedian(std::vector<float> &list)

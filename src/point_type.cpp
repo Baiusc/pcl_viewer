@@ -1,13 +1,14 @@
 /*
- * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @Date         : 2024-11-28 14:48:55
- * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-02-17 10:30:40
+ * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
+ * @Date         : 2025-02-17 10:32:59
+ * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
+ * @LastEditTime : 2025-03-21 11:28:50
  * @FilePath     : /calib_r_offset/src/point_type.cpp
- * @Description  : 点云格式定义，格式转换，按行列截取操作
- *
- * Copyright (c) 2024 by vitalchem, All Rights Reserved.
+ * @Description  : 
+ * 
+ * Copyright (c) 2025 by vitalchem, All Rights Reserved. 
  */
+
 #include "point_type.h"
 #include <stdexcept>
 #include <vector>
@@ -19,8 +20,29 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-namespace alog_lidar
+namespace algo_lidar
 {
+    // 矩阵转置
+    PointMatrix transMat(const PointMatrix& mat_src) {
+        if (mat_src.empty()) {
+            return {};  // 如果矩阵为空，直接返回空矩阵
+        }
+    
+        size_t rows = mat_src.size();         // 原矩阵的行数
+        size_t cols = mat_src[0].size();      // 原矩阵的列数
+    
+        // 创建转置后的矩阵，大小为 cols x rows
+        PointMatrix mat_transposed(cols, std::vector<PointData>(rows));
+    
+        // 进行转置操作
+        for (size_t i = 0; i < rows; ++i) {
+            for (size_t j = 0; j < cols; ++j) {
+                mat_transposed[j][i] = mat_src[i][j];
+            }
+        }
+    
+        return mat_transposed;
+    }
     // 将 PointMatrix 转换为 8 位单通道灰度图并保存为 BMP 格式
     void saveMatAsBMP(const PointMatrix &mat, const std::string &filename)
     {
@@ -236,6 +258,26 @@ namespace alog_lidar
             }
         }
     }
+    // 对目标矩阵按行重写 r_offset 并重新计算点数据
+    void resetROffset(PointMatrix &mat, float r_offset)
+    {
+            float offset = r_offset;
+            for (auto &row : mat)
+            {
+                for (auto &point : row)
+                {
+                    if (!point.is_valid)
+                        continue;      // 跳过无效点
+                    point.r += offset; // 应用全局偏移 20241209 改为 r += r_offset
+                    // 重新计算 x, y, z
+                    float theta_rad = point.theta * M_PI / 180.0;
+                float slot_ang_rad = point.slot_ang * M_PI / 180.0;
+                point.x = point.r * std::cos(theta_rad) * std::cos(slot_ang_rad);
+                point.y = point.r * std::cos(theta_rad) * std::sin(slot_ang_rad);
+                point.z = point.r * std::sin(theta_rad);
+            }
+        }
+    }
 
     // 接收原始矩阵和 r_offset，在不改变原始矩阵的情况下应用偏移量，返回一个新的矩阵 （若offset 的大小为 1，则将偏移量应用到矩阵中的所有点）
     PointMatrix applyROffset(const PointMatrix &mat, const std::vector<float> &r_offset)
@@ -284,9 +326,10 @@ namespace alog_lidar
         {
             for (auto &point : row)
             {
+                point.slot_ang += sa_offset; // 应用全局偏移
                 if (!point.is_valid)
                     continue;                // 跳过无效点
-                point.slot_ang += sa_offset; // 应用全局偏移
+                // point.slot_ang += sa_offset; // 应用全局偏移
                 // 重新计算 x, y, z
                 float theta_rad = point.theta * M_PI / 180.0;
                 float slot_ang_rad = point.slot_ang * M_PI / 180.0;
@@ -296,6 +339,109 @@ namespace alog_lidar
             }
         }
     }
+    // 根据 k_delta_omega 重新计算 slot_ang
+    void resetOmegaByK(PointMatrix &mat, float k_delta_omega)
+    {
+        // 确保矩阵不为空
+        if (mat.empty() || mat[0].empty())
+            return;
+
+        for (size_t pixel_idx = 0; pixel_idx < mat.size(); ++pixel_idx)
+        {
+            auto &cur_row = mat[pixel_idx]; // 当前行
+
+            // 从第 1 个点开始（跳过第 0 个点）
+            for (size_t slot_idx = 1; slot_idx < cur_row.size(); ++slot_idx)
+            {
+                // 计算当前点的 ang_delta
+                float ang_delta = cur_row[slot_idx].slot_ang - cur_row[slot_idx - 1].slot_ang;
+
+                // 更新当前点的 slot_ang
+                cur_row[slot_idx].slot_ang = cur_row[slot_idx - 1].slot_ang + ang_delta * k_delta_omega;
+                float slot_ang_rad = cur_row[slot_idx].slot_ang * M_PI / 180.0f;
+                cur_row[slot_idx].omega_rad = slot_ang_rad;
+                if (!cur_row[slot_idx].is_valid)
+                    continue; // 无效点不计算xyz
+
+                // 重新计算 x, y, z
+                cur_row[slot_idx].x = cur_row[slot_idx].r * std::cos(cur_row[slot_idx].theta_rad) * std::cos(slot_ang_rad);
+                cur_row[slot_idx].y = cur_row[slot_idx].r * std::cos(cur_row[slot_idx].theta_rad) * std::sin(slot_ang_rad);
+                cur_row[slot_idx].z = cur_row[slot_idx].r * std::sin(cur_row[slot_idx].theta_rad);
+            }
+        }
+    }
+    // 根据 list_k 重新计算 slot_ang
+    void resetOmegaByListK(PointMatrix &mat, const std::vector<float> &list_k, int start_slot)
+    {
+        // 确保矩阵不为空
+        if (mat.empty() || mat[0].empty())
+            return;
+
+        // 检查 list_k 的大小是否与 slot_idx 的数量匹配
+        size_t num_slots = mat[0].size(); // 假设所有行的 slot 数量相同
+        if (list_k.size() != num_slots)   // list_k 的数量应与 slot_idx 的数量相同
+        {
+            std::cerr << "Error: list_k size (" << list_k.size() << ") does not match number of slots (" << num_slots << ")" << std::endl;
+            return;
+        }
+
+        // 检查 start_slot 是否在有效范围内
+        if (start_slot < 0 || start_slot >= num_slots)
+        {
+            std::cerr << "Error: start_slot (" << start_slot << ") is out of range [0, " << num_slots - 1 << "]" << std::endl;
+            return;
+        }
+
+        for (size_t pixel_idx = 0; pixel_idx < mat.size(); ++pixel_idx)
+        {
+            auto &cur_row = mat[pixel_idx]; // 当前行
+
+            // 从 start_slot 向右遍历（从 start_slot + 1 到 num_slots - 1）
+            for (int slot_idx = start_slot + 1; slot_idx < num_slots; ++slot_idx)
+            {
+                // 计算当前点的 ang_delta
+                float ang_delta = cur_row[slot_idx].slot_ang - cur_row[slot_idx - 1].slot_ang;
+
+                // 使用 list_k[slot_idx] 更新当前点的 slot_ang
+                cur_row[slot_idx].slot_ang = cur_row[slot_idx - 1].slot_ang + ang_delta * list_k[slot_idx];
+
+                // 将 slot_ang 转换为弧度
+                float slot_ang_rad = cur_row[slot_idx].slot_ang * M_PI / 180.0f;
+                cur_row[slot_idx].omega_rad = slot_ang_rad;
+
+                if (!cur_row[slot_idx].is_valid)
+                    continue; // 无效点不计算 xyz
+
+                // 重新计算 x, y, z
+                cur_row[slot_idx].x = cur_row[slot_idx].r * std::cos(cur_row[slot_idx].theta_rad) * std::cos(slot_ang_rad);
+                cur_row[slot_idx].y = cur_row[slot_idx].r * std::cos(cur_row[slot_idx].theta_rad) * std::sin(slot_ang_rad);
+                cur_row[slot_idx].z = cur_row[slot_idx].r * std::sin(cur_row[slot_idx].theta_rad);
+            }
+
+            // 从 start_slot 向左遍历（从 start_slot - 1 到 0）
+            for (int slot_idx = start_slot - 1; slot_idx >= 0; --slot_idx)
+            {
+                // 计算当前点的 ang_delta
+                float ang_delta = cur_row[slot_idx + 1].slot_ang - cur_row[slot_idx].slot_ang;
+
+                // 使用 list_k[slot_idx] 更新当前点的 slot_ang
+                cur_row[slot_idx].slot_ang = cur_row[slot_idx + 1].slot_ang - ang_delta * list_k[slot_idx];
+
+                // 将 slot_ang 转换为弧度
+                float slot_ang_rad = cur_row[slot_idx].slot_ang * M_PI / 180.0f;
+                cur_row[slot_idx].omega_rad = slot_ang_rad;
+
+                if (!cur_row[slot_idx].is_valid)
+                    continue; // 无效点不计算 xyz
+
+                // 重新计算 x, y, z
+                cur_row[slot_idx].x = cur_row[slot_idx].r * std::cos(cur_row[slot_idx].theta_rad) * std::cos(slot_ang_rad);
+                cur_row[slot_idx].y = cur_row[slot_idx].r * std::cos(cur_row[slot_idx].theta_rad) * std::sin(slot_ang_rad);
+                cur_row[slot_idx].z = cur_row[slot_idx].r * std::sin(cur_row[slot_idx].theta_rad);
+            }
+        }
+    }
+
     // 重载方法 ：sa_offset 是单一的浮动值
     PointMatrix applySaOffset(PointMatrix &mat, float sa_offset)
     {
@@ -304,6 +450,42 @@ namespace alog_lidar
         resetSaOffset(new_mat, sa_offset); // 应用 sa_offset
 
         return new_mat;
+    }
+    // 应用 sa_offset 到 PointMatrix，先转置矩阵再应用偏移
+    PointMatrix applySaOffsetPerSlot(const PointMatrix &mat, const std::vector<float> &sa_offset)
+    {
+        // 转置矩阵
+        PointMatrix mat_trans = transMat(mat);
+
+        // 检查 sa_offset 的大小是否与转置矩阵的行数匹配
+        if (mat_trans.size() != sa_offset.size())
+        {
+            throw std::invalid_argument("Error: The size of sa_offset (" + std::to_string(sa_offset.size()) +
+                                        ") does not match the number of rows in the transposed matrix (" + std::to_string(mat_trans.size()) + ").");
+        }
+
+        // 按行偏移
+        for (size_t i = 0; i < mat_trans.size(); ++i)
+        {
+            float offset = sa_offset[i];
+            for (auto &point : mat_trans[i])
+            {
+                if (!point.is_valid)
+                    continue;             // 跳过无效点
+                point.slot_ang += offset; // 应用该行的偏移
+                // 重新计算 x, y, z
+                float theta_rad = point.theta * M_PI / 180.0;
+                float slot_ang_rad = point.slot_ang * M_PI / 180.0;
+                point.x = point.r * std::cos(theta_rad) * std::cos(slot_ang_rad);
+                point.y = point.r * std::cos(theta_rad) * std::sin(slot_ang_rad);
+                point.z = point.r * std::sin(theta_rad);
+            }
+        }
+
+        // 再次转置矩阵以恢复原始布局
+        auto mat_result = transMat(mat_trans);
+
+        return mat_result;
     }
     // 重载方法 2：sa_offset 是单一的浮动值，mat 改为 std::vector<PointData> pts
     void resetSaOffset(std::vector<PointData> &pts, float sa_offset)

@@ -1,8 +1,8 @@
 /*
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2025-02-26 16:35:50
- * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-02-26 16:35:50
+ * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
+ * @LastEditTime : 2025-04-24 15:05:40
  * @FilePath     : /pcl_viewer/include/alog_interface.h
  * @Description  : 
  * 
@@ -12,7 +12,7 @@
 #include <vector>
 #include <string>
 #include <point_type.h>
-namespace alog_lidar
+namespace algo_lidar
 {
     // 修复地面算法 接口类
     class RepairGround_I

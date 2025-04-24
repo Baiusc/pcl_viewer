@@ -1,19 +1,20 @@
 /*
- * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @Date         : 2024-11-28 14:41:19
- * @LastEditors  : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-03-03 10:03:07
- * @FilePath     : /pcl_viewer/include/point_type.h
- * @Description  : 点云格式定义，格式转换，按行列截取操作
- *
- * Copyright (c) 2024 by vitalchem, All Rights Reserved.
+ * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
+ * @Date         : 2025-02-17 10:07:58
+ * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
+ * @LastEditTime : 2025-03-25 14:06:10
+ * @FilePath     : /calib_r_offset/include/point_type.h
+ * @Description  : 
+ * 
+ * Copyright (c) 2025 by vitalchem, All Rights Reserved. 
  */
+
 #pragma once
 #include <vector>
 #include <cmath>
 #include <cstdint>
 #include <string> 
-namespace alog_lidar
+namespace algo_lidar
 {
     // 前端的极坐标点类型
     struct PolarPoint
@@ -35,7 +36,18 @@ namespace alog_lidar
             float f;
         } x, y, z;
         uint8_t intensity; // 强度
-        uint16_t peak;        // 峰值
+        uint16_t peak;     // 峰值
+    };
+    // 回波数据类型
+    struct Pulse
+    {
+        float tof;
+        float width;
+        float peak;
+        // 默认构造函数
+        Pulse() : tof(0.0f), width(0.0f), peak(0.0f) {}
+        // 带参数的构造函数
+        Pulse(float t, float w, float p) : tof(t), width(w), peak(p) {}
     };
 
     // 算法点类型
@@ -55,11 +67,15 @@ namespace alog_lidar
         float y;
         float z;
         bool is_valid; // 点的回波数据是否有效
+        std::vector<Pulse> list_pulse; // 3组回波数据 按峰值从大到小排序后的
+        uint8_t select_idx; // 0 1 2 表示当前点的回波依据是 最强回波 次强回波 最弱回波
     };
 
-    using PointMatrix = std::vector<std::vector<PointData>>; // 二维矩阵
-	using PointMatrix3 = std::vector<std::vector<std::vector<PointData>>>;  // 三维矩阵 不筛选回波
-	
+    using PointMatrix = std::vector<std::vector<PointData>>;
+
+    // 矩阵转置
+    PointMatrix transMat(const PointMatrix& mat_src);
+
     // 将 PointMatrix 转换为 8 位单通道灰度图并保存为 BMP 格式
     void saveMatAsBMP(const PointMatrix &mat, const std::string &filename);
 
@@ -71,6 +87,8 @@ namespace alog_lidar
 
     // 对 mat 应用 r_offset
     void resetROffset(PointMatrix &mat, const std::vector<float> &r_offset);
+    // 对 mat 应用 r_offset
+    void resetROffset(PointMatrix &mat, float r_offset);
 
     // 应用偏移量，返回一个新矩阵
     PointMatrix applyROffset(const PointMatrix &mat, const std::vector<float> &r_offset);
@@ -80,6 +98,10 @@ namespace alog_lidar
 
     // 重载方法 1：sa_offset 是单一的浮动值
     void resetSaOffset(PointMatrix& mat, float sa_offset);
+    // 根据 k_delta_omega 重新计算 slot_ang
+    void resetOmegaByK(PointMatrix &mat, float k_delta_omega);
+    // 根据 list_k 重新计算 slot_ang
+    void resetOmegaByListK(PointMatrix &mat, const std::vector<float> &list_k, int start_slot);
 
     // 重载方法 2：sa_offset 是单一的浮动值，mat 改为 std::vector<PointData> pts
     void resetSaOffset(std::vector<PointData>& pts, float sa_offset);
@@ -92,6 +114,8 @@ namespace alog_lidar
 
     // 应用偏移量，返回一个新矩阵
     PointMatrix applySaOffset(const PointMatrix &mat, const std::vector<float> &sa_offset);
+    // 应用 sa_offset 到 PointMatrix，先转置矩阵再应用偏移 800列
+    PointMatrix applySaOffsetPerSlot(const PointMatrix &mat, const std::vector<float> &sa_offset);
 
     // 重载方法，输入向量点
     std::vector<PointData> applySaOffset(const std::vector<PointData> &pts, const std::vector<float> &sa_offset);
