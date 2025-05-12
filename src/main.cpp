@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-04-24 15:18:06
+ * @LastEditTime : 2025-05-12 11:25:14
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -75,7 +75,7 @@ int testShowCloud()
 	// 读取点云
 	std::vector<std::string> filePaths = getFullFilePath(folder, postfix);
 	std::vector<PointMatrix> list_mat; //
-	std::vector<pcl::PointCloud<pcl::PointXYZI>::Ptr> list_cloud; // 存储点云
+	std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> list_cloud; // 存储点云
 	std::vector<int> list_slot_idx; // 全部列索引
 	for (size_t i = 0; i < 800; ++i)
 	{
@@ -94,10 +94,30 @@ int testShowCloud()
 		mat_src = mat_origin;
 		// showCloud(mat2xyzi(mat_src, true), "mat_src"); // 可视化
 		list_mat.push_back(mat_src);
-		list_cloud.push_back(mat2xyzi(mat_src));
+		list_cloud.push_back(mat2pcl(mat_src));
 		auto cloud_name = "cloud_" + std::to_string(i);
-		showCloud(mat2xyzi(list_mat[i], true), cloud_name); // 可视化
+		// showCloud(mat2xyzi(list_mat[i], true), cloud_name); // 可视化
 	}
+
+    // 初始化用于循环显示4帧点云的实时窗口（RealTimeCloud）
+    static pcl::visualization::PCLVisualizer::Ptr viewer_rt;
+    if (!viewer_rt)
+    {
+        viewer_rt.reset(new pcl::visualization::PCLVisualizer("RealTimeCloud"));
+        viewer_rt->setBackgroundColor(37/ 255.f, 37/ 255.f, 37/ 255.f);
+    }
+
+	while (true)
+	{
+		// 清除并重新显示点云
+		viewer_rt->removeAllPointClouds();
+		for (size_t j = 0; j < list_cloud.size(); ++j)
+		{
+			pclHelper.addCloud(viewer_rt, list_cloud[j], 0.4f, 0, 2, "cloud_" + std::to_string(j));
+			viewer_rt->spinOnce(100);
+		}
+	}
+
 	// for (size_t i = 0; i < list_mat.size(); ++i)
 	// {
 	// 	auto cloud_name = "cloud_" + std::to_string(i);
