@@ -2,7 +2,7 @@
  * @Author       : baizs zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-21 09:44:32
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-03-10 16:19:52
+ * @LastEditTime : 2025-05-12 16:18:48
  * @FilePath     : /pcl_viewer/include/PclHelperB.h
  * @Description  : PCL库算法助手
  *
@@ -927,7 +927,7 @@ public:
 	{
 		// 将HSV值转换为RGB
 		float r, g, b;
-		hsv2rgb(hue, 1.0, 1.0, &r, &g, &b);
+		hsv2rgb(hue, 0.8, 0.8, &r, &g, &b);
 		pcl::visualization::PointCloudColorHandlerCustom<PointT> color(cloud, r * 255.0, g * 255.0, b * 255.0);
 		std::string cloud_id = "cloud" + std::to_string(viewport) + std::to_string(hue);
 		viewer->addPointCloud(cloud, color, cloud_id, viewport);
@@ -938,7 +938,7 @@ public:
 	{
 		// 将HSV值转换为RGB
 		float r, g, b;
-		hsv2rgb(hue, 1.0, 1.0, &r, &g, &b);
+		hsv2rgb(hue, 0.8, 0.8, &r, &g, &b);
 		pcl::visualization::PointCloudColorHandlerCustom<PointT> color(cloud, r * 255.0, g * 255.0, b * 255.0);
 		viewer->addPointCloud(cloud, color, id, viewport);
 		viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, pt_size, id);
@@ -981,7 +981,7 @@ public:
 				// 按x值着色，映射到0~255之间
 				float hue = (point.x - x_min) / (x_max - x_min);
 				float r, g, b;
-				hsv2rgb(hue, 1.0, 1.0, &r, &g, &b);
+				hsv2rgb(hue, 0.8, 0.8, &r, &g, &b);
 				colored_point.r = int(r * 255);
 				colored_point.g = int(g * 255);
 				colored_point.b = int(b * 255);
@@ -1079,7 +1079,7 @@ public:
 		{
 			float r, g, b;
 			float hue = float(i) / cluster_indices.size();
-			hsv2rgb(hue, 1.0, 1.0, &r, &g, &b);
+			hsv2rgb(hue, 0.8, 0.8, &r, &g, &b);
 			color_handlers.emplace_back(cloud, r * 255.0f, g * 255.0f, b * 255.0f);
 		}
 		// 添加点云到可视化对象中
@@ -1117,7 +1117,7 @@ public:
 
 		// 将HSV值转换为RGB
 		float r, g, b;
-		hsv2rgb(hue, 1.0, 1.0, &r, &g, &b);
+		hsv2rgb(hue, 0.8, 0.8, &r, &g, &b);
 
 		std::string line_id = "line_pt2pt_" + name;
 		std::string txtH_id = "txtH_pt2pt_" + name;
@@ -1158,7 +1158,7 @@ public:
 
 		// 将HSV值转换为RGB
 		float r, g, b;
-		hsv2rgb(hue, 1.0, 1.0, &r, &g, &b);
+		hsv2rgb(hue, 0.8, 0.8, &r, &g, &b);
 
 		std::string line_id = "line_pt2plane_" + name;
 		std::string txtH_id = "txtH_pt2plane_" + name;
