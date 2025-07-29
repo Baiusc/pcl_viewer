@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-05-12 11:25:14
+ * @LastEditTime : 2025-07-17 09:16:05
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -64,7 +64,7 @@ int testShowCloud()
 {
 	PclHelperB pclHelper;
 	// 设置文件夹路径和文件后缀
-	std::string folder = "../data"; // 数据文件夹路径
+	std::string folder = "../data/镀铝反射镜原始点云数据__2025-06-11_10.59.54.852"; // 数据文件夹路径
 	std::string postfix = ".txt";	// 文件后缀，按需求替换
 
 	std::vector<float> list_r;
@@ -76,11 +76,7 @@ int testShowCloud()
 	std::vector<std::string> filePaths = getFullFilePath(folder, postfix);
 	std::vector<PointMatrix> list_mat; //
 	std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> list_cloud; // 存储点云
-	std::vector<int> list_slot_idx; // 全部列索引
-	for (size_t i = 0; i < 800; ++i)
-	{
-		list_slot_idx.push_back(i);
-	}
+
 	for (size_t i = 0; i < filePaths.size(); ++i)
 	{
 		std::cout << "Processing file: " << filePaths[i] << std::endl;
@@ -96,8 +92,12 @@ int testShowCloud()
 		list_mat.push_back(mat_src);
 		list_cloud.push_back(mat2pcl(mat_src));
 		auto cloud_name = "cloud_" + std::to_string(i);
-		// showCloud(mat2xyzi(list_mat[i], true), cloud_name); // 可视化
+		showCloud(mat2xyzi(list_mat[i], true), cloud_name); // 可视化
 	}
+
+	// auto mat_json = load_mat_by_json("../data/scene_init.json"); // 读取json文件中的点云
+	// showCloud(mat2xyzi(mat_json, true), "mat_json"); // 可视化
+	// list_cloud.push_back(mat2pcl(mat_json)); // 将json转换为点云并添加到列表中
 
     // 初始化用于循环显示4帧点云的实时窗口（RealTimeCloud）
     static pcl::visualization::PCLVisualizer::Ptr viewer_rt;
@@ -110,9 +110,12 @@ int testShowCloud()
 	while (true)
 	{
 		// 清除并重新显示点云
-		viewer_rt->removeAllPointClouds();
 		for (size_t j = 0; j < list_cloud.size(); ++j)
 		{
+			// 跳过索引为1+4*n 这里的1+4*n是为了跳过第1帧和每隔4帧的点云 例如：1, 5, 9, 13, ... 等索引
+			// if (j % 4 != 2) // 跳过索引为1+4*n的点云
+			// 	continue;
+			viewer_rt->removeAllPointClouds();
 			pclHelper.addCloud(viewer_rt, list_cloud[j], 0.4f, 0, 2, "cloud_" + std::to_string(j));
 			viewer_rt->spinOnce(100);
 		}

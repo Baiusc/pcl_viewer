@@ -2,7 +2,26 @@
 
 # 激光雷达点云可视化助手（基于LIDAR原始点云解析）
 
+俯仰角范围：-12.2917° ~ 7.5°
+俯仰角0度pixel_idx=59
 ---
+graph TD
+    A[开始] --> B{初始化参数};
+    B --> C{For dist in list_dist};
+    C --> D{For pan_angle in pan_angle_range};
+    D --> E{For pitch_angle in list_theta};
+    E --> F[俯仰转台旋转到pitch_angle];
+    F --> G[采集不同pixel的行点云数据];
+    G --> H{俯仰转台反向旋转到初始位置};
+    H --> I[记录俯仰角数据];
+    I --> E;
+    E --> J{转盘旋转到pan_angle};
+    J --> K[采集不同反射率的ROI云数据];
+    K --> D;
+    D --> L[轨道运动到dist];
+    L --> M[采集不同在离下的ROI云数据];
+    M --> C;
+    C --> N[结束];
 
 ## 一、子目录说明
 - `data`   数据

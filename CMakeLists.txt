@@ -41,8 +41,18 @@ endif()
 ### ---------------- 本项目设置 ------------------
 
 # 头文件和源文件列表
-file(GLOB INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h)
-file(GLOB SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
+file(GLOB INCLUDE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/*.hxx
+)
+
+# 源文件列表（支持 .cpp/.cc/.cxx 等）
+file(GLOB SOURCE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cxx
+)
 
 # 设置头文件分组（适用于 Visual Studio）
 source_group("Header Files" FILES ${INCLUDE})

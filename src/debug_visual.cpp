@@ -2,8 +2,8 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:17:38
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-03-21 16:14:13
- * @FilePath     : /calib_r_offset/src/debug_visual.cpp
+ * @LastEditTime : 2025-07-17 09:27:24
+ * @FilePath     : /pcl_viewer/src/debug_visual.cpp
  * @Description  : 
  * 
  * Copyright (c) 2025 by vitalchem, All Rights Reserved. 
@@ -96,6 +96,7 @@
              << ", slot_idx: " << static_cast<int>(pd.slot_idx)
              << ", R: " << std::fixed << std::setprecision(3) << pd.r
              << ", Peak: " << static_cast<int>(pd.peak)
+             << ", theta: " << std::fixed << std::setprecision(2) << pd.theta
              << ", select_idx: " << static_cast<int>(pd.select_idx);
 
          if (!pd.list_pulse.empty())

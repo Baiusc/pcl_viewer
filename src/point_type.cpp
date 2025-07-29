@@ -2,8 +2,8 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-02-17 10:32:59
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-03-21 11:28:50
- * @FilePath     : /calib_r_offset/src/point_type.cpp
+ * @LastEditTime : 2025-07-10 16:57:00
+ * @FilePath     : /pcl_viewer/src/point_type.cpp
  * @Description  : 
  * 
  * Copyright (c) 2025 by vitalchem, All Rights Reserved. 
@@ -16,12 +16,139 @@
 #include <fstream>
 #include <cstdint>
 #include <algorithm>
+#include <json.hpp>
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
 namespace algo_lidar
 {
+    void to_json(nlohmann::json& j, const PointData& p) {
+        j = nlohmann::json{
+            {"pixel_idx", p.pixel_idx},
+            {"slot_idx", p.slot_idx},
+            {"peak", p.peak},
+            {"r", p.r},
+            {"intensity", p.intensity},
+            {"x", p.x},
+            {"y", p.y},
+            {"z", p.z},
+            {"is_valid", p.is_valid}
+        };
+    }
+
+    void from_json(const nlohmann::json& j, PointData& p) {
+        // 使用 .at() 确保字段存在，如果不存在会抛出异常
+        j.at("pixel_idx").get_to(p.pixel_idx);
+        j.at("slot_idx").get_to(p.slot_idx);
+        // 对于非必须或可能缺失的字段，可以使用 .value() 提供默认值
+        p.peak = j.value("peak", 0); // 如果 JSON 中没有 "peak" 字段，则默认为 0
+        j.at("r").get_to(p.r);
+        j.at("intensity").get_to(p.intensity);
+        j.at("x").get_to(p.x);
+        j.at("y").get_to(p.y);
+        j.at("z").get_to(p.z);
+        j.at("is_valid").get_to(p.is_valid);
+        
+        // 对于未从JSON反序列化的 PointData 成员，需要手动初始化其默认值
+        // 以确保 PointData 对象的完整性
+        p.theta_rad = 0.0f;
+        p.omega_rad = 0.0f;
+        p.theta = 0.0f;
+        p.slot_ang = 0.0f;
+        p.reflect = 0.0f;
+        p.list_pulse.clear(); // 清空任何默认构造的 Pulse 列表
+        p.select_idx = 0;
+    }
+
+    // --- 新增的 JSON 读写函数 ---
+
+    /// @brief 将 PointMatrix 保存为 JSON 文件。
+    /// @param mat 要保存的 PointMatrix。
+    /// @param filename 输出 JSON 文件的路径。
+    void save_mat_to_json(const PointMatrix& mat, const std::string& filename) {
+        nlohmann::json j_output = nlohmann::json::array(); // JSON 根是一个数组
+
+        // 遍历 PointMatrix 的每一行
+        for (const auto& row_vec : mat) {
+            nlohmann::json row_json = nlohmann::json::array(); // 每一行也是一个数组
+            // 遍历行中的每个 PointData 对象
+            for (const auto& point : row_vec) {
+                row_json.push_back(point); // 这里会自动调用 to_json(json&, PointData&)
+            }
+            j_output.push_back(row_json);
+        }
+
+        std::ofstream file(filename);
+        if (file.is_open()) {
+            file << j_output.dump(4); // 以4个空格缩进格式化输出
+            file.close();
+            // 替换为你的日志宏
+            // FS_LOGI("成功将 PointMatrix 保存到 %s\n", filename.c_str()); 
+            std::cout << "成功将 PointMatrix 保存到 " << filename << std::endl;
+        } else {
+            // 替换为你的日志宏
+            // FS_LOGE("错误：无法打开文件 %s 进行写入。\n", filename.c_str());
+            std::cerr << "错误：无法打开文件 " << filename << " 进行写入。" << std::endl;
+        }
+    }
+
+    /// @brief 从 JSON 文件中加载 PointMatrix。
+    /// @param filename 输入 JSON 文件的路径。
+    /// @return 加载的 PointMatrix。如果加载失败，则返回一个空的 PointMatrix。
+    PointMatrix load_mat_by_json(const std::string& filename) {
+        PointMatrix loaded_mat;
+        std::ifstream file(filename);
+        if (!file.is_open()) {
+            // 替换为你的日志宏
+            // FS_LOGE("错误：无法打开文件 %s 进行读取。\n", filename.c_str());
+            std::cerr << "错误：无法打开文件 " << filename << " 进行读取。" << std::endl;
+            return loaded_mat; // 返回空矩阵
+        }
+
+        try {
+            nlohmann::json j_input;
+            file >> j_input; // 从文件读取 JSON 数据
+
+            if (!j_input.is_array()) {
+                // 替换为你的日志宏
+                // FS_LOGE("错误：JSON 根不是一个数组。\n");
+                std::cerr << "错误：JSON 根不是一个数组。" << std::endl;
+                return loaded_mat;
+            }
+
+            loaded_mat.reserve(j_input.size()); // 预分配行数以提高效率
+            for (const auto& row_json : j_input) {
+                if (!row_json.is_array()) {
+                    // 替换为你的日志宏
+                    // FS_LOGE("错误：JSON 中的行不是一个数组。\n");
+                    std::cerr << "错误：JSON 中的行不是一个数组。" << std::endl;
+                    loaded_mat.clear(); // 清除任何部分加载的数据
+                    return loaded_mat;
+                }
+                std::vector<PointData> row_vec;
+                row_vec.reserve(row_json.size()); // 预分配列数
+                for (const auto& point_json : row_json) {
+                    // 这里会自动调用 from_json(const json&, PointData&)
+                    row_vec.push_back(point_json.get<PointData>()); 
+                }
+                loaded_mat.push_back(row_vec);
+            }
+            // 替换为你的日志宏
+            // FS_LOGI("成功从 %s 加载 PointMatrix。\n", filename.c_str());
+            std::cout << "成功从 " << filename << " 加载 PointMatrix。" << std::endl;
+        } catch (const nlohmann::json::exception& e) {
+            // 捕获 JSON 解析过程中可能发生的异常
+            // 替换为你的日志宏
+            // FS_LOGE("解析 JSON 文件 %s 时发生错误：%s\n", filename.c_str(), e.what());
+            std::cerr << "解析 JSON 文件 " << filename << " 时发生错误：" << e.what() << std::endl;
+            loaded_mat.clear(); // 清除任何部分加载的数据
+        }
+
+        return loaded_mat;
+    }
+    
     // 矩阵转置
     PointMatrix transMat(const PointMatrix& mat_src) {
         if (mat_src.empty()) {

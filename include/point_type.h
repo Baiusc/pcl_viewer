@@ -2,8 +2,8 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-02-17 10:07:58
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-03-25 14:06:10
- * @FilePath     : /calib_r_offset/include/point_type.h
+ * @LastEditTime : 2025-07-10 16:50:00
+ * @FilePath     : /pcl_viewer/include/point_type.h
  * @Description  : 
  * 
  * Copyright (c) 2025 by vitalchem, All Rights Reserved. 
@@ -128,6 +128,16 @@ namespace algo_lidar
 
     // 计算 PointMatrix 的质心
     PointData computeCentroid(const PointMatrix &mat);
+
+    /// @brief 将 PointMatrix 保存为 JSON 文件。
+    /// @param mat 要保存的 PointMatrix。
+    /// @param filename 输出 JSON 文件的路径。
+    void save_mat_to_json(const PointMatrix &mat, const std::string &filename);
+
+    /// @brief 从 JSON 文件中加载 PointMatrix。
+    /// @param filename 输入 JSON 文件的路径。
+    /// @return 加载的 PointMatrix。如果加载失败，则返回一个空的 PointMatrix。
+    PointMatrix load_mat_by_json(const std::string &filename);
 
     class Converter
     {
