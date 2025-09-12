@@ -92,7 +92,11 @@
         "cinttypes": "cpp",
         "typeindex": "cpp",
         "variant": "cpp",
-        "dense": "cpp"
+        "dense": "cpp",
+        "any": "cpp",
+        "regex": "cpp",
+        "shared_mutex": "cpp",
+        "valarray": "cpp"
     },
     "C_Cpp.default.compilerPath": "/usr/bin/g++-9"
 }

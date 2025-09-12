@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-07-17 09:16:05
+ * @LastEditTime : 2025-09-12 15:51:44
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -18,6 +18,8 @@
 #include <PclHelperB.h>
 #include <debug_visual.h>
 #include <algo_interface.h>
+#include <binary_storage.h>
+#include <calc_intensity.h>
 
 using namespace algo_lidar;
 namespace fs = std::filesystem;
@@ -63,15 +65,19 @@ std::vector<std::string> getFullFilePath(const std::string &folder, const std::s
 int testShowCloud()
 {
 	PclHelperB pclHelper;
+	Ground_I algo_gnd;
+	CalibReflect algo_reflect;
 	// 设置文件夹路径和文件后缀
-	std::string folder = "../data/镀铝反射镜原始点云数据__2025-06-11_10.59.54.852"; // 数据文件夹路径
+	std::string folder = "../data/repair_gnd_high_delay_lab"; // 数据文件夹路径
 	std::string postfix = ".txt";	// 文件后缀，按需求替换
 
 	std::vector<float> list_r;
 	std::vector<float> list_sa;
 	loadListFromFile(list_r, "../data/param/list_r.txt"); // 读取距离标定参数
 	loadListFromFile(list_sa, "../data/param/list_sa.txt"); // 读取水平角标定参数
-
+	std::map<uint16_t, std::map<float, std::array<float, 5>>> map_bin;
+	binary_storage::loadMapFromBinary("../data/map_device_0812_sum10_extend54.bin", map_bin);
+	algo_reflect._map = map_bin; 
 	// 读取点云
 	std::vector<std::string> filePaths = getFullFilePath(folder, postfix);
 	std::vector<PointMatrix> list_mat; //
@@ -86,8 +92,12 @@ int testShowCloud()
 		PointMatrix mat_origin;
 		PointMatrix mat_src;
 		readPulseData(filename, mat_origin); // 全0为无效点
-		// mat_src = applyRsaOffset(mat_origin, list_r, list_sa); // 应用距离和水平角标定参数
-		mat_src = mat_origin;
+		mat_src = applyRsaOffset(mat_origin, list_r, list_sa); // 应用距离和水平角标定参数
+		// mat_src = mat_origin;
+		// 地面反射点修复
+		algo_gnd.doRepair(mat_src);
+		// 反射率标定
+		algo_reflect.calcCloudIntensity(mat_src);
 		// showCloud(mat2xyzi(mat_src, true), "mat_src"); // 可视化
 		list_mat.push_back(mat_src);
 		list_cloud.push_back(mat2pcl(mat_src));
