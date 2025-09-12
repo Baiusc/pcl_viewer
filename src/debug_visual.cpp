@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:17:38
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-07-17 09:27:24
+ * @LastEditTime : 2025-09-12 15:54:57
  * @FilePath     : /pcl_viewer/src/debug_visual.cpp
  * @Description  : 
  * 
@@ -37,7 +37,7 @@
          const int max_recent_points = 10; // 显示最近的点数量
          int pick_count = 0;               // 选点计数器
      }
-
+     std::string m_intensity_src_name = "peak"; // 初始化默认值
      template <typename PointT>
      // 重写定制化选点事件 打印更详细的选点信息
      void pointPickingCallback(const pcl::visualization::PointPickingEvent &event, void *args)
@@ -96,6 +96,7 @@
              << ", slot_idx: " << static_cast<int>(pd.slot_idx)
              << ", R: " << std::fixed << std::setprecision(3) << pd.r
              << ", Peak: " << static_cast<int>(pd.peak)
+             << ", reflect: " << std::fixed << std::setprecision(2) << pd.reflect
              << ", theta: " << std::fixed << std::setprecision(2) << pd.theta
              << ", select_idx: " << static_cast<int>(pd.select_idx);
 
@@ -149,6 +150,7 @@
          viewer->registerMouseCallback(mouseMoveCallback<pcl::PointXYZ>, &args);
          viewer->registerPointPickingCallback(pointPickingCallback<pcl::PointXYZ>, &args);
      }
+
      // 重载方法：输入参数 PointMatrix 改为 std::vector<PointData> pts
      pcl::PointCloud<pcl::PointXYZ>::Ptr mat2pcl(const std::vector<PointData> &pts)
      {
@@ -179,14 +181,14 @@
          // 返回点云对象
          return cloud;
      }
- 
+
      // 将 PointMatrix 转换为 pcl::PointCloud<pcl::PointXYZ>::Ptr
      pcl::PointCloud<pcl::PointXYZ>::Ptr mat2pcl(const PointMatrix &matrix, bool pick_src)
      {
          int point_index = 0; // 用于记录索引
          // 创建一个新的 pcl 点云对象
          pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
- 
+
          // 遍历 PointMatrix 中的每个点，将坐标值存储到 pcl 点云中
          for (const auto &row : matrix)
          {
@@ -199,14 +201,14 @@
                  pcl_point.x = point.x;
                  pcl_point.y = point.y;
                  pcl_point.z = point.z;
- 
+
                  // 将 pcl_point 添加到点云对象中
                  cloud->points.push_back(pcl_point);
                  if (pick_src)
                      index_to_pointdata[point_index++] = point; // 建立索引到 PointData 的映射 仅用于可视化
              }
          }
- 
+
          // 返回点云对象
          return cloud;
      }
@@ -250,7 +252,7 @@
                      // 如果需要建立索引到 PointData 的映射
                      if (pick_src)
                      {
-                        idx_map[point_index++] = point;
+                         idx_map[point_index++] = point;
                      }
                  }
              }
@@ -268,6 +270,22 @@
          // 返回点云列表
          return list_cloud;
      }
+
+     // 辅助函数，根据全局变量获取强度值
+     float getIntensityValue(const PointData &point)
+     {
+         if (m_intensity_src_name == "intensity")
+         {
+             return point.intensity;
+         }
+         if (m_intensity_src_name == "reflect")
+         {
+             return point.reflect;
+         }
+         // 默认或在其他情况下，使用 peak
+         return point.peak;
+     }
+
      // 重载方法，强度，对矩阵点云
      pcl::PointCloud<pcl::PointXYZI>::Ptr mat2xyzi(const PointMatrix &matrix, bool pick_src)
      {
@@ -287,7 +305,7 @@
                  pcl_point.x = point.x;
                  pcl_point.y = point.y;
                  pcl_point.z = point.z;
-                 pcl_point.intensity = point.peak; // DEBUG可视化 自定义强度映射字段
+                 pcl_point.intensity = getIntensityValue(point); // 20250811 使用辅助函数获取强度值
                  // 将 pcl_point 添加到点云对象中
                  cloud->points.push_back(pcl_point);
                  if (pick_src)
@@ -315,8 +333,7 @@
              pcl_point.x = point.x;
              pcl_point.y = point.y;
              pcl_point.z = point.z;
-             pcl_point.intensity = point.peak; // 设置反射率值
- 
+             pcl_point.intensity = getIntensityValue(point); // 20250811 使用辅助函数获取强度值
              // 将 pcl_point 添加到点云对象中
              cloud->points.push_back(pcl_point);
          }
