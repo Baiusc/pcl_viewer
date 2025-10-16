@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-10-16 11:35:05
+ * @LastEditTime : 2025-10-16 11:55:33
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -73,10 +73,10 @@ int testShowCloud()
 
 	std::vector<float> list_r;
 	std::vector<float> list_sa;
-	loadListFromFile(list_r, "../data/param/list_r.txt"); // 读取距离标定参数
-	loadListFromFile(list_sa, "../data/param/list_sa.txt"); // 读取水平角标定参数
+	// loadListFromFile(list_r, "../data/param/list_r.txt"); // 读取距离标定参数
+	// loadListFromFile(list_sa, "../data/param/list_sa.txt"); // 读取水平角标定参数
 	std::map<uint16_t, std::map<float, std::array<float, 5>>> map_bin;
-	binary_storage::loadMapFromBinary("../data/map_device_0812_sum10_extend54.bin", map_bin);
+	// binary_storage::loadMapFromBinary("../data/map_device_0812_sum10_extend54.bin", map_bin);
 	algo_reflect._map = map_bin; 
 	// 读取点云
 	std::vector<std::string> filePaths = getFullFilePath(folder, postfix);
