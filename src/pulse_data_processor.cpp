@@ -2,8 +2,8 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:24:45
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-03-24 15:28:56
- * @FilePath     : /calib_r_offset/src/pulse_data_processor.cpp
+ * @LastEditTime : 2025-10-16 11:38:13
+ * @FilePath     : /pcl_viewer/src/pulse_data_processor.cpp
  * @Description  : 
  * 
  * Copyright (c) 2025 by vitalchem, All Rights Reserved. 
@@ -91,10 +91,10 @@
 					 }
 					//  delta_dics = 13;
 					 auto delta_ang =  delta_dics * 360.0f / 65536.0f * 2.0f;
-					//  slot_ang += delta_dics * 360.0f / 65536.0f * 2.0f;
-					 slot_ang += 0.15f;
+					 slot_ang += delta_dics * 360.0f / 65536.0f * 2.0f;
+					//  slot_ang += 0.15f;
 					 last_slot_dics = slot_dics;
-					 if (slot_ang > 65.0f || slot_ang < -65.0f || delta_ang<0.15f*0.8 || delta_ang>0.5f)
+					 if (slot_ang > 65.0f || slot_ang < -65.0f || delta_ang<0.15f*0.8 || delta_ang>0.3f)
 					 {
 						std::cout << "err slot_ang: " << slot_ang << " err delta_ang: " << delta_ang << " slot_index: " << slot_index << std::endl;
 					 }
