@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-10-16 11:55:33
+ * @LastEditTime : 2025-10-16 15:23:41
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -68,13 +68,13 @@ int testShowCloud()
 	Ground_I algo_gnd;
 	CalibReflect algo_reflect;
 	// 设置文件夹路径和文件后缀
-	std::string folder = "../data/会议室拖尾点20251016"; // 数据文件夹路径
+	std::string folder = "../data/薄款雷达会议室"; // 数据文件夹路径
 	std::string postfix = ".txt";	// 文件后缀，按需求替换
 
 	std::vector<float> list_r;
 	std::vector<float> list_sa;
-	// loadListFromFile(list_r, "../data/param/list_r.txt"); // 读取距离标定参数
-	// loadListFromFile(list_sa, "../data/param/list_sa.txt"); // 读取水平角标定参数
+	loadListFromFile(list_r, "../data/param/list_r.txt"); // 读取距离标定参数
+	loadListFromFile(list_sa, "../data/param/list_sa.txt"); // 读取水平角标定参数
 	std::map<uint16_t, std::map<float, std::array<float, 5>>> map_bin;
 	// binary_storage::loadMapFromBinary("../data/map_device_0812_sum10_extend54.bin", map_bin);
 	algo_reflect._map = map_bin; 
@@ -91,10 +91,11 @@ int testShowCloud()
 		// 读取脉冲数据文件
 		PointMatrix mat_origin;
 		PointMatrix mat_src;
-		readPulseData(filename, mat_src); // 全0为无效点
+		readPulseData(filename, mat_origin); // 全0为无效点
 		// 地面反射点修复
 		// algo_gnd.doRepair(mat_origin);
 		// 距离和水平角标定
+		mat_src = mat_origin;
 		// mat_src = applyRsaOffset(mat_origin, list_r, list_sa); 
 		// 反射率标定
 		m_intensity_src_name = "peak"; // 设置点云强度着色来源为峰值
