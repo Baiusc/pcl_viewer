@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:17:38
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-09-12 15:54:57
+ * @LastEditTime : 2025-12-03 10:30:23
  * @FilePath     : /pcl_viewer/src/debug_visual.cpp
  * @Description  : 
  * 
@@ -281,6 +281,10 @@
          if (m_intensity_src_name == "reflect")
          {
              return point.reflect;
+         }
+         if (m_intensity_src_name == "is_tail_pt")
+         {
+             return point.is_tail_pt ? 1.0f : 0.0f;
          }
          // 默认或在其他情况下，使用 peak
          return point.peak;

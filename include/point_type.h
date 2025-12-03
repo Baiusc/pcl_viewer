@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-02-17 10:07:58
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-07-10 16:50:00
+ * @LastEditTime : 2025-12-03 10:26:23
  * @FilePath     : /pcl_viewer/include/point_type.h
  * @Description  : 
  * 
@@ -66,9 +66,10 @@ namespace algo_lidar
         float x;
         float y;
         float z;
-        bool is_valid; // 点的回波数据是否有效
+        bool is_valid;                 // 点的回波数据是否有效
         std::vector<Pulse> list_pulse; // 3组回波数据 按峰值从大到小排序后的
-        uint8_t select_idx; // 0 1 2 表示当前点的回波依据是 最强回波 次强回波 最弱回波
+        uint8_t select_idx;            // 0 1 2 表示当前点的回波依据是 最强回波 次强回波 最弱回波
+        bool is_tail_pt = false;       // 是否是托尾点
     };
 
     using PointMatrix = std::vector<std::vector<PointData>>;

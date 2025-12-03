@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-10-16 15:23:41
+ * @LastEditTime : 2025-12-03 11:23:43
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -20,6 +20,7 @@
 #include <algo_interface.h>
 #include <binary_storage.h>
 #include <calc_intensity.h>
+#include "tail_point_filter.h"
 
 using namespace algo_lidar;
 namespace fs = std::filesystem;
@@ -61,6 +62,25 @@ std::vector<std::string> getFullFilePath(const std::string &folder, const std::s
 	return filePaths;
 }
 
+// 托尾点滤波测试 
+void filtTailPoints(PointMatrix& mat) {
+    // 1. 创建滤波器实例
+    algo_lidar::TailPointFilter filter;
+    // // 2. 初始化（传入配置文件路径）TODO
+    // if (!filter.Init("config.yaml")) {
+    //     std::cerr << "Failed to initialize TailPointFilter!" << std::endl;
+    //     return -1;
+    // }
+
+    // 3. 遍历 mat_src 的每一行，进行滤波处理
+	for ( auto& row : mat) {
+		// 执行滤波处理
+		filter.Process(row);
+	}
+
+    return ;
+}
+
 // 解析回波数据，可视化原始点云
 int testShowCloud()
 {
@@ -68,7 +88,7 @@ int testShowCloud()
 	Ground_I algo_gnd;
 	CalibReflect algo_reflect;
 	// 设置文件夹路径和文件后缀
-	std::string folder = "../data/薄款雷达会议室"; // 数据文件夹路径
+	std::string folder = "../data/拖尾点原始数据_前台标定板20251203"; // 数据文件夹路径
 	std::string postfix = ".txt";	// 文件后缀，按需求替换
 
 	std::vector<float> list_r;
@@ -96,11 +116,12 @@ int testShowCloud()
 		// algo_gnd.doRepair(mat_origin);
 		// 距离和水平角标定
 		mat_src = mat_origin;
-		// mat_src = applyRsaOffset(mat_origin, list_r, list_sa); 
+		mat_src = applyRsaOffset(mat_origin, list_r, list_sa); 
 		// 反射率标定
-		m_intensity_src_name = "peak"; // 设置点云强度着色来源为峰值
 		// algo_reflect.calcCloudIntensity(mat_src);
 		// m_intensity_src_name = "intensity"; // 设置点云强度着色来源为反射率
+		filtTailPoints(mat_src); // 托尾点滤波
+		m_intensity_src_name = "is_tail_pt"; // 设置点云强度着色来源为 托尾点标记
 		// showCloud(mat2xyzi(mat_src, true), "mat_src"); // 可视化
 		list_mat.push_back(mat_src);
 		list_cloud.push_back(mat2pcl(mat_src));
