@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:17:38
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-12-03 10:30:23
+ * @LastEditTime : 2025-12-03 14:53:59
  * @FilePath     : /pcl_viewer/src/debug_visual.cpp
  * @Description  : 
  * 
@@ -97,7 +97,8 @@
              << ", R: " << std::fixed << std::setprecision(3) << pd.r
              << ", Peak: " << static_cast<int>(pd.peak)
              << ", reflect: " << std::fixed << std::setprecision(2) << pd.reflect
-             << ", theta: " << std::fixed << std::setprecision(2) << pd.theta
+             << ", slot_ang: " << std::fixed << std::setprecision(2) << pd.slot_ang
+             << ", theta_ang: " << std::fixed << std::setprecision(2) << pd.theta
              << ", select_idx: " << static_cast<int>(pd.select_idx);
 
          if (!pd.list_pulse.empty())
