@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-02-17 10:07:58
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-12-03 10:26:23
+ * @LastEditTime : 2026-05-28 14:33:54
  * @FilePath     : /pcl_viewer/include/point_type.h
  * @Description  : 
  * 
@@ -126,6 +126,14 @@ namespace algo_lidar
 
     // 应用偏移量，返回一个新矩阵
     PointMatrix applyRsaOffset(const PointMatrix &mat, const std::vector<float> &r_offset, const std::vector<float> &sa_offset);
+
+    /// @brief 按指定回波索引重建 PointMatrix。
+    /// @param mat       源矩阵（list_pulse 已按 peak 降序排列）。
+    /// @param pulse_idx 目标回波索引：0=最强，1=次强，2=最弱。
+    /// @return 新矩阵，每个有效点的物理量均由 list_pulse[pulse_idx] 重新计算得出。
+    ///         若某点 list_pulse 长度不足或对应回波为无效值（tof==0.016/width==0.016），
+    ///         则该点 is_valid 置为 false。
+    PointMatrix buildMatByPulseIdx(const PointMatrix &mat, int pulse_idx);
 
     // 计算 PointMatrix 的质心
     PointData computeCentroid(const PointMatrix &mat);

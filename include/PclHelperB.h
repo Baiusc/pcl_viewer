@@ -2,7 +2,7 @@
  * @Author       : baizs zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-21 09:44:32
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-05-12 16:18:48
+ * @LastEditTime : 2026-05-28 11:16:32
  * @FilePath     : /pcl_viewer/include/PclHelperB.h
  * @Description  : PCL库算法助手
  *
@@ -1033,9 +1033,10 @@ public:
 			min_intensity = std::min(min_intensity, point.intensity);
 			max_intensity = std::max(max_intensity, point.intensity);
 		}
-
+		float max_peak = 1699.f;
+		max_peak = max_intensity > max_peak ? 4095.f : max_peak; // DEBUG可视化 自定义强度区间
 		// min_intensity = 0; // DEBUG可视化 自定义强度区间
-		max_intensity > 1600 ? max_intensity = 1600: max_intensity = max_intensity; // DEBUG可视化 自定义强度区间
+		max_intensity > max_peak ? max_intensity = max_peak : max_intensity = max_intensity; // DEBUG可视化 自定义强度区间
 
 		// 映射强度值到颜色
 		for (size_t i = 0; i < cloud->points.size(); ++i)

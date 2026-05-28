@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-02-17 10:32:59
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-07-10 16:57:00
+ * @LastEditTime : 2026-05-28 14:34:41
  * @FilePath     : /pcl_viewer/src/point_type.cpp
  * @Description  : 
  * 
@@ -1045,6 +1045,64 @@ namespace algo_lidar
         centroid.is_valid = true;
 
         return centroid;
+    }
+    PointMatrix buildMatByPulseIdx(const PointMatrix &mat, int pulse_idx)
+    {
+        const double LIGHT_SPEED = 299792458e-9; // 单位：m/ns
+
+        // 深拷贝源矩阵，保留所有不变字段（角度、索引等）
+        PointMatrix result = mat;
+
+        for (auto &row : result)
+        {
+            for (auto &pt : row)
+            {
+                // ── 1. 原始点本身无效，跳过（保持 is_valid = false） ──────
+                if (!pt.is_valid)
+                    continue;
+
+                // ── 2. 检查 list_pulse 是否包含目标索引 ──────────────────
+                if (pulse_idx < 0 ||
+                    pulse_idx >= static_cast<int>(pt.list_pulse.size()))
+                {
+                    pt.is_valid = false;
+                    continue;
+                }
+
+                const Pulse &pulse = pt.list_pulse[pulse_idx];
+
+                // ── 3. 过滤无效回波（与 readPulseData 保持一致） ─────────
+                if (pulse.tof == 0.016f ||
+                    pulse.width == 0.016f ||
+                    pulse.peak <= 1.0f)
+                {
+                    pt.is_valid = false;
+                    continue;
+                }
+
+                // ── 4. 重新计算物理量 ─────────────────────────────────────
+                pt.select_idx = static_cast<uint8_t>(pulse_idx);
+                pt.peak = static_cast<uint16_t>(std::round(pulse.peak));
+
+                // 距离：tof(ns) * 光速(m/ns) / 2
+                pt.r = static_cast<float>(pulse.tof * LIGHT_SPEED / 2.0);
+
+                // 强度与反射率（与 readPulseData 公式一致）
+                float intensity = static_cast<float>(
+                    std::min(255.0, std::round(
+                                        static_cast<double>(pulse.peak) *
+                                        static_cast<double>(pulse.width) / 702.0 / 5.0 * 256.0)));
+                pt.intensity = static_cast<uint8_t>(intensity);
+                pt.reflect = intensity / 255.0f;
+
+                // 笛卡尔坐标（theta_rad / omega_rad 不变，仅 r 更新）
+                pt.x = pt.r * std::cos(pt.theta_rad) * std::cos(pt.omega_rad);
+                pt.y = pt.r * std::cos(pt.theta_rad) * std::sin(pt.omega_rad);
+                pt.z = pt.r * std::sin(pt.theta_rad);
+            }
+        }
+
+        return result;
     }
 
 }
