@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-02-17 10:07:58
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-05-28 14:33:54
+ * @LastEditTime : 2026-05-29 16:14:12
  * @FilePath     : /pcl_viewer/include/point_type.h
  * @Description  : 
  * 
@@ -97,8 +97,16 @@ namespace algo_lidar
     // 重载 applyROffset 方法，支持点向量输入
     std::vector<PointData> applyROffset(const std::vector<PointData> &pts, const std::vector<float> &r_offset);
 
+    /// @brief 按二维偏差表逐点应用 r_offset，返回新矩阵，不修改原矩阵。适用于固态雷达的逐点校准。
+    /// @param mat            源矩阵。
+    /// @param list_r_offset  与 mat 同尺寸的二维偏差表，list_r_offset[row][col] 为该点的距离偏移量（m）。
+    ///                       尺寸不匹配时跳过对应点并输出警告。无效点（is_valid=false）或偏移为 0.0f 的点保持不变。
+    /// @return 应用偏移后的新矩阵。
+    PointMatrix applyROffset(const PointMatrix &mat,
+                             const std::vector<std::vector<float>> &list_r_offset);
+
     // 重载方法 1：sa_offset 是单一的浮动值
-    void resetSaOffset(PointMatrix& mat, float sa_offset);
+    void resetSaOffset(PointMatrix &mat, float sa_offset);
     // 根据 k_delta_omega 重新计算 slot_ang
     void resetOmegaByK(PointMatrix &mat, float k_delta_omega);
     // 根据 list_k 重新计算 slot_ang

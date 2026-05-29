@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:24:45
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-05-28 11:13:02
+ * @LastEditTime : 2026-05-29 16:16:45
  * @FilePath     : /pcl_viewer/src/pulse_data_processor.cpp
  * @Description  :
  *
@@ -495,5 +495,94 @@ namespace algo_lidar
 
 		// 如果既不是单行也不是单列，则返回空的 squeezed，表示无法压缩
 		return squeezed;
+	}
+	bool loadListFromFile(std::vector<std::vector<float>> &list_r_offset,
+						  const std::string &filename)
+	{
+		std::ifstream inFile(filename);
+		if (!inFile.is_open())
+		{
+			std::cerr << "[loadListFromFile] 错误：无法打开文件: " << filename << std::endl;
+			return false;
+		}
+
+		list_r_offset.clear();
+
+		std::string line;
+		bool is_header = true;
+		int expected_cols = -1; // 由表头确定，用于后续逐行校验
+
+		while (std::getline(inFile, line))
+		{
+			if (line.empty())
+				continue;
+
+			// ── 解析表头行 "row\col,0,1,2,..." ──────────────────────────
+			if (is_header)
+			{
+				// 统计表头列数（表头第 0 列是标签 "row\col"，其余是列号）
+				std::stringstream ss(line);
+				std::string token;
+				int col_count = 0;
+				while (std::getline(ss, token, ','))
+					++col_count;
+
+				// 数据列数 = 总列数 - 1（去掉首列标签）
+				expected_cols = col_count - 1;
+				if (expected_cols <= 0)
+				{
+					std::cerr << "[loadListFromFile] 错误：CSV 表头格式非法: "
+							  << line << std::endl;
+					return false;
+				}
+				is_header = false;
+				continue;
+			}
+
+			// ── 解析数据行 "row_idx,val0,val1,..." ──────────────────────
+			std::stringstream ss(line);
+			std::string token;
+			std::vector<std::string> tokens;
+			while (std::getline(ss, token, ','))
+				tokens.push_back(token);
+
+			// 第 0 列为行号（与 saveROffsetToCsv 格式对应），其余为偏移值
+			if (static_cast<int>(tokens.size()) != expected_cols + 1)
+			{
+				std::cerr << "[loadListFromFile] 警告：第 "
+						  << list_r_offset.size()
+						  << " 行列数（" << tokens.size()
+						  << "）与表头不一致，跳过。" << std::endl;
+				continue;
+			}
+
+			try
+			{
+				std::vector<float> row_data;
+				row_data.reserve(expected_cols);
+
+				// 从 tokens[1] 开始，跳过首列行号
+				for (int c = 1; c <= expected_cols; ++c)
+					row_data.push_back(std::stof(tokens[c]));
+
+				list_r_offset.push_back(std::move(row_data));
+			}
+			catch (const std::exception &e)
+			{
+				std::cerr << "[loadListFromFile] 警告：解析数值失败（"
+						  << e.what() << "），行内容: " << line << std::endl;
+				continue;
+			}
+		}
+
+		inFile.close();
+
+		if (list_r_offset.empty())
+		{
+			std::cerr << "[loadListFromFile] 错误：文件中未读取到任何有效数据行。" << std::endl;
+			return false;
+		}
+
+		return true;
 	}
 }

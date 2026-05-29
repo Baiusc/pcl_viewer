@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-02-17 10:32:59
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-05-28 14:34:41
+ * @LastEditTime : 2026-05-29 16:14:43
  * @FilePath     : /pcl_viewer/src/point_type.cpp
  * @Description  : 
  * 
@@ -1105,4 +1105,56 @@ namespace algo_lidar
         return result;
     }
 
+    PointMatrix applyROffset(const PointMatrix &mat,
+                             const std::vector<std::vector<float>> &list_r_offset)
+    {
+        PointMatrix result = mat; // 深拷贝，不修改原矩阵
+
+        const int num_rows = static_cast<int>(result.size());
+
+        // 行数校验
+        if (static_cast<int>(list_r_offset.size()) != num_rows)
+        {
+            std::cerr << "[applyROffset] 警告：list_r_offset 行数（"
+                      << list_r_offset.size()
+                      << "）与 mat 行数（" << num_rows
+                      << "）不匹配，直接返回原矩阵副本。" << std::endl;
+            return result;
+        }
+
+        for (int row = 0; row < num_rows; ++row)
+        {
+            const int num_cols = static_cast<int>(result[row].size());
+
+            // 列数校验（逐行）
+            if (static_cast<int>(list_r_offset[row].size()) != num_cols)
+            {
+                std::cerr << "[applyROffset] 警告：第 " << row
+                          << " 行 list_r_offset 列数（"
+                          << list_r_offset[row].size()
+                          << "）与 mat 列数（" << num_cols
+                          << "）不匹配，跳过该行。" << std::endl;
+                continue;
+            }
+
+            for (int col = 0; col < num_cols; ++col)
+            {
+                PointData &pt = result[row][col];
+                const float offset = list_r_offset[row][col];
+
+                // 无效点 或 偏移为零 均跳过，避免无意义写操作
+                if (!pt.is_valid || offset == 0.0f)
+                    continue;
+
+                pt.r += offset;
+
+                // 重新计算笛卡尔坐标（使用 theta_rad / omega_rad，与 readPulseData 一致）
+                pt.x = pt.r * std::cos(pt.theta_rad) * std::cos(pt.omega_rad);
+                pt.y = pt.r * std::cos(pt.theta_rad) * std::sin(pt.omega_rad);
+                pt.z = pt.r * std::sin(pt.theta_rad);
+            }
+        }
+
+        return result;
+    }
 }
