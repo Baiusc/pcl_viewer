@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:24:45
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-05-29 16:16:45
+ * @LastEditTime : 2026-06-02 11:06:00
  * @FilePath     : /pcl_viewer/src/pulse_data_processor.cpp
  * @Description  :
  *
@@ -16,6 +16,7 @@
 #include <iostream>
 #include <algorithm>
 #include <iterator>
+#include <iomanip>
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -496,93 +497,233 @@ namespace algo_lidar
 		// 如果既不是单行也不是单列，则返回空的 squeezed，表示无法压缩
 		return squeezed;
 	}
-	bool loadListFromFile(std::vector<std::vector<float>> &list_r_offset,
-						  const std::string &filename)
+	// ================================================================
+	// 内部辅助：二维数组 CSV 存取
+	// 格式与 saveROffsetToCsv 一致：
+	//   首行: "row\col,0,1,2,..."
+	//   数据行: "row_idx,val0,val1,..."
+	// ================================================================
+	static bool saveList2ToCsv(const std::vector<std::vector<float>> &list2,
+							   const std::string &filename)
 	{
-		std::ifstream inFile(filename);
-		if (!inFile.is_open())
+		std::ofstream ofs(filename, std::ios::trunc);
+		if (!ofs)
 		{
-			std::cerr << "[loadListFromFile] 错误：无法打开文件: " << filename << std::endl;
+			std::cerr << "[saveListToFile] 无法打开文件: " << filename << std::endl;
 			return false;
 		}
 
-		list_r_offset.clear();
+		const int num_rows = static_cast<int>(list2.size());
+		const int num_cols = num_rows > 0 ? static_cast<int>(list2[0].size()) : 0;
 
+		// 表头行
+		ofs << "row\\col";
+		for (int c = 0; c < num_cols; ++c)
+			ofs << ',' << c;
+		ofs << '\n';
+
+		// 数据行
+		ofs << std::fixed << std::setprecision(6);
+		for (int r = 0; r < num_rows; ++r)
+		{
+			ofs << r;
+			const int cur_cols = static_cast<int>(list2[r].size());
+			for (int c = 0; c < num_cols; ++c)
+			{
+				// 当前行列数不足时补 0（容错）
+				ofs << ',' << (c < cur_cols ? list2[r][c] : 0.0f);
+			}
+			ofs << '\n';
+		}
+
+		ofs.close();
+		return true;
+	}
+
+	static bool loadList2FromCsv(std::vector<std::vector<float>> &list2,
+								 const std::string &filename)
+	{
+		std::ifstream ifs(filename);
+		if (!ifs.is_open())
+		{
+			std::cerr << "[loadListFromFile] 无法打开文件: " << filename << std::endl;
+			return false;
+		}
+
+		list2.clear();
 		std::string line;
 		bool is_header = true;
-		int expected_cols = -1; // 由表头确定，用于后续逐行校验
+		int expected_cols = -1;
 
-		while (std::getline(inFile, line))
+		while (std::getline(ifs, line))
 		{
 			if (line.empty())
 				continue;
 
-			// ── 解析表头行 "row\col,0,1,2,..." ──────────────────────────
-			if (is_header)
-			{
-				// 统计表头列数（表头第 0 列是标签 "row\col"，其余是列号）
-				std::stringstream ss(line);
-				std::string token;
-				int col_count = 0;
-				while (std::getline(ss, token, ','))
-					++col_count;
-
-				// 数据列数 = 总列数 - 1（去掉首列标签）
-				expected_cols = col_count - 1;
-				if (expected_cols <= 0)
-				{
-					std::cerr << "[loadListFromFile] 错误：CSV 表头格式非法: "
-							  << line << std::endl;
-					return false;
-				}
-				is_header = false;
-				continue;
-			}
-
-			// ── 解析数据行 "row_idx,val0,val1,..." ──────────────────────
 			std::stringstream ss(line);
 			std::string token;
 			std::vector<std::string> tokens;
 			while (std::getline(ss, token, ','))
 				tokens.push_back(token);
 
-			// 第 0 列为行号（与 saveROffsetToCsv 格式对应），其余为偏移值
+			// 解析表头，确定列数
+			if (is_header)
+			{
+				expected_cols = static_cast<int>(tokens.size()) - 1; // 去掉首列标签
+				if (expected_cols <= 0)
+				{
+					std::cerr << "[loadListFromFile] CSV 表头格式非法: " << line << std::endl;
+					return false;
+				}
+				is_header = false;
+				continue;
+			}
+
+			// 数据行：tokens[0] 为行号，tokens[1..] 为数据
 			if (static_cast<int>(tokens.size()) != expected_cols + 1)
 			{
-				std::cerr << "[loadListFromFile] 警告：第 "
-						  << list_r_offset.size()
-						  << " 行列数（" << tokens.size()
-						  << "）与表头不一致，跳过。" << std::endl;
+				std::cerr << "[loadListFromFile] 第 " << list2.size()
+						  << " 行列数不匹配，跳过。" << std::endl;
 				continue;
 			}
 
 			try
 			{
-				std::vector<float> row_data;
-				row_data.reserve(expected_cols);
-
-				// 从 tokens[1] 开始，跳过首列行号
+				std::vector<float> row;
+				row.reserve(expected_cols);
 				for (int c = 1; c <= expected_cols; ++c)
-					row_data.push_back(std::stof(tokens[c]));
-
-				list_r_offset.push_back(std::move(row_data));
+					row.push_back(std::stof(tokens[c]));
+				list2.push_back(std::move(row));
 			}
 			catch (const std::exception &e)
 			{
-				std::cerr << "[loadListFromFile] 警告：解析数值失败（"
-						  << e.what() << "），行内容: " << line << std::endl;
-				continue;
+				std::cerr << "[loadListFromFile] 解析失败（" << e.what()
+						  << "），行: " << line << std::endl;
 			}
 		}
 
-		inFile.close();
+		ifs.close();
+		return !list2.empty();
+	}
 
-		if (list_r_offset.empty())
+	// ================================================================
+	// 内部辅助：二维数组 BIN 存取
+	// 二进制格式（参考 binary_storage.cpp）：
+	//   [uint32_t num_rows]
+	//   [uint32_t num_cols]        ← 以第一行列数为准
+	//   [float * num_rows * num_cols]  ← 行优先平铺，不足列补 0
+	// ================================================================
+	static bool saveList2ToBin(const std::vector<std::vector<float>> &list2,
+							   const std::string &filename)
+	{
+		std::ofstream ofs(filename, std::ios::binary | std::ios::trunc);
+		if (!ofs)
 		{
-			std::cerr << "[loadListFromFile] 错误：文件中未读取到任何有效数据行。" << std::endl;
+			std::cerr << "[saveListToFile] 无法打开文件: " << filename << std::endl;
 			return false;
 		}
 
+		const uint32_t num_rows = static_cast<uint32_t>(list2.size());
+		const uint32_t num_cols = num_rows > 0
+									  ? static_cast<uint32_t>(list2[0].size())
+									  : 0u;
+
+		// 写入行列数
+		ofs.write(reinterpret_cast<const char *>(&num_rows), sizeof(num_rows));
+		ofs.write(reinterpret_cast<const char *>(&num_cols), sizeof(num_cols));
+
+		// 逐行写入，不足列补 0
+		const float zero = 0.0f;
+		for (uint32_t r = 0; r < num_rows; ++r)
+		{
+			const uint32_t cur_cols = static_cast<uint32_t>(list2[r].size());
+			const uint32_t write_cols = std::min(cur_cols, num_cols);
+
+			// 写有效数据
+			if (write_cols > 0)
+				ofs.write(reinterpret_cast<const char *>(list2[r].data()),
+						  sizeof(float) * write_cols);
+
+			// 补齐不足列
+			for (uint32_t c = write_cols; c < num_cols; ++c)
+				ofs.write(reinterpret_cast<const char *>(&zero), sizeof(float));
+		}
+
+		ofs.close();
 		return true;
+	}
+
+	static bool loadList2FromBin(std::vector<std::vector<float>> &list2,
+								 const std::string &filename)
+	{
+		std::ifstream ifs(filename, std::ios::binary);
+		if (!ifs)
+		{
+			std::cerr << "[loadListFromFile] 无法打开文件: " << filename << std::endl;
+			return false;
+		}
+
+		uint32_t num_rows = 0, num_cols = 0;
+		ifs.read(reinterpret_cast<char *>(&num_rows), sizeof(num_rows));
+		ifs.read(reinterpret_cast<char *>(&num_cols), sizeof(num_cols));
+
+		if (!ifs || num_rows == 0 || num_cols == 0)
+		{
+			std::cerr << "[loadListFromFile] BIN 文件头读取失败或尺寸为零。" << std::endl;
+			return false;
+		}
+
+		list2.assign(num_rows, std::vector<float>(num_cols, 0.0f));
+
+		for (uint32_t r = 0; r < num_rows; ++r)
+		{
+			ifs.read(reinterpret_cast<char *>(list2[r].data()),
+					 sizeof(float) * num_cols);
+			if (!ifs)
+			{
+				std::cerr << "[loadListFromFile] BIN 文件在第 " << r
+						  << " 行读取中断，数据可能不完整。" << std::endl;
+				return false;
+			}
+		}
+
+		ifs.close();
+		return true;
+	}
+
+	// ================================================================
+	// 公开接口：saveListToFile 二维重载
+	// ================================================================
+	bool saveListToFile(const std::vector<std::vector<float>> &list2,
+						const std::string &filename,
+						const std::string &type)
+	{
+		if (type == ".csv")
+			return saveList2ToCsv(list2, filename);
+
+		if (type == ".bin")
+			return saveList2ToBin(list2, filename);
+
+		std::cerr << "[saveListToFile] 不支持的文件类型: " << type
+				  << "，当前支持 \".csv\" 和 \".bin\"。" << std::endl;
+		return false;
+	}
+
+	// ================================================================
+	// 公开接口：loadListFromFile 二维重载
+	// ================================================================
+	bool loadListFromFile(std::vector<std::vector<float>> &list2,
+						  const std::string &filename,
+						  const std::string &type)
+	{
+		if (type == ".csv")
+			return loadList2FromCsv(list2, filename);
+
+		if (type == ".bin")
+			return loadList2FromBin(list2, filename);
+
+		std::cerr << "[loadListFromFile] 不支持的文件类型: " << type
+				  << "，当前支持 \".csv\" 和 \".bin\"。" << std::endl;
+		return false;
 	}
 }

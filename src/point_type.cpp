@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-02-17 10:32:59
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-05-29 16:14:43
+ * @LastEditTime : 2026-06-02 10:02:42
  * @FilePath     : /pcl_viewer/src/point_type.cpp
  * @Description  : 
  * 
@@ -1109,7 +1109,7 @@ namespace algo_lidar
                              const std::vector<std::vector<float>> &list_r_offset)
     {
         PointMatrix result = mat; // 深拷贝，不修改原矩阵
-
+        float offset_last_valid = 0.0f; // 用于存储最后一个有效的 r_offset 值
         const int num_rows = static_cast<int>(result.size());
 
         // 行数校验
@@ -1140,14 +1140,18 @@ namespace algo_lidar
             for (int col = 0; col < num_cols; ++col)
             {
                 PointData &pt = result[row][col];
-                const float offset = list_r_offset[row][col];
+                float offset = list_r_offset[row][col];
 
-                // 无效点 或 偏移为零 均跳过，避免无意义写操作
-                if (!pt.is_valid || offset == 0.0f)
+                // 无效点 跳过，避免无意义写操作
+                if (!pt.is_valid)
                     continue;
-
+                // 偏移为零
+                if (offset == 0.0f)
+                {
+                    offset = offset_last_valid; // 使用最后一个有效的 r_offset 值
+                }
                 pt.r += offset;
-
+                offset_last_valid = offset; // 更新最后一个有效的 r_offset
                 // 重新计算笛卡尔坐标（使用 theta_rad / omega_rad，与 readPulseData 一致）
                 pt.x = pt.r * std::cos(pt.theta_rad) * std::cos(pt.omega_rad);
                 pt.y = pt.r * std::cos(pt.theta_rad) * std::sin(pt.omega_rad);

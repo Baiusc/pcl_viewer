@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-05-29 16:31:36
+ * @LastEditTime : 2026-06-01 17:03:32
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -90,7 +90,9 @@ int testShowCloud()
 	CalibReflect algo_reflect;
 	// 设置文件夹路径和文件后缀
 	std::string folder = "../data/202605固态雷达原始点云"; // 数据文件夹路径
+	// std::string folder = "../data/山东点云/20260528C/反射率回波"; // 数据文件夹路径
 	std::string postfix = ".txt";	// 文件后缀，按需求替换
+	// std::string postfix = "";	// 文件后缀，按需求替换
 
 	std::vector<float> list_r;
 	std::vector<float> list_sa;
