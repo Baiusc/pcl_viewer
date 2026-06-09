@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-06-01 17:03:32
+ * @LastEditTime : 2026-06-09 15:33:34
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -129,7 +129,7 @@ int testShowCloud()
 		mat_calib = applyROffset(mat_origin, list_r2);   
 		// 反射率标定
 		// algo_reflect.calcCloudIntensity(mat_src);
-		m_intensity_src_name = "peak"; // 设置点云强度着色来源为反射率
+		m_intensity_src_name = "intensity"; // 设置点云强度着色来源为反射率
 		// filtTailPoints(mat_src); // 托尾点滤波
 		// m_intensity_src_name = "is_tail_pt"; // 设置点云强度着色来源为 托尾点标记
 		// showCloud(mat2xyzi(mat_src, true), "mat_src"); // 可视化

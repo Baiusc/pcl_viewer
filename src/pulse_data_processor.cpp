@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:24:45
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-06-02 11:06:00
+ * @LastEditTime : 2026-06-09 16:07:17
  * @FilePath     : /pcl_viewer/src/pulse_data_processor.cpp
  * @Description  :
  *
@@ -155,7 +155,7 @@ namespace algo_lidar
 				int u = 47; // u: SPAD中心在y竖直方向上的偏移量（像素单位），默认 47
 
 				float r = tofs[select_index] * LIGHT_SPEED / 2.0;
-				float intensity = std::min(255.0, std::round(peaks[select_index] * widths[select_index] / 702.0 / 5 * 256));
+				float intensity = std::min(255.0, std::round(peaks[select_index] * widths[select_index] / 1638.0 / 10.0 * 256));
 				float reflect = intensity / 255.0;
 				uint8_t intensity_uint8 = static_cast<uint8_t>(intensity);
 				// float theta = -pixel_idx / 96.0 * 20 + 10 - 2.5; // 20241213此日之前的旧版本
@@ -353,7 +353,7 @@ namespace algo_lidar
 
 				float r = static_cast<float>(tofs[select_index] * LIGHT_SPEED / 2.0);
 				float intensity = static_cast<float>(
-					std::min(255.0, std::round(peaks[select_index] * widths[select_index] / 702.0 / 5.0 * 256.0)));
+					std::min(255.0, std::round(peaks[select_index] * widths[select_index] / 4095.0 / 3.0 * 255.0)));
 				float reflect = intensity / 255.0f;
 				uint8_t intensity_u8 = static_cast<uint8_t>(intensity);
 

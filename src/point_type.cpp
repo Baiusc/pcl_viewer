@@ -2,11 +2,11 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-02-17 10:32:59
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-06-02 10:02:42
+ * @LastEditTime : 2026-06-02 11:58:46
  * @FilePath     : /pcl_viewer/src/point_type.cpp
- * @Description  : 
- * 
- * Copyright (c) 2025 by vitalchem, All Rights Reserved. 
+ * @Description  :
+ *
+ * Copyright (c) 2025 by vitalchem, All Rights Reserved.
  */
 
 #include "point_type.h"
@@ -24,7 +24,8 @@
 
 namespace algo_lidar
 {
-    void to_json(nlohmann::json& j, const PointData& p) {
+    void to_json(nlohmann::json &j, const PointData &p)
+    {
         j = nlohmann::json{
             {"pixel_idx", p.pixel_idx},
             {"slot_idx", p.slot_idx},
@@ -34,11 +35,11 @@ namespace algo_lidar
             {"x", p.x},
             {"y", p.y},
             {"z", p.z},
-            {"is_valid", p.is_valid}
-        };
+            {"is_valid", p.is_valid}};
     }
 
-    void from_json(const nlohmann::json& j, PointData& p) {
+    void from_json(const nlohmann::json &j, PointData &p)
+    {
         // 使用 .at() 确保字段存在，如果不存在会抛出异常
         j.at("pixel_idx").get_to(p.pixel_idx);
         j.at("slot_idx").get_to(p.slot_idx);
@@ -50,7 +51,7 @@ namespace algo_lidar
         j.at("y").get_to(p.y);
         j.at("z").get_to(p.z);
         j.at("is_valid").get_to(p.is_valid);
-        
+
         // 对于未从JSON反序列化的 PointData 成员，需要手动初始化其默认值
         // 以确保 PointData 对象的完整性
         p.theta_rad = 0.0f;
@@ -67,27 +68,33 @@ namespace algo_lidar
     /// @brief 将 PointMatrix 保存为 JSON 文件。
     /// @param mat 要保存的 PointMatrix。
     /// @param filename 输出 JSON 文件的路径。
-    void save_mat_to_json(const PointMatrix& mat, const std::string& filename) {
+    void save_mat_to_json(const PointMatrix &mat, const std::string &filename)
+    {
         nlohmann::json j_output = nlohmann::json::array(); // JSON 根是一个数组
 
         // 遍历 PointMatrix 的每一行
-        for (const auto& row_vec : mat) {
+        for (const auto &row_vec : mat)
+        {
             nlohmann::json row_json = nlohmann::json::array(); // 每一行也是一个数组
             // 遍历行中的每个 PointData 对象
-            for (const auto& point : row_vec) {
+            for (const auto &point : row_vec)
+            {
                 row_json.push_back(point); // 这里会自动调用 to_json(json&, PointData&)
             }
             j_output.push_back(row_json);
         }
 
         std::ofstream file(filename);
-        if (file.is_open()) {
+        if (file.is_open())
+        {
             file << j_output.dump(4); // 以4个空格缩进格式化输出
             file.close();
             // 替换为你的日志宏
-            // FS_LOGI("成功将 PointMatrix 保存到 %s\n", filename.c_str()); 
+            // FS_LOGI("成功将 PointMatrix 保存到 %s\n", filename.c_str());
             std::cout << "成功将 PointMatrix 保存到 " << filename << std::endl;
-        } else {
+        }
+        else
+        {
             // 替换为你的日志宏
             // FS_LOGE("错误：无法打开文件 %s 进行写入。\n", filename.c_str());
             std::cerr << "错误：无法打开文件 " << filename << " 进行写入。" << std::endl;
@@ -97,21 +104,25 @@ namespace algo_lidar
     /// @brief 从 JSON 文件中加载 PointMatrix。
     /// @param filename 输入 JSON 文件的路径。
     /// @return 加载的 PointMatrix。如果加载失败，则返回一个空的 PointMatrix。
-    PointMatrix load_mat_by_json(const std::string& filename) {
+    PointMatrix load_mat_by_json(const std::string &filename)
+    {
         PointMatrix loaded_mat;
         std::ifstream file(filename);
-        if (!file.is_open()) {
+        if (!file.is_open())
+        {
             // 替换为你的日志宏
             // FS_LOGE("错误：无法打开文件 %s 进行读取。\n", filename.c_str());
             std::cerr << "错误：无法打开文件 " << filename << " 进行读取。" << std::endl;
             return loaded_mat; // 返回空矩阵
         }
 
-        try {
+        try
+        {
             nlohmann::json j_input;
             file >> j_input; // 从文件读取 JSON 数据
 
-            if (!j_input.is_array()) {
+            if (!j_input.is_array())
+            {
                 // 替换为你的日志宏
                 // FS_LOGE("错误：JSON 根不是一个数组。\n");
                 std::cerr << "错误：JSON 根不是一个数组。" << std::endl;
@@ -119,8 +130,10 @@ namespace algo_lidar
             }
 
             loaded_mat.reserve(j_input.size()); // 预分配行数以提高效率
-            for (const auto& row_json : j_input) {
-                if (!row_json.is_array()) {
+            for (const auto &row_json : j_input)
+            {
+                if (!row_json.is_array())
+                {
                     // 替换为你的日志宏
                     // FS_LOGE("错误：JSON 中的行不是一个数组。\n");
                     std::cerr << "错误：JSON 中的行不是一个数组。" << std::endl;
@@ -129,16 +142,19 @@ namespace algo_lidar
                 }
                 std::vector<PointData> row_vec;
                 row_vec.reserve(row_json.size()); // 预分配列数
-                for (const auto& point_json : row_json) {
+                for (const auto &point_json : row_json)
+                {
                     // 这里会自动调用 from_json(const json&, PointData&)
-                    row_vec.push_back(point_json.get<PointData>()); 
+                    row_vec.push_back(point_json.get<PointData>());
                 }
                 loaded_mat.push_back(row_vec);
             }
             // 替换为你的日志宏
             // FS_LOGI("成功从 %s 加载 PointMatrix。\n", filename.c_str());
             std::cout << "成功从 " << filename << " 加载 PointMatrix。" << std::endl;
-        } catch (const nlohmann::json::exception& e) {
+        }
+        catch (const nlohmann::json::exception &e)
+        {
             // 捕获 JSON 解析过程中可能发生的异常
             // 替换为你的日志宏
             // FS_LOGE("解析 JSON 文件 %s 时发生错误：%s\n", filename.c_str(), e.what());
@@ -148,26 +164,30 @@ namespace algo_lidar
 
         return loaded_mat;
     }
-    
+
     // 矩阵转置
-    PointMatrix transMat(const PointMatrix& mat_src) {
-        if (mat_src.empty()) {
-            return {};  // 如果矩阵为空，直接返回空矩阵
+    PointMatrix transMat(const PointMatrix &mat_src)
+    {
+        if (mat_src.empty())
+        {
+            return {}; // 如果矩阵为空，直接返回空矩阵
         }
-    
-        size_t rows = mat_src.size();         // 原矩阵的行数
-        size_t cols = mat_src[0].size();      // 原矩阵的列数
-    
+
+        size_t rows = mat_src.size();    // 原矩阵的行数
+        size_t cols = mat_src[0].size(); // 原矩阵的列数
+
         // 创建转置后的矩阵，大小为 cols x rows
         PointMatrix mat_transposed(cols, std::vector<PointData>(rows));
-    
+
         // 进行转置操作
-        for (size_t i = 0; i < rows; ++i) {
-            for (size_t j = 0; j < cols; ++j) {
+        for (size_t i = 0; i < rows; ++i)
+        {
+            for (size_t j = 0; j < cols; ++j)
+            {
                 mat_transposed[j][i] = mat_src[i][j];
             }
         }
-    
+
         return mat_transposed;
     }
     // 将 PointMatrix 转换为 8 位单通道灰度图并保存为 BMP 格式
@@ -205,7 +225,7 @@ namespace algo_lidar
                 {
                     // 归一化到 0~255
                     float normalized_peak = (pt.peak - min_peak) / (max_peak - min_peak) * 255.0f;
-                    image[i * width + width - 1 - j ] = static_cast<uint8_t>(normalized_peak);
+                    image[i * width + width - 1 - j] = static_cast<uint8_t>(normalized_peak);
                 }
             }
         }
@@ -263,7 +283,7 @@ namespace algo_lidar
         // 写入调色板（灰度图）
         for (int i = 0; i < 256; ++i)
         {
-            uint8_t color[4] = { (uint8_t)i, (uint8_t)i, (uint8_t)i, 0 };
+            uint8_t color[4] = {(uint8_t)i, (uint8_t)i, (uint8_t)i, 0};
             file.write(reinterpret_cast<const char *>(color), sizeof(color));
         }
 
@@ -273,7 +293,7 @@ namespace algo_lidar
         // 关闭文件
         file.close();
     }
-    
+
     // ...existing code...
     // 弧度转角度
     constexpr float radToDeg(float radians)
@@ -388,16 +408,16 @@ namespace algo_lidar
     // 对目标矩阵按行重写 r_offset 并重新计算点数据
     void resetROffset(PointMatrix &mat, float r_offset)
     {
-            float offset = r_offset;
-            for (auto &row : mat)
+        float offset = r_offset;
+        for (auto &row : mat)
+        {
+            for (auto &point : row)
             {
-                for (auto &point : row)
-                {
-                    if (!point.is_valid)
-                        continue;      // 跳过无效点
-                    point.r += offset; // 应用全局偏移 20241209 改为 r += r_offset
-                    // 重新计算 x, y, z
-                    float theta_rad = point.theta * M_PI / 180.0;
+                if (!point.is_valid)
+                    continue;      // 跳过无效点
+                point.r += offset; // 应用全局偏移 20241209 改为 r += r_offset
+                // 重新计算 x, y, z
+                float theta_rad = point.theta * M_PI / 180.0;
                 float slot_ang_rad = point.slot_ang * M_PI / 180.0;
                 point.x = point.r * std::cos(theta_rad) * std::cos(slot_ang_rad);
                 point.y = point.r * std::cos(theta_rad) * std::sin(slot_ang_rad);
@@ -455,7 +475,7 @@ namespace algo_lidar
             {
                 point.slot_ang += sa_offset; // 应用全局偏移
                 if (!point.is_valid)
-                    continue;                // 跳过无效点
+                    continue; // 跳过无效点
                 // point.slot_ang += sa_offset; // 应用全局偏移
                 // 重新计算 x, y, z
                 float theta_rad = point.theta * M_PI / 180.0;
@@ -929,7 +949,7 @@ namespace algo_lidar
         return cartesian_points;
     }
     // 将 PointMatrix 转换为 PolarPoint
-    std::vector<PolarPoint> Converter::mat2Polar(const PointMatrix& matrix)
+    std::vector<PolarPoint> Converter::mat2Polar(const PointMatrix &matrix)
     {
         // 获取矩阵的行数和列数
         int rows = matrix.size();
@@ -957,7 +977,7 @@ namespace algo_lidar
     }
 
     // 辅助函数：将 PointData 转换为 PolarPoint
-    PolarPoint Converter::buildPolarPt(const PointData& point)
+    PolarPoint Converter::buildPolarPt(const PointData &point)
     {
         PolarPoint polar_pt;
 
@@ -1105,33 +1125,32 @@ namespace algo_lidar
         return result;
     }
 
-    PointMatrix applyROffset(const PointMatrix &mat,
-                             const std::vector<std::vector<float>> &list_r_offset)
+    void resetROffset(PointMatrix &mat, const std::vector<std::vector<float>> &r_offset)
     {
-        PointMatrix result = mat; // 深拷贝，不修改原矩阵
-        float offset_last_valid = 0.0f; // 用于存储最后一个有效的 r_offset 值
-        const int num_rows = static_cast<int>(result.size());
+        const int num_rows = static_cast<int>(mat.size());
 
         // 行数校验
-        if (static_cast<int>(list_r_offset.size()) != num_rows)
+        if (static_cast<int>(r_offset.size()) != num_rows)
         {
-            std::cerr << "[applyROffset] 警告：list_r_offset 行数（"
-                      << list_r_offset.size()
+            std::cerr << "[resetROffset] 警告：r_offset 行数（"
+                      << r_offset.size()
                       << "）与 mat 行数（" << num_rows
-                      << "）不匹配，直接返回原矩阵副本。" << std::endl;
-            return result;
+                      << "）不匹配，操作取消。" << std::endl;
+            return;
         }
+
+        float offset_last_valid = 0.0f; // 最近一个有效偏移值，用于填补 0.0f 空洞
 
         for (int row = 0; row < num_rows; ++row)
         {
-            const int num_cols = static_cast<int>(result[row].size());
+            const int num_cols = static_cast<int>(mat[row].size());
 
             // 列数校验（逐行）
-            if (static_cast<int>(list_r_offset[row].size()) != num_cols)
+            if (static_cast<int>(r_offset[row].size()) != num_cols)
             {
-                std::cerr << "[applyROffset] 警告：第 " << row
-                          << " 行 list_r_offset 列数（"
-                          << list_r_offset[row].size()
+                std::cerr << "[resetROffset] 警告：第 " << row
+                          << " 行 r_offset 列数（"
+                          << r_offset[row].size()
                           << "）与 mat 列数（" << num_cols
                           << "）不匹配，跳过该行。" << std::endl;
                 continue;
@@ -1139,26 +1158,32 @@ namespace algo_lidar
 
             for (int col = 0; col < num_cols; ++col)
             {
-                PointData &pt = result[row][col];
-                float offset = list_r_offset[row][col];
+                PointData &pt = mat[row][col];
+                float offset = r_offset[row][col];
 
-                // 无效点 跳过，避免无意义写操作
                 if (!pt.is_valid)
-                    continue;
-                // 偏移为零
+                    continue; // 跳过无效点
+
+                // 偏移为 0.0f 时（未标定像素），使用最近有效偏移值代替
                 if (offset == 0.0f)
-                {
-                    offset = offset_last_valid; // 使用最后一个有效的 r_offset 值
-                }
+                    offset = offset_last_valid;
+                else
+                    offset_last_valid = offset; // 更新最近有效偏移值
+
                 pt.r += offset;
-                offset_last_valid = offset; // 更新最后一个有效的 r_offset
+
                 // 重新计算笛卡尔坐标（使用 theta_rad / omega_rad，与 readPulseData 一致）
                 pt.x = pt.r * std::cos(pt.theta_rad) * std::cos(pt.omega_rad);
                 pt.y = pt.r * std::cos(pt.theta_rad) * std::sin(pt.omega_rad);
                 pt.z = pt.r * std::sin(pt.theta_rad);
             }
         }
-
+    }
+    PointMatrix applyROffset(const PointMatrix &mat,
+                             const std::vector<std::vector<float>> &list_r_offset)
+    {
+        PointMatrix result = mat;            // 深拷贝，不修改原矩阵
+        resetROffset(result, list_r_offset); // 复用 reset 逻辑，避免代码重复
         return result;
     }
 }
