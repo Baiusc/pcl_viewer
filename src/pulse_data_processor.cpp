@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:24:45
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-06-09 16:07:17
+ * @LastEditTime : 2026-07-21 15:41:45
  * @FilePath     : /pcl_viewer/src/pulse_data_processor.cpp
  * @Description  :
  *
@@ -61,7 +61,7 @@ namespace algo_lidar
 
 		while (std::getline(infile, line))
 		{
-			if (line.find("start of slot") != std::string::npos)
+			if (line.find("start of") != std::string::npos)
 			{
 				auto f1 = line.find('[');
 				auto f2 = line.find(']');
@@ -418,7 +418,7 @@ namespace algo_lidar
 		std::getline(infile, first_line);
 		infile.close();
 
-		if (first_line.find("frame_id") != std::string::npos)
+		if (first_line.find("cols: 360  rows: 152") != std::string::npos)
 		{
 			return readSolidLidarData(filename, mat);
 		}

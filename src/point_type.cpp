@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-02-17 10:32:59
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-06-02 11:58:46
+ * @LastEditTime : 2026-07-14 14:50:07
  * @FilePath     : /pcl_viewer/src/point_type.cpp
  * @Description  :
  *
@@ -1125,9 +1125,21 @@ namespace algo_lidar
         return result;
     }
 
+
     void resetROffset(PointMatrix &mat, const std::vector<std::vector<float>> &r_offset)
     {
         const int num_rows = static_cast<int>(mat.size());
+        // ========== 硬编码标定系数（可自行修改）==========
+        // Step2 全局线性修正 K、B
+        const float linear_k = 0.80494535f;
+        const float linear_b = 0.30557389f;
+
+        // Step3 Time-Walk 线性修正 降幂 c1*peak + c0
+        const float tw_c1 = -4.97306069e-05f;
+        const float tw_c0 = 7.59726215e-02f;
+
+        // 峰值饱和阈值，peak >= 该值跳过TimeWalk修正
+        const float peak_sat_thresh = 4500.0f;
 
         // 行数校验
         if (static_cast<int>(r_offset.size()) != num_rows)
@@ -1171,6 +1183,20 @@ namespace algo_lidar
                     offset_last_valid = offset; // 更新最近有效偏移值
 
                 pt.r += offset;
+                // ---------------- Step2 全局线性度修正 k/b ----------------
+                // if (std::abs(linear_k) > 1e-6f) // 防止除零
+                // {
+                //     pt.r = (pt.r - linear_b) / linear_k;
+                // }
+
+                // // ---------------- Step3 Peak Time-Walk 线性修正 ----------------
+                // if (pt.peak < peak_sat_thresh)
+                // {
+                //     // 线性修正：Δtw = c1*peak + c0
+                //     float peak = pt.peak;
+                //     float delta_tw = tw_c1 * peak + tw_c0;
+                //     pt.r -= delta_tw;
+                // }
 
                 // 重新计算笛卡尔坐标（使用 theta_rad / omega_rad，与 readPulseData 一致）
                 pt.x = pt.r * std::cos(pt.theta_rad) * std::cos(pt.omega_rad);
@@ -1179,6 +1205,7 @@ namespace algo_lidar
             }
         }
     }
+    
     PointMatrix applyROffset(const PointMatrix &mat,
                              const std::vector<std::vector<float>> &list_r_offset)
     {

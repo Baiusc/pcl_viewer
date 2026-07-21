@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:17:38
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-12-03 14:53:59
+ * @LastEditTime : 2026-06-26 16:28:34
  * @FilePath     : /pcl_viewer/src/debug_visual.cpp
  * @Description  : 
  * 
@@ -282,6 +282,22 @@
          if (m_intensity_src_name == "reflect")
          {
              return point.reflect;
+         }
+         if (m_intensity_src_name == "x")
+         {
+             return point.x;
+         }
+         if (m_intensity_src_name == "y")
+         {
+             return point.y;
+         }
+         if (m_intensity_src_name == "z")
+         {
+             return point.z;
+         }
+         if (m_intensity_src_name == "r")
+         {
+             return point.r;
          }
          if (m_intensity_src_name == "is_tail_pt")
          {

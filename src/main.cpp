@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-06-09 15:33:34
+ * @LastEditTime : 2026-07-21 15:28:57
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -63,6 +63,53 @@ std::vector<std::string> getFullFilePath(const std::string &folder, const std::s
 	return filePaths;
 }
 
+/// @brief 获取指定目录下匹配后缀的文件完整路径
+/// @param folder 根目录路径
+/// @param postfix 文件后缀（如 ".txt"，空则匹配所有文件）
+/// @param recursive 是否递归遍历子文件夹
+/// @return 所有匹配文件的完整路径数组
+std::vector<std::string> getFullFilePath(const std::string &folder, const std::string &postfix, bool recursive)
+{
+    std::vector<std::string> filePaths;
+
+    // 目录合法性校验
+    if (!fs::exists(folder) || !fs::is_directory(folder))
+    {
+        return filePaths;
+    }
+
+    if (recursive)
+    {
+        // 递归遍历所有子目录
+        for (const auto &entry : fs::recursive_directory_iterator(folder))
+        {
+            if (!entry.is_regular_file())
+                continue;
+
+            if (postfix.empty() || entry.path().extension() == postfix)
+            {
+                filePaths.push_back(entry.path().string());
+            }
+        }
+    }
+    else
+    {
+        // 仅遍历当前目录，不进入子文件夹
+        for (const auto &entry : fs::directory_iterator(folder))
+        {
+            if (!entry.is_regular_file())
+                continue;
+
+            if (postfix.empty() || entry.path().extension() == postfix)
+            {
+                filePaths.push_back(entry.path().string());
+            }
+        }
+    }
+
+    return filePaths;
+}
+
 // 托尾点滤波测试 
 void filtTailPoints(PointMatrix& mat) {
     // 1. 创建滤波器实例
@@ -89,8 +136,9 @@ int testShowCloud()
 	Ground_I algo_gnd;
 	CalibReflect algo_reflect;
 	// 设置文件夹路径和文件后缀
-	std::string folder = "../data/202605固态雷达原始点云"; // 数据文件夹路径
-	// std::string folder = "../data/山东点云/20260528C/反射率回波"; // 数据文件夹路径
+	std::string folder = "../../data/beta薄款雷达点云"; // 数据文件夹路径
+	// std::string folder = "../../data/固态雷达标定数据/20260708多点标定2%和90%靶板/2%+90%"; // 数据文件夹路径
+	// std::string folder = "../data/山东点云/20260618山东德州数据/反射率标定车间"; // 数据文件夹路径
 	std::string postfix = ".txt";	// 文件后缀，按需求替换
 	// std::string postfix = "";	// 文件后缀，按需求替换
 
@@ -99,12 +147,12 @@ int testShowCloud()
 	std::vector<std::vector<float>> list_r2; // 固态雷达 距离偏差表
 	loadListFromFile(list_r, "../data/param/list_r.txt"); // 读取距离标定参数
 	loadListFromFile(list_sa, "../data/param/list_sa.txt"); // 读取水平角标定参数
-	loadListFromFile(list_r2, "../data/param/list_r2.csv"); // 读取固态雷达距离偏差表
+	loadListFromFile(list_r2, "../data/param/map_single.csv"); // 读取固态雷达距离偏差表
 	std::map<uint16_t, std::map<float, std::array<float, 5>>> map_bin;
 	binary_storage::loadMapFromBinary("../data/map_device_0812_sum10_extend54.bin", map_bin);
 	algo_reflect._map = map_bin; 
 	// 读取点云
-	std::vector<std::string> filePaths = getFullFilePath(folder, postfix);
+	std::vector<std::string> filePaths = getFullFilePath(folder, postfix, true);
 	std::vector<PointMatrix> list_mat; //
 	std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> list_cloud; // 存储点云
 
@@ -121,15 +169,16 @@ int testShowCloud()
 		// auto mat_2 = buildMatByPulseIdx(mat_origin, 1); // 以第2回波重建点云
 		// auto mat_3 = buildMatByPulseIdx(mat_origin, 2); // 以第3回波重建点云
 
-		// 地面反射点修复
+		// // 地面反射点修复
 		// algo_gnd.doRepair(mat_origin);
 		// 距离和水平角标定
 		// mat_src = mat_origin;
-		// mat_src = applyRsaOffset(mat_origin, list_r, list_sa); 
-		mat_calib = applyROffset(mat_origin, list_r2);   
+		// mat_calib = applyRsaOffset(mat_origin, list_r, list_sa); 
+		// mat_calib = applyROffset(mat_origin, list_r2);   
 		// 反射率标定
 		// algo_reflect.calcCloudIntensity(mat_src);
-		m_intensity_src_name = "intensity"; // 设置点云强度着色来源为反射率
+		// m_intensity_src_name = "z"; // 设置点云强度着色来源为z
+		m_intensity_src_name = "peak"; // 设置点云强度着色来源为峰值
 		// filtTailPoints(mat_src); // 托尾点滤波
 		// m_intensity_src_name = "is_tail_pt"; // 设置点云强度着色来源为 托尾点标记
 		// showCloud(mat2xyzi(mat_src, true), "mat_src"); // 可视化
@@ -139,7 +188,8 @@ int testShowCloud()
 		// list_cloud.push_back(mat2pcl(mat_2));
 		// list_cloud.push_back(mat2pcl(mat_3));
 		auto cloud_name = "cloud_" + std::to_string(i);
-		showCloud(mat2xyzi(mat_calib, true), cloud_name); // 可视化
+		showCloud(mat2xyzi(mat_origin, true), cloud_name); // 可视化
+		// showCloud(mat2xyzi(mat_calib, true), cloud_name); // 可视化
 		// showListCloudRGB(mat2pcl(mat_origin), list_cloud, cloud_name); // 可视化
 	}
 
