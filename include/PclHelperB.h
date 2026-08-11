@@ -2,7 +2,7 @@
  * @Author       : baizs zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-21 09:44:32
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-07-06 16:17:59
+ * @LastEditTime : 2026-08-11 10:10:20
  * @FilePath     : /pcl_viewer/include/PclHelperB.h
  * @Description  : PCL库算法助手
  *
@@ -867,9 +867,9 @@ public:
 		std::string x_label = "x_label_v" + std::to_string(viewport);
 		std::string y_label = "y_label_v" + std::to_string(viewport);
 		std::string z_label = "z_label_v" + std::to_string(viewport);
-		// viewer->addText3D("x", pcl::PointXYZ(11, 0, 0), 1.0, 1.0, 0.0, 0.0, x_label, viewport);
-		// viewer->addText3D("y", pcl::PointXYZ(0, 11, 0), 1.0, 0.0, 1.0, 0.0, y_label, viewport);
-		// viewer->addText3D("z", pcl::PointXYZ(0, 0, 11), 1.0, 0.0, 0.0, 1.0, z_label, viewport);
+		viewer->addText3D("x", pcl::PointXYZ(11, 0, 0), 1.0, 1.0, 0.0, 0.0, x_label, viewport);
+		viewer->addText3D("y", pcl::PointXYZ(0, 11, 0), 1.0, 0.0, 1.0, 0.0, y_label, viewport);
+		viewer->addText3D("z", pcl::PointXYZ(0, 0, 11), 1.0, 0.0, 0.0, 1.0, z_label, viewport);
 		// 标题
 		viewer->addText("viewport " + std::to_string(viewport), 10, 10, std::to_string(viewport), viewport);
 	}

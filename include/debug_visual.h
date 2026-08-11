@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-07 10:10:49
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2025-09-12 15:56:34
+ * @LastEditTime : 2026-08-11 10:15:44
  * @FilePath     : /pcl_viewer/include/debug_visual.h
  * @Description  : 
  * 
@@ -41,6 +41,15 @@ namespace algo_lidar
     //
     pcl::PointCloud<pcl::PointXYZ>::Ptr mat2pcl_crop24(const PointMatrix &matrix);
     pcl::PointCloud<pcl::PointXYZ>::Ptr mat2pcl_crop96(const PointMatrix &matrix);
+
+    // 读取PCD文件并转换为PointMatrix
+    bool readPcdData(const std::string &filename, PointMatrix &mat);
+
+    // 从PCD点云构建PointMatrix（适用于标准XYZ点云）
+    bool buildMatFromPcd(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud, PointMatrix &mat, float scale_factor = 0.01f);
+
+    // 从带强度的PCD点云构建PointMatrix
+    bool buildMatFromPcdI(const pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud, PointMatrix &mat, float scale_factor = 0.01f);
 
     // 注册多点云选点回调事件 args由外部传入
     void registerMultiPtPicking(pcl::visualization::PCLVisualizer::Ptr &viewer,
