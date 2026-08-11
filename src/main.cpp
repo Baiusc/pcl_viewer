@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-07-21 15:28:57
+ * @LastEditTime : 2026-08-05 16:06:25
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -136,9 +136,10 @@ int testShowCloud()
 	Ground_I algo_gnd;
 	CalibReflect algo_reflect;
 	// 设置文件夹路径和文件后缀
-	std::string folder = "../../data/beta薄款雷达点云"; // 数据文件夹路径
-	// std::string folder = "../../data/固态雷达标定数据/20260708多点标定2%和90%靶板/2%+90%"; // 数据文件夹路径
+	// std::string folder = "../../data/固态雷达飞点分析/angle_0730_1"; // 数据文件夹路径
+	std::string folder = "../../data/固态雷达标定数据/20260708多点标定2%和90%靶板/2%+90%"; // 数据文件夹路径
 	// std::string folder = "../data/山东点云/20260618山东德州数据/反射率标定车间"; // 数据文件夹路径
+	// std::string folder = "../data/地面修复场景"; // 数据文件夹路径
 	std::string postfix = ".txt";	// 文件后缀，按需求替换
 	// std::string postfix = "";	// 文件后缀，按需求替换
 
@@ -146,13 +147,14 @@ int testShowCloud()
 	std::vector<float> list_sa;
 	std::vector<std::vector<float>> list_r2; // 固态雷达 距离偏差表
 	loadListFromFile(list_r, "../data/param/list_r.txt"); // 读取距离标定参数
+	
 	loadListFromFile(list_sa, "../data/param/list_sa.txt"); // 读取水平角标定参数
 	loadListFromFile(list_r2, "../data/param/map_single.csv"); // 读取固态雷达距离偏差表
 	std::map<uint16_t, std::map<float, std::array<float, 5>>> map_bin;
 	binary_storage::loadMapFromBinary("../data/map_device_0812_sum10_extend54.bin", map_bin);
 	algo_reflect._map = map_bin; 
 	// 读取点云
-	std::vector<std::string> filePaths = getFullFilePath(folder, postfix, true);
+	std::vector<std::string> filePaths = getFullFilePath(folder, postfix, false);
 	std::vector<PointMatrix> list_mat; //
 	std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> list_cloud; // 存储点云
 
@@ -162,34 +164,34 @@ int testShowCloud()
 
 		std::string filename = filePaths[i];
 		// 读取脉冲数据文件
-		PointMatrix mat_origin;
-		PointMatrix mat_calib;
+		PointMatrix mat_origin, mat_src, mat_calib;
 		// readPulseData(filename, mat_origin); // 全0为无效点
 		readLidarData(filename, mat_origin); // 全0为无效点
 		// auto mat_2 = buildMatByPulseIdx(mat_origin, 1); // 以第2回波重建点云
 		// auto mat_3 = buildMatByPulseIdx(mat_origin, 2); // 以第3回波重建点云
 
-		// // 地面反射点修复
-		// algo_gnd.doRepair(mat_origin);
-		// 距离和水平角标定
-		// mat_src = mat_origin;
-		// mat_calib = applyRsaOffset(mat_origin, list_r, list_sa); 
-		// mat_calib = applyROffset(mat_origin, list_r2);   
+		// // 地面反射点修复 
+		mat_src = mat_origin;
+		// algo_gnd.doRepair(mat_src);
+		// 距离和水平角联合标定
+		// mat_calib = applyRsaOffset(mat_src, list_r, list_sa); 
+		mat_calib = applyROffset(mat_origin, list_r2);   
 		// 反射率标定
-		// algo_reflect.calcCloudIntensity(mat_src);
+		// algo_reflect.calcCloudIntensity(mat_calib);
 		// m_intensity_src_name = "z"; // 设置点云强度着色来源为z
 		m_intensity_src_name = "peak"; // 设置点云强度着色来源为峰值
+		// m_intensity_src_name = "intensity"; // 设置点云强度着色来源为标定后的反射率
 		// filtTailPoints(mat_src); // 托尾点滤波
 		// m_intensity_src_name = "is_tail_pt"; // 设置点云强度着色来源为 托尾点标记
 		// showCloud(mat2xyzi(mat_src, true), "mat_src"); // 可视化
 		// list_mat.push_back(mat_src);
-		// list_cloud.clear();
-		// list_cloud.push_back(mat2pcl(mat_origin));
+		// list_cloud.clear();	
+		list_cloud.push_back(mat2pcl(mat_origin));
 		// list_cloud.push_back(mat2pcl(mat_2));
 		// list_cloud.push_back(mat2pcl(mat_3));
 		auto cloud_name = "cloud_" + std::to_string(i);
 		showCloud(mat2xyzi(mat_origin, true), cloud_name); // 可视化
-		// showCloud(mat2xyzi(mat_calib, true), cloud_name); // 可视化
+		showCloud(mat2xyzi(mat_calib, true), cloud_name); // 可视化
 		// showListCloudRGB(mat2pcl(mat_origin), list_cloud, cloud_name); // 可视化
 	}
 

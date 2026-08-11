@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:24:45
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-07-21 15:41:45
+ * @LastEditTime : 2026-07-30 13:26:33
  * @FilePath     : /pcl_viewer/src/pulse_data_processor.cpp
  * @Description  :
  *
@@ -87,8 +87,9 @@ namespace algo_lidar
 				else
 				{
 					int delta_dics = (slot_dics >= last_slot_dics) ? slot_dics - last_slot_dics : slot_dics + 65536 - last_slot_dics;
-					if (delta_dics > 100)
+					if (delta_dics > 30)
 					{
+						std::cout << "[WARN] delta_dics over limit! raw delta_dics = " << delta_dics << ", clamp to 13" << std::endl;
 						delta_dics = 13;
 					}
 					//  delta_dics = 13;
@@ -414,11 +415,13 @@ namespace algo_lidar
 			return false;
 		}
 
-		std::string first_line;
-		std::getline(infile, first_line);
+		std::string line1, line2, judge_line;
+		std::getline(infile, line1);
+		std::getline(infile, line2);
+		std::getline(infile, judge_line);
 		infile.close();
 
-		if (first_line.find("cols: 360  rows: 152") != std::string::npos)
+		if (judge_line.find("cols: 360  rows: 152") != std::string::npos)
 		{
 			return readSolidLidarData(filename, mat);
 		}
