@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:17:38
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-08-11 10:16:06
+ * @LastEditTime : 2026-08-19 16:56:14
  * @FilePath     : /pcl_viewer/src/debug_visual.cpp
  * @Description  :
  *
@@ -14,6 +14,7 @@
 #include <mutex>
 #include <deque>
 #include <ctime> // 添加头文件
+#include <sstream>
 namespace algo_lidar
 {
     namespace
@@ -662,6 +663,245 @@ namespace algo_lidar
         return false;
     }
 
+    // 读取 Frame*_ROI*.csv(离线重建的原始点云, 一像素一行含 row/col/角度/距离/双回波) → PointMatrix
+    bool readFrameCsv_Old(const std::string &filename, PointMatrix &mat)
+    {
+        std::ifstream infile(filename);
+        if (!infile.is_open())
+        {
+            std::cerr << "Failed to open Frame CSV: " << filename << std::endl;
+            return false;
+        }
+        std::string line;
+        std::getline(infile, line); // header
+
+        struct FramePt
+        {
+            int row, col, peak, valid;
+            float dist, theta, sa, refl;
+            int p0_cent, p0_fwhm, p0_conv;
+            int p1_cent, p1_fwhm, p1_conv;
+        };
+        std::vector<FramePt> pts;
+        int max_row = 0, max_col = 0;
+        while (std::getline(infile, line))
+        {
+            if (line.empty())
+                continue;
+            std::vector<std::string> t;
+            std::stringstream ss(line);
+            std::string tok;
+            while (std::getline(ss, tok, ','))
+                t.push_back(tok);
+            if (t.size() < 24)
+                continue;
+            FramePt p;
+            p.row = std::stoi(t[2]);
+            p.col = std::stoi(t[3]);
+            p.sa = std::stof(t[4]);
+            p.theta = std::stof(t[5]);
+            p.dist = std::stof(t[6]);
+            p.peak = std::stoi(t[7]);
+            p.refl = std::stof(t[8]);
+            p.valid = std::stoi(t[9]);
+            p.p0_cent = std::stoi(t[16]);
+            p.p0_fwhm = std::stoi(t[14]);
+            p.p0_conv = std::stoi(t[15]);
+            p.p1_cent = std::stoi(t[23]);
+            p.p1_fwhm = std::stoi(t[21]);
+            p.p1_conv = std::stoi(t[22]);
+            pts.push_back(p);
+            max_row = std::max(max_row, p.row);
+            max_col = std::max(max_col, p.col);
+        }
+        if (pts.empty())
+        {
+            std::cerr << "No valid data in " << filename << std::endl;
+            return false;
+        }
+        mat.assign(max_row + 1, std::vector<PointData>(max_col + 1));
+        int valid_count = 0;
+        for (auto &p : pts)
+        {
+            PointData pd;
+            pd.pixel_idx = static_cast<uint16_t>(p.row);
+            pd.slot_idx = static_cast<uint16_t>(p.col);
+            pd.r = p.dist;
+            pd.slot_ang = p.sa;
+            pd.omega_rad = p.sa * M_PI / 180.0f;
+            pd.theta = p.theta;
+            pd.theta_rad = p.theta * M_PI / 180.0f;
+            pd.reflect = p.refl;
+            pd.peak = static_cast<uint16_t>(std::min(p.peak, 65535));
+            pd.intensity = static_cast<uint8_t>(std::min(255.0f, std::max(0.0f, p.refl * 255.0f)));
+            pd.is_valid = (p.valid != 0) && (p.dist > 0.0f) && (p.dist < 1000.0f);
+            if (pd.is_valid)
+            {
+                pd.x = p.dist * std::cos(pd.theta_rad) * std::cos(pd.omega_rad);
+                pd.y = p.dist * std::cos(pd.theta_rad) * std::sin(pd.omega_rad);
+                pd.z = p.dist * std::sin(pd.theta_rad);
+                valid_count++;
+            }
+            // list_pulse: 双回波(dist_cent cm×256→tof s, fwhm bin, conv峰高)
+            const int INVALID = 0xFFFFFF;
+            if (p.p0_cent > 0 && p.p0_cent < INVALID)
+                pd.list_pulse.emplace_back((p.p0_cent / 25600.0f) * 2.0f / 3.0e8f,
+                                           p.p0_fwhm / 256.0f, static_cast<float>(p.p0_conv));
+            if (p.p1_cent > 0 && p.p1_cent < INVALID)
+                pd.list_pulse.emplace_back((p.p1_cent / 25600.0f) * 2.0f / 3.0e8f,
+                                           p.p1_fwhm / 256.0f, static_cast<float>(p.p1_conv));
+            mat[p.row][p.col] = pd;
+        }
+        std::cout << "Frame CSV: " << pts.size() << " 行, 矩阵 " << max_row + 1 << "x" << max_col + 1
+                  << ", 有效点 " << valid_count << std::endl;
+        return true;
+    }
+
+    bool readFrameCsv(const std::string &filename, PointMatrix &mat,
+                      const std::string &dist_method) // dist_method 不再使用，保留以兼容接口
+    {
+        std::ifstream infile(filename);
+        if (!infile.is_open())
+        {
+            std::cerr << "Failed to open Frame CSV: " << filename << std::endl;
+            return false;
+        }
+
+        std::string line;
+        std::getline(infile, line); // 跳过表头
+
+        struct FramePt
+        {
+            int row, col, peak, valid, select_idx;
+            float theta, sa, refl, dist;
+            int p0_dist_rp_raw, p0_fwhm, p0_conv, p0_cent;
+            int p1_dist_rp_raw, p1_fwhm, p1_conv, p1_cent;
+        };
+
+        std::vector<FramePt> pts;
+        int max_row = 0, max_col = 0;
+
+        while (std::getline(infile, line))
+        {
+            if (line.empty())
+                continue;
+
+            std::vector<std::string> t;
+            std::stringstream ss(line);
+            std::string tok;
+            while (std::getline(ss, tok, ','))
+                t.push_back(tok);
+
+            // 至少需要 32 个字段（包含 echo_bins）
+            if (t.size() < 32)
+                continue;
+
+            FramePt p;
+            // 基础字段
+            p.row = std::stoi(t[2]);         // 行row
+            p.col = std::stoi(t[3]);         // 列col
+            p.sa = std::stof(t[4]);          // 水平角deg
+            p.theta = std::stof(t[5]);       // 俯仰角deg
+            p.dist = std::stof(t[6]);        // 距离m（直接使用CSV值）
+            p.peak = std::stoi(t[7]);        // 峰高
+            p.refl = std::stof(t[8]);        // 反射率
+            p.valid = std::stoi(t[9]);       // 有效
+            p.select_idx = std::stoi(t[10]); // 最优回波（0/1/-1）
+
+            // p0 原始字段
+            p.p0_dist_rp_raw = std::stoi(t[14]); // p0_dist_rp_raw
+            p.p0_fwhm = std::stoi(t[16]);        // p0_fwhm_raw
+            p.p0_conv = std::stoi(t[18]);        // p0_conv_intensity
+            p.p0_cent = std::stoi(t[19]);        // p0_dist_cent_raw
+
+            // p1 原始字段
+            p.p1_dist_rp_raw = std::stoi(t[24]); // p1_dist_rp_raw
+            p.p1_fwhm = std::stoi(t[26]);        // p1_fwhm_raw
+            p.p1_conv = std::stoi(t[28]);        // p1_conv_intensity
+            p.p1_cent = std::stoi(t[29]);        // p1_dist_cent_raw
+
+            pts.push_back(p);
+            max_row = std::max(max_row, p.row);
+            max_col = std::max(max_col, p.col);
+        }
+
+        if (pts.empty())
+        {
+            std::cerr << "No valid data in " << filename << std::endl;
+            return false;
+        }
+
+        mat.assign(max_row + 1, std::vector<PointData>(max_col + 1));
+        int valid_count = 0;
+        const int INVALID = 0xFFFFFF;
+        const float DIST_SCALE = 25600.0f; // cm×256 → m
+
+        for (const auto &p : pts)
+        {
+            PointData pd;
+            pd.pixel_idx = static_cast<uint16_t>(p.row);
+            pd.slot_idx = static_cast<uint16_t>(p.col);
+            pd.slot_ang = p.sa;
+            pd.omega_rad = p.sa * M_PI / 180.0f;
+            pd.theta = p.theta;
+            pd.theta_rad = p.theta * M_PI / 180.0f;
+            pd.reflect = p.refl;
+            // 根据 p.select_idx 选择 conv_intensity 作为 peak
+            if (p.select_idx == 1)
+                pd.peak = p.p1_conv;
+            else if (p.select_idx == 0)
+                pd.peak = p.p0_conv;
+            else
+                pd.peak = 0;
+            pd.intensity = p.peak; // 0-255
+            // ----- 直接使用 CSV 中的距离和有效标志 -----
+            float dist = p.dist;
+            bool is_valid = (p.valid != 0) && (dist > 0.0f) && (dist < 1000.0f);
+            pd.r = dist;
+            pd.is_valid = is_valid;
+
+            if (pd.is_valid)
+            {
+                pd.x = dist * std::cos(pd.theta_rad) * std::cos(pd.omega_rad);
+                pd.y = dist * std::cos(pd.theta_rad) * std::sin(pd.omega_rad);
+                pd.z = dist * std::sin(pd.theta_rad);
+                valid_count++;
+            }
+
+            // ----- 赋值 select_idx -----
+            // 将 -1 映射为 0（表示未选择/无效），0/1 保持不变
+            pd.select_idx = p.select_idx ; 
+
+            // ========== 修改点：用 dist_rp_raw 计算 tof，单位为皮秒 ==========
+            const int INVALID = 0xFFFFFF;
+            const float DIST_SCALE = 25600.0f;
+            if (p.p0_dist_rp_raw > 0 && p.p0_dist_rp_raw < INVALID)
+            {
+                float dist_m = p.p0_dist_rp_raw / DIST_SCALE;
+                float tof_ps = dist_m * 2.0f / 3.0e8f * 1e12f;
+                pd.list_pulse.emplace_back(tof_ps, p.p0_fwhm / 256.f, static_cast<float>(p.p0_conv));
+                // 若 p.p0_fwhm / 256.f 小于2.0，则标记为 is_tail_pt
+                if (p.p0_fwhm / 256.f < 2.0f)
+                {
+                    pd.is_tail_pt = true;
+                }
+            }
+            if (p.p1_dist_rp_raw > 0 && p.p1_dist_rp_raw < INVALID)
+            {
+                float dist_m = p.p1_dist_rp_raw / DIST_SCALE;
+                float tof_ps = dist_m * 2.0f / 3.0e8f * 1e12f;
+                pd.list_pulse.emplace_back(tof_ps, p.p1_fwhm / 256.f, static_cast<float>(p.p1_conv));
+            }
+
+            mat[p.row][p.col] = pd;
+        }
+
+        std::cout << "Frame CSV: " << pts.size() << " 行, 矩阵 "
+                  << max_row + 1 << "x" << max_col + 1
+                  << ", 有效点 " << valid_count << std::endl;
+        return true;
+    }
+    
     // 显示单个点云  强度着色
     void showCloud(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud, std::string viewer_name)
     {

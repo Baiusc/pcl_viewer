@@ -2,7 +2,7 @@
  * @Author       : baizs zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-21 09:44:32
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-08-11 10:10:20
+ * @LastEditTime : 2026-08-20 09:21:15
  * @FilePath     : /pcl_viewer/include/PclHelperB.h
  * @Description  : PCL库算法助手
  *
@@ -946,7 +946,7 @@ public:
 	// 添加点云 黑色
 	void addCloud(pcl::visualization::PCLVisualizer::Ptr &viewer, const pcl::PointCloud<PointT>::Ptr &cloud, std::string id = "cloud_src", int viewport = 1)
 	{
-		pcl::visualization::PointCloudColorHandlerCustom<PointT> color(cloud, 0, 0, 0);
+		pcl::visualization::PointCloudColorHandlerCustom<PointT> color(cloud, 37, 37, 37);
 		viewer->addPointCloud(cloud, color, id, viewport);
 		viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, id);
 	}
@@ -1033,19 +1033,23 @@ public:
 			min_intensity = std::min(min_intensity, point.intensity);
 			max_intensity = std::max(max_intensity, point.intensity);
 		}
-		float max_peak = 1699.f;
-		max_peak = max_intensity > max_peak ? 4095.f : max_peak; // DEBUG可视化 自定义强度区间
-		// min_intensity = 0; // DEBUG可视化 自定义强度区间
-		max_intensity > max_peak ? max_intensity = max_peak : max_intensity = max_intensity; // DEBUG可视化 自定义强度区间
+		// float max_peak = 1699.f;
+		// max_peak = max_intensity > max_peak ? 262143.f : max_peak; // DEBUG可视化 自定义强度区间
+		min_intensity = 0; // DEBUG可视化 自定义强度区间
+		// max_intensity = 1638; // DEBUG可视化 自定义强度区间
+		// max_intensity > max_peak ? max_intensity = max_peak : max_intensity = max_intensity; // DEBUG可视化 自定义强度区间
 
 		// 映射强度值到颜色
 		for (size_t i = 0; i < cloud->points.size(); ++i)
 		{
 			const auto &point = cloud->points[i];
-			float normalized_intensity = (point.intensity - min_intensity) / (max_intensity - min_intensity);
+			// float normalized_intensity = (point.intensity - min_intensity) / (max_intensity - min_intensity);
+			float raw_norm = (point.intensity - min_intensity) / (max_intensity - min_intensity);
+			// 限制 [0.0, 1.0]，边界
+			float normalized_intensity = std::clamp(raw_norm, 0.0f, 1.0f);
 
 			// HSV 映射：H 从 0 (红色) -> 240 (蓝色)，S 和 V 固定为 1
-			float h = (1.f - normalized_intensity) * 200.0f / 360.0f; // 反向映射：强度越大，H 越接近 0 ，为红色
+			float h = (10.0f + (1.f - normalized_intensity) * 200.0f) / 360.0f; // 反向映射：强度越大，H 越接近 0 ，为红色
 			float s = 0.8f;
 			float v = 0.8f;
 

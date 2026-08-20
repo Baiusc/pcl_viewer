@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:24:45
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-07-30 13:26:33
+ * @LastEditTime : 2026-08-20 09:55:03
  * @FilePath     : /pcl_viewer/src/pulse_data_processor.cpp
  * @Description  :
  *
@@ -122,7 +122,7 @@ namespace algo_lidar
 				std::vector<double> tofs = {std::stod(tokens[0 + 2]) / 1000, std::stod(tokens[3 + 2]) / 1000, std::stod(tokens[6 + 2]) / 1000};
 				std::vector<double> widths = {std::stod(tokens[1 + 2]) / 1000, std::stod(tokens[4 + 2]) / 1000, std::stod(tokens[7 + 2]) / 1000};
 
-				int select_index = -1;
+				uint8_t select_index = 255; // 初始值 255 
 				double max_peak = 1.0;
 
 				for (int i = 0; i < 3; ++i)
@@ -145,7 +145,7 @@ namespace algo_lidar
 					}
 				}
 
-				if (select_index == -1)
+				if (select_index == 255) // 若没有有效的回波数据，则标记为无效点 
 				{
 					mat[pixel_cnt - 1][slot_index].slot_ang = slot_ang; // 20250320 添加无效点的slot_ang
 					continue;
@@ -173,8 +173,8 @@ namespace algo_lidar
 						static_cast<float>(peaks[i]));
 				}
 				// 按 peak 从大到小排序
-				std::sort(list_pulse.begin(), list_pulse.end(), [](const Pulse &a, const Pulse &b)
-						  { return a.peak > b.peak; });
+				// std::sort(list_pulse.begin(), list_pulse.end(), [](const Pulse &a, const Pulse &b)
+				// 		  { return a.peak > b.peak; });
 
 				PointData point = {
 					static_cast<uint16_t>(pixel_idx),						// 显式转换为 uint16_t
@@ -192,7 +192,8 @@ namespace algo_lidar
 					r * std::sin(theta_rad),
 					true,
 					list_pulse,
-					0};
+					select_index,
+					false};
 
 				mat[pixel_idx][slot_index] = point;
 			}

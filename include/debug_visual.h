@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-07 10:10:49
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-08-11 10:15:44
+ * @LastEditTime : 2026-08-14 16:06:38
  * @FilePath     : /pcl_viewer/include/debug_visual.h
  * @Description  : 
  * 
@@ -44,6 +44,9 @@ namespace algo_lidar
 
     // 读取PCD文件并转换为PointMatrix
     bool readPcdData(const std::string &filename, PointMatrix &mat);
+
+    // 读取 Frame*_ROI*.csv(离线重建的原始点云, 一像素一行含 row/col/角度/距离/双回波) → PointMatrix
+    bool readFrameCsv(const std::string &filename, PointMatrix &mat, const std::string &dist_method = "smart");
 
     // 从PCD点云构建PointMatrix（适用于标准XYZ点云）
     bool buildMatFromPcd(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud, PointMatrix &mat, float scale_factor = 0.01f);
