@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-08-20 11:24:56
+ * @LastEditTime : 2026-08-27 11:16:07
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -187,14 +187,14 @@ int testShowCloud()
 				// readPcdData(filename, mat_origin);     // 读pcd点云
 		}
 		
-		mat_p0 = buildMatByPulseIdx(mat_origin, 0); // 以第1回波重建点云
-		mat_p1 = buildMatByPulseIdx(mat_origin, 1); // 以第2回波重建点云
+		// mat_p0 = buildMatByPulseIdx(mat_origin, 0); // 以第1回波重建点云
+		// mat_p1 = buildMatByPulseIdx(mat_origin, 1); // 以第2回波重建点云
 
 		// // 地面反射点修复 
-		mat_src = mat_origin;
-		algo_gnd.doRepair(mat_src);
+		// mat_src = mat_origin;
+		// algo_gnd.doRepair(mat_src);
 		// 距离和水平角联合标定
-		mat_calib = applyRsaOffset(mat_src, list_r, list_sa); 
+		// mat_calib = applyRsaOffset(mat_src, list_r, list_sa); 
 		// mat_calib = applyROffset(mat_origin, list_r2);   
 		// 反射率标定
 		// algo_reflect.calcCloudIntensity(mat_calib);
@@ -210,9 +210,9 @@ int testShowCloud()
 		// list_cloud.push_back(mat2pcl(mat_p0));
 		// list_cloud.push_back(mat2pcl(mat_p1));
 		auto cloud_name = "cloud_" + std::to_string(i);
-		showCloud(mat2xyzi(mat_origin, true), cloud_name + "_origin"); // 可视化
-		// showCloud(mat2xyzi(mat_calib, true), cloud_name + "_calib"); // 可视化
-		showCloud2in1port(mat2pcl(mat_p0), mat2pcl(mat_p1), cloud_name + "_red:echo_0 ; blue:echo_1"); // 可视化
+		// showCloud(mat2xyzi(mat_origin, true), cloud_name + "_origin"); // 可视化
+		showCloud(mat2xyzi(mat_p1, true), cloud_name + "_calib"); // 可视化
+		// showCloud2in1port(mat2pcl(mat_p0), mat2pcl(mat_p1, true), cloud_name + "_red:echo_0 ; blue:echo_1"); // 可视化
 		// showListCloudRGB(mat2pcl(mat_origin), list_cloud, cloud_name); // 可视化
 	}
 

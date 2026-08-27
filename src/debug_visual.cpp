@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:17:38
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-08-19 16:56:14
+ * @LastEditTime : 2026-08-27 11:22:12
  * @FilePath     : /pcl_viewer/src/debug_visual.cpp
  * @Description  :
  *
@@ -664,7 +664,7 @@ namespace algo_lidar
     }
 
     // 读取 Frame*_ROI*.csv(离线重建的原始点云, 一像素一行含 row/col/角度/距离/双回波) → PointMatrix
-    bool readFrameCsv_Old(const std::string &filename, PointMatrix &mat)
+    bool readFrameCsv_Old1(const std::string &filename, PointMatrix &mat)
     {
         std::ifstream infile(filename);
         if (!infile.is_open())
@@ -757,8 +757,8 @@ namespace algo_lidar
         return true;
     }
 
-    bool readFrameCsv(const std::string &filename, PointMatrix &mat,
-                      const std::string &dist_method) // dist_method 不再使用，保留以兼容接口
+    bool readFrameCsv_Old2(const std::string &filename, PointMatrix &mat,
+                           const std::string &dist_method) // dist_method 不再使用，保留以兼容接口
     {
         std::ifstream infile(filename);
         if (!infile.is_open())
@@ -870,7 +870,7 @@ namespace algo_lidar
 
             // ----- 赋值 select_idx -----
             // 将 -1 映射为 0（表示未选择/无效），0/1 保持不变
-            pd.select_idx = p.select_idx ; 
+            pd.select_idx = p.select_idx;
 
             // ========== 修改点：用 dist_rp_raw 计算 tof，单位为皮秒 ==========
             const int INVALID = 0xFFFFFF;
@@ -901,7 +901,196 @@ namespace algo_lidar
                   << ", 有效点 " << valid_count << std::endl;
         return true;
     }
-    
+
+    bool readFrameCsv(const std::string &filename, PointMatrix &mat,
+                      const std::string &dist_method) // dist_method 保留以兼容接口
+    {
+        (void)dist_method;
+
+        std::ifstream infile(filename);
+        if (!infile.is_open())
+        {
+            std::cerr << "Failed to open Frame CSV: " << filename << std::endl;
+            return false;
+        }
+
+        std::string line;
+        std::getline(infile, line); // 跳过表头
+
+        struct FramePt
+        {
+            int row = 0;
+            int col = 0;
+            int peak = 0;
+            int valid = 0;
+            int select_idx = -1;
+
+            uint32_t timestamp = 0; // CSV 新增的“时间戳”列
+
+            float theta = 0.0f;
+            float sa = 0.0f;
+            float refl = 0.0f;
+            float dist = 0.0f;
+
+            int p0_dist_rp_raw = 0;
+            int p0_fwhm = 0;
+            int p0_conv = 0;
+            int p0_cent = 0;
+
+            int p1_dist_rp_raw = 0;
+            int p1_fwhm = 0;
+            int p1_conv = 0;
+            int p1_cent = 0;
+        };
+
+        std::vector<FramePt> pts;
+        int max_row = 0;
+        int max_col = 0;
+
+        while (std::getline(infile, line))
+        {
+            if (line.empty())
+                continue;
+
+            std::vector<std::string> t;
+            std::stringstream ss(line);
+            std::string tok;
+
+            while (std::getline(ss, tok, ','))
+                t.push_back(tok);
+
+            // 新 CSV 共 33 列：
+            // frame, roi, 时间戳, row, col, ..., echo_bins
+            if (t.size() < 33)
+                continue;
+
+            FramePt p;
+
+            // 基础字段
+            p.timestamp = t[2].empty()
+                              ? 0U
+                              : static_cast<uint32_t>(std::stoul(t[2]));
+
+            p.row = std::stoi(t[3]);
+            p.col = std::stoi(t[4]);
+            p.sa = std::stof(t[5]);
+            p.theta = std::stof(t[6]);
+            p.dist = std::stof(t[7]);
+            p.peak = std::stoi(t[8]);
+            p.refl = std::stof(t[9]);
+            p.valid = std::stoi(t[10]);
+            p.select_idx = std::stoi(t[11]);
+
+            // p0 字段
+            p.p0_dist_rp_raw = std::stoi(t[15]);
+            p.p0_fwhm = std::stoi(t[17]);
+            p.p0_conv = std::stoi(t[19]);
+            p.p0_cent = std::stoi(t[20]);
+
+            // p1 字段
+            p.p1_dist_rp_raw = std::stoi(t[25]);
+            p.p1_fwhm = std::stoi(t[27]);
+            p.p1_conv = std::stoi(t[29]);
+            p.p1_cent = std::stoi(t[30]);
+
+            pts.push_back(p);
+            max_row = std::max(max_row, p.row);
+            max_col = std::max(max_col, p.col);
+        }
+
+        if (pts.empty())
+        {
+            std::cerr << "No valid data in " << filename << std::endl;
+            return false;
+        }
+
+        mat.assign(max_row + 1, std::vector<PointData>(max_col + 1));
+
+        constexpr int INVALID = 0xFFFFFF;
+        constexpr float DIST_SCALE = 25600.0f;
+        constexpr float LIGHT_SPEED = 3.0e8f;
+        constexpr float PI = 3.14159265358979323846f;
+
+        int valid_count = 0;
+
+        for (const auto &p : pts)
+        {
+            PointData pd{};
+
+            pd.pixel_idx = static_cast<uint16_t>(p.row);
+            pd.slot_idx = static_cast<uint16_t>(p.col);
+
+            pd.slot_ang = p.sa;
+            pd.omega_rad = p.sa * PI / 180.0f;
+
+            pd.theta = p.theta;
+            pd.theta_rad = p.theta * PI / 180.0f;
+
+            pd.reflect = p.refl;
+            pd.intensity = static_cast<uint8_t>(p.peak);
+
+            // PointData::timestamp 已改为 uint32_t，无精度损失。
+            pd.timestamp = p.timestamp;
+
+            if (p.select_idx == 1)
+                pd.peak = static_cast<uint16_t>(p.p1_conv);
+            else if (p.select_idx == 0)
+                pd.peak = static_cast<uint16_t>(p.p0_conv);
+            else
+                pd.peak = 0;
+
+            const float dist = p.dist;
+            pd.r = dist;
+            pd.is_valid = (p.valid != 0) && (dist > 0.0f) && (dist < 1000.0f);
+
+            if (pd.is_valid)
+            {
+                pd.x = dist * std::cos(pd.theta_rad) * std::cos(pd.omega_rad);
+                pd.y = dist * std::cos(pd.theta_rad) * std::sin(pd.omega_rad);
+                pd.z = dist * std::sin(pd.theta_rad);
+                ++valid_count;
+            }
+
+            // -1 表示无有效回波，映射为 0，避免转 uint8_t 后成为 255。
+            pd.select_idx = (p.select_idx >= 0)
+                                ? static_cast<uint8_t>(p.select_idx)
+                                : 0;
+
+            if (p.p0_dist_rp_raw > 0 && p.p0_dist_rp_raw < INVALID)
+            {
+                const float dist_m = p.p0_dist_rp_raw / DIST_SCALE;
+                const float tof_ps = dist_m * 2.0f / LIGHT_SPEED * 1e12f;
+
+                pd.list_pulse.emplace_back(
+                    tof_ps,
+                    p.p0_fwhm / 256.0f,
+                    static_cast<float>(p.p0_conv));
+
+                if (p.p0_fwhm / 256.0f < 2.0f)
+                    pd.is_tail_pt = true;
+            }
+
+            if (p.p1_dist_rp_raw > 0 && p.p1_dist_rp_raw < INVALID)
+            {
+                const float dist_m = p.p1_dist_rp_raw / DIST_SCALE;
+                const float tof_ps = dist_m * 2.0f / LIGHT_SPEED * 1e12f;
+
+                pd.list_pulse.emplace_back(
+                    tof_ps,
+                    p.p1_fwhm / 256.0f,
+                    static_cast<float>(p.p1_conv));
+            }
+
+            mat[p.row][p.col] = std::move(pd);
+        }
+
+        std::cout << "Frame CSV: " << pts.size()
+                  << " 行, 矩阵 " << max_row + 1 << "x" << max_col + 1
+                  << ", 有效点 " << valid_count << std::endl;
+
+        return true;
+    }
+
     // 显示单个点云  强度着色
     void showCloud(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud, std::string viewer_name)
     {

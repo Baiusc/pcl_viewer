@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-02-17 10:07:58
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-06-02 11:52:42
+ * @LastEditTime : 2026-08-27 11:20:31
  * @FilePath     : /pcl_viewer/include/point_type.h
  * @Description  : 
  * 
@@ -62,6 +62,7 @@ namespace algo_lidar
         float theta;       // 俯仰角（角度）
         float slot_ang;    // 水平角（角度）
         float reflect; // 反射率 0~1.0
+        uint32_t timestamp; // 时间戳
         uint8_t intensity; // 强度 0~255
         float x;
         float y;

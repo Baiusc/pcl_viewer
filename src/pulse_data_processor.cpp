@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:24:45
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-08-20 09:55:03
+ * @LastEditTime : 2026-08-27 11:27:48
  * @FilePath     : /pcl_viewer/src/pulse_data_processor.cpp
  * @Description  :
  *
@@ -176,26 +176,28 @@ namespace algo_lidar
 				// std::sort(list_pulse.begin(), list_pulse.end(), [](const Pulse &a, const Pulse &b)
 				// 		  { return a.peak > b.peak; });
 
-				PointData point = {
-					static_cast<uint16_t>(pixel_idx),						// 显式转换为 uint16_t
-					static_cast<uint16_t>(slot_index),						// 显式转换为 uint16_t
-					static_cast<uint16_t>(std::round(peaks[select_index])), // 显式转换为 uint16_t，并四舍五入
-					r,
-					theta_rad,
-					slot_ang_rad,
-					theta,
-					slot_ang,
-					reflect,
-					intensity_uint8,
-					r * std::cos(theta_rad) * std::cos(slot_ang_rad),
-					r * std::cos(theta_rad) * std::sin(slot_ang_rad),
-					r * std::sin(theta_rad),
-					true,
-					list_pulse,
-					select_index,
-					false};
+                PointData pd{};
 
-				mat[pixel_idx][slot_index] = point;
+                pd.pixel_idx = static_cast<uint16_t>(pixel_idx);
+                pd.slot_idx = static_cast<uint16_t>(slot_index);
+                pd.peak = static_cast<uint16_t>(std::round(peaks[select_index]));
+                pd.r = r;
+                pd.theta_rad = theta_rad;
+                pd.omega_rad = slot_ang_rad;
+                pd.theta = theta;
+                pd.slot_ang = slot_ang;
+                pd.reflect = reflect;
+                pd.timestamp = 0; //TODO: 这里没有时间戳信息，暂时设置为0
+                pd.intensity = intensity_uint8;
+                pd.x = r * std::cos(theta_rad) * std::cos(slot_ang_rad);
+                pd.y = r * std::cos(theta_rad) * std::sin(slot_ang_rad);
+                pd.z = r * std::sin(theta_rad);
+                pd.is_valid = true;
+                pd.list_pulse = std::move(list_pulse);
+                pd.select_idx = select_index;
+                pd.is_tail_pt = false;
+
+                mat[pixel_idx][slot_index] = std::move(pd);
 			}
 		}
 
