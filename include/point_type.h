@@ -10,6 +10,7 @@
  */
 
 #pragma once
+#include <array>
 #include <vector>
 #include <cmath>
 #include <cstdint>
@@ -74,6 +75,43 @@ namespace algo_lidar
     };
 
     using PointMatrix = std::vector<std::vector<PointData>>;
+
+    // 6532 标定程序输出的 range6532_distance_calibration.csv 对应的参数表，单位统一为 m。
+    struct Range6532CalibrationTable
+    {
+        std::array<float, 4> intra_row_offset_m{};
+        std::array<float, 8> intra_col_offset_m{};
+        std::array<std::array<float, 4>, 6> inter_block_offset_m{};
+        std::array<float, 4> intra_row_gain{};
+        std::array<float, 8> intra_col_gain{};
+        std::array<std::array<float, 4>, 6> inter_block_gain{};
+        std::array<bool, 4> intra_row_supported{};
+        std::array<bool, 8> intra_col_supported{};
+        std::array<std::array<bool, 4>, 6> inter_block_supported{};
+        std::array<bool, 4> intra_row_gain_supported{};
+        std::array<bool, 8> intra_col_gain_supported{};
+        std::array<std::array<bool, 4>, 6> inter_block_gain_supported{};
+        float global_offset_m = 0.0f;
+        float global_gain = 0.0f;
+        bool global_supported = false;
+        bool global_gain_supported = false;
+    };
+
+    struct Range6532CalibrationApplyOptions
+    {
+        bool apply_global_offset = false;      // 全局项在单距离拟合中可能不可辨识，默认不使用。
+        bool apply_inter_block_offset = false;
+        bool apply_gain = false;
+    };
+
+    /// @brief 读取 6532 标定程序输出的 range6532_distance_calibration.csv。
+    bool loadRange6532CalibrationCsv(const std::string &filename,
+                                      Range6532CalibrationTable &table);
+
+    /// @brief 原地应用 6532 的块内/块间距离标定，并同步更新 r、xyz 和选中回波 tof。
+    void applyRange6532Calibration(PointMatrix &mat,
+                                   const Range6532CalibrationTable &table,
+                                   const Range6532CalibrationApplyOptions &options = {});
 
     // 矩阵转置
     PointMatrix transMat(const PointMatrix& mat_src);

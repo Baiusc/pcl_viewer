@@ -16,6 +16,7 @@
 #include <fstream>
 #include <cstdint>
 #include <algorithm>
+#include <sstream>
 #include <json.hpp>
 
 #ifndef M_PI
@@ -24,6 +25,182 @@
 
 namespace algo_lidar
 {
+    namespace
+    {
+        constexpr float kRange6532RawPerMetre = 25600.0f;
+        constexpr float kLightSpeedMetresPerSecond = 3.0e8f;
+
+        std::string trim(const std::string &text)
+        {
+            const auto begin = text.find_first_not_of(" \t\r\n");
+            if (begin == std::string::npos)
+                return {};
+            const auto end = text.find_last_not_of(" \t\r\n");
+            return text.substr(begin, end - begin + 1);
+        }
+
+        void updateRangePoint(PointData &point)
+        {
+            point.x = point.r * std::cos(point.theta_rad) * std::cos(point.omega_rad);
+            point.y = point.r * std::cos(point.theta_rad) * std::sin(point.omega_rad);
+            point.z = point.r * std::sin(point.theta_rad);
+
+            if (point.select_idx < point.list_pulse.size())
+                point.list_pulse[point.select_idx].tof =
+                    point.r * 2.0f / kLightSpeedMetresPerSecond * 1.0e12f;
+        }
+    } // namespace
+
+    bool loadRange6532CalibrationCsv(const std::string &filename,
+                                      Range6532CalibrationTable &table)
+    {
+        table = {};
+        std::ifstream input(filename);
+        if (!input.is_open())
+        {
+            std::cerr << "[6532标定] 无法打开标定表: " << filename << std::endl;
+            return false;
+        }
+
+        std::string line;
+        std::getline(input, line); // 跳过表头：family,index0,index1,...
+        bool has_supported_item = false;
+        while (std::getline(input, line))
+        {
+            std::vector<std::string> fields;
+            std::stringstream stream(line);
+            std::string field;
+            while (std::getline(stream, field, ','))
+                fields.push_back(trim(field));
+            if (fields.size() < 7 || fields[3] != "1")
+                continue;
+
+            try
+            {
+                const int index0 = std::stoi(fields[1]);
+                const int index1 = std::stoi(fields[2]);
+                const float gain = fields[6].empty() ? 0.0f : std::stof(fields[6]);
+
+                if (fields[0] == "global" && !fields[4].empty())
+                {
+                    table.global_offset_m = std::stof(fields[4]) / kRange6532RawPerMetre;
+                    table.global_gain = gain;
+                    table.global_supported = true;
+                }
+                else if (fields[0] == "global_gain")
+                {
+                    table.global_gain = gain;
+                    table.global_gain_supported = true;
+                }
+                else if (fields[0] == "intra_row_offset" && !fields[4].empty() && index1 >= 0 && index1 < 4)
+                {
+                    table.intra_row_offset_m[index1] = std::stof(fields[4]) / kRange6532RawPerMetre;
+                    table.intra_row_supported[index1] = true;
+                }
+                else if (fields[0] == "intra_row_gain" && index1 >= 0 && index1 < 4)
+                {
+                    table.intra_row_gain[index1] = gain;
+                    table.intra_row_gain_supported[index1] = true;
+                }
+                else if (fields[0] == "intra_col_offset" && !fields[4].empty() && index1 >= 0 && index1 < 8)
+                {
+                    table.intra_col_offset_m[index1] = std::stof(fields[4]) / kRange6532RawPerMetre;
+                    table.intra_col_supported[index1] = true;
+                }
+                else if (fields[0] == "intra_col_gain" && index1 >= 0 && index1 < 8)
+                {
+                    table.intra_col_gain[index1] = gain;
+                    table.intra_col_gain_supported[index1] = true;
+                }
+                else if (fields[0] == "inter_block_offset" && !fields[4].empty() &&
+                         index0 >= 0 && index0 < 6 && index1 >= 0 && index1 < 4)
+                {
+                    table.inter_block_offset_m[index0][index1] = std::stof(fields[4]) / kRange6532RawPerMetre;
+                    table.inter_block_supported[index0][index1] = true;
+                }
+                else if (fields[0] == "inter_block_gain" &&
+                         index0 >= 0 && index0 < 6 && index1 >= 0 && index1 < 4)
+                {
+                    table.inter_block_gain[index0][index1] = gain;
+                    table.inter_block_gain_supported[index0][index1] = true;
+                }
+                else
+                {
+                    continue;
+                }
+                has_supported_item = true;
+            }
+            catch (const std::exception &)
+            {
+                std::cerr << "[6532标定] 忽略格式错误行: " << line << std::endl;
+            }
+        }
+
+        return has_supported_item;
+    }
+
+    void applyRange6532Calibration(PointMatrix &mat,
+                                   const Range6532CalibrationTable &table,
+                                   const Range6532CalibrationApplyOptions &options)
+    {
+        for (auto &row : mat)
+        {
+            for (auto &point : row)
+            {
+                if (!point.is_valid)
+                    continue;
+
+                const int u = point.pixel_idx % 4;
+                const int v = point.slot_idx % 8;
+                float offset_m = 0.0f;
+                float gain = 0.0f;
+                if (table.intra_row_supported[u])
+                {
+                    offset_m += table.intra_row_offset_m[u];
+                }
+                if (table.intra_row_gain_supported[u])
+                {
+                    gain += table.intra_row_gain[u];
+                }
+                if (table.intra_col_supported[v])
+                {
+                    offset_m += table.intra_col_offset_m[v];
+                }
+                if (table.intra_col_gain_supported[v])
+                {
+                    gain += table.intra_col_gain[v];
+                }
+
+                if (options.apply_inter_block_offset)
+                {
+                    const int macro_block = point.slot_idx / 32;
+                    const int firing_phase = (point.slot_idx / 8) % 4;
+                    if (macro_block < 6)
+                    {
+                        if (table.inter_block_supported[macro_block][firing_phase])
+                            offset_m += table.inter_block_offset_m[macro_block][firing_phase];
+                        if (table.inter_block_gain_supported[macro_block][firing_phase])
+                            gain += table.inter_block_gain[macro_block][firing_phase];
+                    }
+                }
+                if (options.apply_global_offset && table.global_supported)
+                {
+                    offset_m += table.global_offset_m;
+                }
+                if (options.apply_global_offset && table.global_gain_supported)
+                {
+                    gain += table.global_gain;
+                }
+
+                // 标定模型为 q_measured = (1 + gain) * q_true + offset。
+                point.r -= offset_m;
+                if (options.apply_gain && std::abs(1.0f + gain) > 1e-6f)
+                    point.r /= (1.0f + gain);
+                updateRangePoint(point);
+            }
+        }
+    }
+
     void to_json(nlohmann::json &j, const PointData &p)
     {
         j = nlohmann::json{

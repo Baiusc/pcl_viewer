@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-08-31 14:43:34
+ * @LastEditTime : 2026-08-31 16:54:06
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -144,6 +144,11 @@ int testShowCloud()
 	// std::string postfix = ".pcd";	
 	std::string postfix = ".csv";	
 	// std::string postfix = "";	
+	// 6532 标定程序输出；当前数据只有块内 4x8 偏置，默认不启用全局/块间/增益项。
+	const std::string calibration_csv = folder + "/range6532_calibration_result/range6532_distance_calibration.csv";
+	Range6532CalibrationTable calibration_table;
+	const bool has_6532_calibration = loadRange6532CalibrationCsv(calibration_csv, calibration_table);
+	const Range6532CalibrationApplyOptions calibration_options{};
 
 	std::vector<float> list_r;
 	std::vector<float> list_sa;
@@ -181,7 +186,8 @@ int testShowCloud()
 		PointMatrix mat_origin, mat_src, mat_calib, mat_p0, mat_p1;
 		if (fs::path(filename).extension() == ".csv" ) 
 		{
-			readFrameCsv(filename, mat_origin);   // Frame 原始点云（离线重建）
+			if (!readFrameCsv(filename, mat_origin))
+				continue;
 			// readFrameCsv(filename, mat_p0, "p0_only");   
 			// readFrameCsv(filename, mat_p1, "p1_only");  
 		}
@@ -203,7 +209,16 @@ int testShowCloud()
 		// algo_gnd.doRepair(mat_src);
 		// 距离和水平角联合标定
 		// mat_calib = applyRsaOffset(mat_src, list_r, list_sa); 
-		mat_calib = applyROffset(mat_origin, list_r2);   
+		// 6532 模组标定
+		if (has_6532_calibration)
+		{
+			mat_calib = mat_origin;
+			applyRange6532Calibration(mat_calib, calibration_table, calibration_options);
+		}
+		else
+		{
+			mat_calib = applyROffset(mat_origin, list_r2);
+		}
 		// 反射率标定
 		// algo_reflect.calcCloudIntensity(mat_calib);
 		// m_intensity_src_name = "z"; // 设置点云强度着色来源为z
@@ -219,7 +234,7 @@ int testShowCloud()
 		// list_cloud.push_back(mat2pcl(mat_p0));
 		// list_cloud.push_back(mat2pcl(mat_p1));
 		auto cloud_name = "cloud_" + std::to_string(i);
-		showCloud(mat2xyzi(mat_origin, true), cloud_name + "_origin"); // 可视化
+		showCloud(mat2xyzi(mat_calib, true), cloud_name + "_6532_calib"); // 可视化
 		// showCloud(mat2xyzi(mat_p1, true), cloud_name + "_calib"); // 可视化
 		// showCloud2in1port(mat2pcl(mat_p0), mat2pcl(mat_p1, true), cloud_name + "_red:echo_0 ; blue:echo_1"); // 可视化
 		// showListCloudRGB(mat2pcl(mat_origin), list_cloud, cloud_name); // 可视化
