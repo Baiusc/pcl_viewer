@@ -2,7 +2,7 @@
  * @Author       : baizs zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-21 09:44:32
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-08-20 09:21:15
+ * @LastEditTime : 2026-08-31 16:46:43
  * @FilePath     : /pcl_viewer/include/PclHelperB.h
  * @Description  : PCL库算法助手
  *
@@ -1018,6 +1018,22 @@ public:
 				   int viewport,
 				   std::string cloud_id = "cloud_custom_color")
 	{
+		// 离散模式高对比颜色
+		const std::vector<std::array<uint8_t, 3>> discrete_colors =
+			{
+				{0, 0, 255},	 // 蓝
+				{0, 255, 0},	 // 绿
+				{255, 255, 0},	 // 黄
+				{255, 0, 0},	 // 红
+				{122, 0, 191},	 // 紫
+				{0, 225, 225},	 // 青
+				{233, 84, 32},	 // 橙
+				{255, 130, 147}, // 粉红
+
+			};
+		// 是否使用离散归一化，默认连续归一化
+		bool use_discrete_normalization = false;
+
 		// 创建新的点云用于存储颜色信息
 		pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_colored(new pcl::PointCloud<pcl::PointXYZRGB>());
 		cloud_colored->points.resize(cloud->points.size());
@@ -1033,9 +1049,27 @@ public:
 			min_intensity = std::min(min_intensity, point.intensity);
 			max_intensity = std::max(max_intensity, point.intensity);
 		}
+
+		use_discrete_normalization = true; // DEBUG 时间戳
+		// 离散值去重排序
+		std::vector<float> unique_values;
+
+		if (use_discrete_normalization)
+		{
+			unique_values.reserve(cloud->points.size());
+
+			for (const auto &point : *cloud)
+				unique_values.push_back(point.intensity);
+
+			std::sort(unique_values.begin(), unique_values.end());
+
+			unique_values.erase(
+				std::unique(unique_values.begin(), unique_values.end()),
+				unique_values.end());
+		}
 		// float max_peak = 1699.f;
 		// max_peak = max_intensity > max_peak ? 262143.f : max_peak; // DEBUG可视化 自定义强度区间
-		min_intensity = 0; // DEBUG可视化 自定义强度区间
+		// min_intensity = 0; // DEBUG可视化 自定义强度区间
 		// max_intensity = 1638; // DEBUG可视化 自定义强度区间
 		// max_intensity > max_peak ? max_intensity = max_peak : max_intensity = max_intensity; // DEBUG可视化 自定义强度区间
 
@@ -1043,19 +1077,52 @@ public:
 		for (size_t i = 0; i < cloud->points.size(); ++i)
 		{
 			const auto &point = cloud->points[i];
-			// float normalized_intensity = (point.intensity - min_intensity) / (max_intensity - min_intensity);
-			float raw_norm = (point.intensity - min_intensity) / (max_intensity - min_intensity);
-			// 限制 [0.0, 1.0]，边界
-			float normalized_intensity = std::clamp(raw_norm, 0.0f, 1.0f);
 
-			// HSV 映射：H 从 0 (红色) -> 240 (蓝色)，S 和 V 固定为 1
-			float h = (10.0f + (1.f - normalized_intensity) * 200.0f) / 360.0f; // 反向映射：强度越大，H 越接近 0 ，为红色
-			float s = 0.8f;
-			float v = 0.8f;
+			float r = 0.0f, g = 0.0f, b = 0.0f;
 
-			// 转换 HSV 到 RGB
-			float r, g, b;
-			hsv2rgb(h, s, v, &r, &g, &b);
+			if (use_discrete_normalization)
+			{
+				// 找到当前离散值对应的序号
+				auto it = std::lower_bound(
+					unique_values.begin(),
+					unique_values.end(),
+					point.intensity);
+
+				size_t idx = std::distance(unique_values.begin(), it);
+
+				// 按离散序号循环使用高对比颜色
+				const auto &color =
+					discrete_colors[idx % discrete_colors.size()];
+
+				r = color[0] / 255.0f;
+				g = color[1] / 255.0f;
+				b = color[2] / 255.0f;
+			}
+			else
+			{
+				// 连续值归一化
+				float normalized_intensity = 0.0f;
+
+				if (max_intensity > min_intensity)
+				{
+					normalized_intensity =
+						(point.intensity - min_intensity) /
+						(max_intensity - min_intensity);
+				}
+
+				normalized_intensity =
+					std::clamp(normalized_intensity, 0.0f, 1.0f);
+
+				// 连续 HSV：蓝 -> 红
+				float h =
+					(10.0f + (1.0f - normalized_intensity) * 200.0f) /
+					360.0f;
+
+				float s = 0.8f;
+				float v = 0.8f;
+
+				hsv2rgb(h, s, v, &r, &g, &b);
+			}
 			if (point.intensity < min_intensity)
 				r = g = b = 0.0;
 

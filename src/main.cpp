@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-08-27 11:16:07
+ * @LastEditTime : 2026-08-31 14:43:34
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -136,8 +136,8 @@ int testShowCloud()
 	Ground_I algo_gnd;
 	CalibReflect algo_reflect;
 	// 设置文件夹路径和文件后缀
-	std::string folder = "../../algo_solid_lidar/data/固态雷达range模式data"; // 数据文件夹路径
-	// std::string folder = "../../data/固态雷达标定数据/20260708多点标定2%和90%靶板/2%+90%"; // 数据文件夹路径
+	// std::string folder = "../../algo_solid_lidar/data/固态雷达range模式data"; // 数据文件夹路径
+	std::string folder = "../../data/固态雷达标定数据/20260828大会议室FL6532白墙range模式点云/6532大会议室白墙range_bin数据"; // 数据文件夹路径
 	// std::string folder = "../../data/beta薄款雷达点云问题分析/2026-08-19何工适配800线版本在工位"; // 数据文件夹路径
 	// std::string folder = "../data/地面修复场景"; // 数据文件夹路径
 	// std::string postfix = ".txt";	// 文件后缀，按需求替换
@@ -169,24 +169,32 @@ int testShowCloud()
 
 	for (size_t i = 0; i < filePaths.size(); ++i)
 	{
+		// 跳过 .~ 开头的临时文件
+		if (fs::path(filePaths[i]).filename().string().find(".~") == 0)
+		{
+			continue;
+		}
 		std::cout << "Processing file: " << filePaths[i] << std::endl;
 
 		std::string filename = filePaths[i];
 		// 读取脉冲数据文件
 		PointMatrix mat_origin, mat_src, mat_calib, mat_p0, mat_p1;
-		// readPulseData(filename, mat_origin); // 全0为无效点
-		readLidarData(filename, mat_origin);
-		if (fs::path(filename).extension() == ".csv")
+		if (fs::path(filename).extension() == ".csv" ) 
 		{
 			readFrameCsv(filename, mat_origin);   // Frame 原始点云（离线重建）
 			// readFrameCsv(filename, mat_p0, "p0_only");   
 			// readFrameCsv(filename, mat_p1, "p1_only");  
 		}
+		else if (fs::path(filename).extension() == ".pcd")
+		{
+			readPcdData(filename, mat_origin); // 读pcd点云
+		}
 		else
 		{
-				// readPcdData(filename, mat_origin);     // 读pcd点云
+			// readPulseData(filename, mat_origin); // 全0为无效点
+			readLidarData(filename, mat_origin);
 		}
-		
+
 		// mat_p0 = buildMatByPulseIdx(mat_origin, 0); // 以第1回波重建点云
 		// mat_p1 = buildMatByPulseIdx(mat_origin, 1); // 以第2回波重建点云
 
@@ -195,11 +203,12 @@ int testShowCloud()
 		// algo_gnd.doRepair(mat_src);
 		// 距离和水平角联合标定
 		// mat_calib = applyRsaOffset(mat_src, list_r, list_sa); 
-		// mat_calib = applyROffset(mat_origin, list_r2);   
+		mat_calib = applyROffset(mat_origin, list_r2);   
 		// 反射率标定
 		// algo_reflect.calcCloudIntensity(mat_calib);
 		// m_intensity_src_name = "z"; // 设置点云强度着色来源为z
-		m_intensity_src_name = "peak"; // 设置点云强度着色来源为峰值
+		// m_intensity_src_name = "peak"; // 设置点云强度着色来源为峰值
+		m_intensity_src_name = "timestamp"; // 设置点云强度着色来源为时间戳
 		// m_intensity_src_name = "intensity"; // 设置点云强度着色来源为标定后的反射率
 		// filtTailPoints(mat_src); // 托尾点滤波
 		// m_intensity_src_name = "is_tail_pt"; // 设置点云强度着色来源为 托尾点标记
@@ -210,8 +219,8 @@ int testShowCloud()
 		// list_cloud.push_back(mat2pcl(mat_p0));
 		// list_cloud.push_back(mat2pcl(mat_p1));
 		auto cloud_name = "cloud_" + std::to_string(i);
-		// showCloud(mat2xyzi(mat_origin, true), cloud_name + "_origin"); // 可视化
-		showCloud(mat2xyzi(mat_p1, true), cloud_name + "_calib"); // 可视化
+		showCloud(mat2xyzi(mat_origin, true), cloud_name + "_origin"); // 可视化
+		// showCloud(mat2xyzi(mat_p1, true), cloud_name + "_calib"); // 可视化
 		// showCloud2in1port(mat2pcl(mat_p0), mat2pcl(mat_p1, true), cloud_name + "_red:echo_0 ; blue:echo_1"); // 可视化
 		// showListCloudRGB(mat2pcl(mat_origin), list_cloud, cloud_name); // 可视化
 	}

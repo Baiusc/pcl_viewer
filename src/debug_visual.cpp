@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:17:38
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-08-27 11:22:12
+ * @LastEditTime : 2026-08-31 14:27:28
  * @FilePath     : /pcl_viewer/src/debug_visual.cpp
  * @Description  :
  *
@@ -97,6 +97,7 @@ namespace algo_lidar
             << ", slot_idx: " << static_cast<int>(pd.slot_idx)
             << ", R: " << std::fixed << std::setprecision(3) << pd.r
             << ", Peak: " << static_cast<int>(pd.peak)
+            << ", Timestamp: " << pd.timestamp
             << ", reflect: " << std::fixed << std::setprecision(2) << pd.reflect
             << ", slot_ang: " << std::fixed << std::setprecision(2) << pd.slot_ang
             << ", theta_ang: " << std::fixed << std::setprecision(2) << pd.theta
@@ -299,6 +300,14 @@ namespace algo_lidar
         if (m_intensity_src_name == "r")
         {
             return point.r;
+        }
+                if (m_intensity_src_name == "r")
+        {
+            return point.r;
+        }
+        if (m_intensity_src_name == "timestamp")
+        {
+            return static_cast<float>(point.timestamp);
         }
         if (m_intensity_src_name == "is_tail_pt")
         {
@@ -913,7 +922,6 @@ namespace algo_lidar
             std::cerr << "Failed to open Frame CSV: " << filename << std::endl;
             return false;
         }
-
         std::string line;
         std::getline(infile, line); // 跳过表头
 
