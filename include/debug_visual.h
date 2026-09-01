@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-07 10:10:49
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-08-14 16:06:38
+ * @LastEditTime : 2026-09-01 09:08:41
  * @FilePath     : /pcl_viewer/include/debug_visual.h
  * @Description  : 
  * 
@@ -85,6 +85,11 @@ namespace algo_lidar
     void showCloud2(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud1, pcl::PointCloud<pcl::PointXYZ>::Ptr cloud2, std::string name = "showCloud2");
     // 显示两个点云
     void showCloud2(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud1, pcl::PointCloud<pcl::PointXYZI>::Ptr cloud2, std::string name);
+       // 显示三个点云
+    void showCloud3(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud1,
+                    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud2,
+                    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud3,
+                    std::string name);
     // 显示四个点云
     void showCloud4(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud1, pcl::PointCloud<pcl::PointXYZ>::Ptr cloud2,
                     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud3, pcl::PointCloud<pcl::PointXYZ>::Ptr cloud4);

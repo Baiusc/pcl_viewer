@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-08-31 16:54:06
+ * @LastEditTime : 2026-09-01 09:35:17
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -137,7 +137,7 @@ int testShowCloud()
 	CalibReflect algo_reflect;
 	// 设置文件夹路径和文件后缀
 	// std::string folder = "../../algo_solid_lidar/data/固态雷达range模式data"; // 数据文件夹路径
-	std::string folder = "../../data/固态雷达标定数据/20260828大会议室FL6532白墙range模式点云/6532大会议室白墙range_bin数据"; // 数据文件夹路径
+	std::string folder = "../../data/固态雷达标定数据/6532标定算法效果对比"; // 数据文件夹路径
 	// std::string folder = "../../data/beta薄款雷达点云问题分析/2026-08-19何工适配800线版本在工位"; // 数据文件夹路径
 	// std::string folder = "../data/地面修复场景"; // 数据文件夹路径
 	// std::string postfix = ".txt";	// 文件后缀，按需求替换
@@ -145,7 +145,7 @@ int testShowCloud()
 	std::string postfix = ".csv";	
 	// std::string postfix = "";	
 	// 6532 标定程序输出；当前数据只有块内 4x8 偏置，默认不启用全局/块间/增益项。
-	const std::string calibration_csv = folder + "/range6532_calibration_result/range6532_distance_calibration.csv";
+	const std::string calibration_csv = "../../data/固态雷达标定数据/20260828_FL6532_range_data点云_大会议室白墙0.99m/range_bin数据/range6532_calibration_result/range6532_distance_calibration.csv";
 	Range6532CalibrationTable calibration_table;
 	const bool has_6532_calibration = loadRange6532CalibrationCsv(calibration_csv, calibration_table);
 	const Range6532CalibrationApplyOptions calibration_options{};
@@ -183,11 +183,11 @@ int testShowCloud()
 
 		std::string filename = filePaths[i];
 		// 读取脉冲数据文件
-		PointMatrix mat_origin, mat_src, mat_calib, mat_p0, mat_p1;
+		PointMatrix mat_origin, mat_src, mat_calib, mat_p0, mat_p1, mat_pcd;
 		if (fs::path(filename).extension() == ".csv" ) 
 		{
-			if (!readFrameCsv(filename, mat_origin))
-				continue;
+			readFrameCsv(filename, mat_origin);
+			readPcdData(filename + ".pcd", mat_pcd);
 			// readFrameCsv(filename, mat_p0, "p0_only");   
 			// readFrameCsv(filename, mat_p1, "p1_only");  
 		}
@@ -222,8 +222,8 @@ int testShowCloud()
 		// 反射率标定
 		// algo_reflect.calcCloudIntensity(mat_calib);
 		// m_intensity_src_name = "z"; // 设置点云强度着色来源为z
-		// m_intensity_src_name = "peak"; // 设置点云强度着色来源为峰值
-		m_intensity_src_name = "timestamp"; // 设置点云强度着色来源为时间戳
+		m_intensity_src_name = "peak"; // 设置点云强度着色来源为峰值
+		// m_intensity_src_name = "timestamp"; // 设置点云强度着色来源为时间戳
 		// m_intensity_src_name = "intensity"; // 设置点云强度着色来源为标定后的反射率
 		// filtTailPoints(mat_src); // 托尾点滤波
 		// m_intensity_src_name = "is_tail_pt"; // 设置点云强度着色来源为 托尾点标记
@@ -234,8 +234,9 @@ int testShowCloud()
 		// list_cloud.push_back(mat2pcl(mat_p0));
 		// list_cloud.push_back(mat2pcl(mat_p1));
 		auto cloud_name = "cloud_" + std::to_string(i);
-		showCloud(mat2xyzi(mat_calib, true), cloud_name + "_6532_calib"); // 可视化
-		// showCloud(mat2xyzi(mat_p1, true), cloud_name + "_calib"); // 可视化
+		// showCloud(mat2xyzi(mat_origin, true), cloud_name + "_origin"); // 可视化
+		// showCloud(mat2xyzi(mat_calib, true), cloud_name + "_calib"); // 可视化
+		showCloud3(mat2xyzi(mat_origin), mat2xyzi(mat_calib,true), mat2xyzi(mat_pcd), cloud_name + "_origin;calib;pcd"); // 可视化
 		// showCloud2in1port(mat2pcl(mat_p0), mat2pcl(mat_p1, true), cloud_name + "_red:echo_0 ; blue:echo_1"); // 可视化
 		// showListCloudRGB(mat2pcl(mat_origin), list_cloud, cloud_name); // 可视化
 	}

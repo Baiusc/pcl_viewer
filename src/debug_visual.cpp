@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:17:38
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-08-31 14:27:28
+ * @LastEditTime : 2026-09-01 09:05:26
  * @FilePath     : /pcl_viewer/src/debug_visual.cpp
  * @Description  :
  *
@@ -1300,6 +1300,34 @@ namespace algo_lidar
         // 注册选点回调函数
         CallbackArgs<pcl::PointXYZI> args;
         args.cloud = cloud1;
+        args.viewerPtr = viewer;
+        viewer->registerMouseCallback(mouseMoveCallback<pcl::PointXYZI>, &args);
+        viewer->registerPointPickingCallback(pointPickingCallback<pcl::PointXYZI>, &args);
+        viewer->spin();
+    }
+    // 显示三个点云
+    void showCloud3(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud1,
+                    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud2,
+                    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud3,
+                    std::string name)
+    {
+        PclHelperB pclHelper;
+        pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer(name));
+        pclHelper.initViewer(viewer, cloud1);
+
+        // 创建3个视口：一行三列
+        pclHelper.addViewport(viewer, 1, 3);
+        pclHelper.addViewport(viewer, 2, 3);
+        pclHelper.addViewport(viewer, 3, 3);
+
+        // 分别添加三个点云到对应的视口
+        pclHelper.addCloudI(viewer, cloud1, 1, "showCloud3_cloud_1");
+        pclHelper.addCloudI(viewer, cloud2, 2, "showCloud3_cloud_2");
+        pclHelper.addCloudI(viewer, cloud3, 3, "showCloud3_cloud_3");
+
+        // 注册选点回调函数
+        CallbackArgs<pcl::PointXYZI> args;
+        args.cloud = cloud1; // 默认使用cloud1作为选点目标
         args.viewerPtr = viewer;
         viewer->registerMouseCallback(mouseMoveCallback<pcl::PointXYZI>, &args);
         viewer->registerPointPickingCallback(pointPickingCallback<pcl::PointXYZI>, &args);

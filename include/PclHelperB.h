@@ -2,7 +2,7 @@
  * @Author       : baizs zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-21 09:44:32
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-08-31 16:46:43
+ * @LastEditTime : 2026-09-01 08:46:46
  * @FilePath     : /pcl_viewer/include/PclHelperB.h
  * @Description  : PCL库算法助手
  *
@@ -1050,7 +1050,7 @@ public:
 			max_intensity = std::max(max_intensity, point.intensity);
 		}
 
-		use_discrete_normalization = true; // DEBUG 时间戳
+		// use_discrete_normalization = true; // DEBUG 时间戳
 		// 离散值去重排序
 		std::vector<float> unique_values;
 

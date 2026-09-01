@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-02-17 10:07:58
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-08-27 11:20:31
+ * @LastEditTime : 2026-08-31 17:28:52
  * @FilePath     : /pcl_viewer/include/point_type.h
  * @Description  : 
  * 
@@ -100,8 +100,8 @@ namespace algo_lidar
     struct Range6532CalibrationApplyOptions
     {
         bool apply_global_offset = false;      // 全局项在单距离拟合中可能不可辨识，默认不使用。
-        bool apply_inter_block_offset = false;
-        bool apply_gain = false;
+        bool apply_inter_block_offset = true; // 是否应用块间偏置。
+        bool apply_gain = false; // 是否应用距离比例误差（斜率）。
     };
 
     /// @brief 读取 6532 标定程序输出的 range6532_distance_calibration.csv。
