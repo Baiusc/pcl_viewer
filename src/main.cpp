@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-09-01 09:35:17
+ * @LastEditTime : 2026-09-03 14:49:18
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -138,6 +138,7 @@ int testShowCloud()
 	// 设置文件夹路径和文件后缀
 	// std::string folder = "../../algo_solid_lidar/data/固态雷达range模式data"; // 数据文件夹路径
 	std::string folder = "../../data/固态雷达标定数据/6532标定算法效果对比"; // 数据文件夹路径
+	// std::string folder = "/mnt/windows_share/0_标定_bai/项目_固态雷达/6031直方图和点云/6031左墙右空点云";
 	// std::string folder = "../../data/beta薄款雷达点云问题分析/2026-08-19何工适配800线版本在工位"; // 数据文件夹路径
 	// std::string folder = "../data/地面修复场景"; // 数据文件夹路径
 	// std::string postfix = ".txt";	// 文件后缀，按需求替换
@@ -145,7 +146,7 @@ int testShowCloud()
 	std::string postfix = ".csv";	
 	// std::string postfix = "";	
 	// 6532 标定程序输出；当前数据只有块内 4x8 偏置，默认不启用全局/块间/增益项。
-	const std::string calibration_csv = "../../data/固态雷达标定数据/20260828_FL6532_range_data点云_大会议室白墙0.99m/range_bin数据/range6532_calibration_result/range6532_distance_calibration.csv";
+	const std::string calibration_csv = "../../data/固态雷达标定数据/20260902_6532range_data_公司走廊2%靶板多距离/range6532_calibration_result_all_stages/range6532_distance_calibration.csv";
 	Range6532CalibrationTable calibration_table;
 	const bool has_6532_calibration = loadRange6532CalibrationCsv(calibration_csv, calibration_table);
 	const Range6532CalibrationApplyOptions calibration_options{};
@@ -187,7 +188,7 @@ int testShowCloud()
 		if (fs::path(filename).extension() == ".csv" ) 
 		{
 			readFrameCsv(filename, mat_origin);
-			readPcdData(filename + ".pcd", mat_pcd);
+			// readPcdData(filename + ".pcd", mat_pcd);
 			// readFrameCsv(filename, mat_p0, "p0_only");   
 			// readFrameCsv(filename, mat_p1, "p1_only");  
 		}
@@ -235,8 +236,9 @@ int testShowCloud()
 		// list_cloud.push_back(mat2pcl(mat_p1));
 		auto cloud_name = "cloud_" + std::to_string(i);
 		// showCloud(mat2xyzi(mat_origin, true), cloud_name + "_origin"); // 可视化
-		// showCloud(mat2xyzi(mat_calib, true), cloud_name + "_calib"); // 可视化
-		showCloud3(mat2xyzi(mat_origin), mat2xyzi(mat_calib,true), mat2xyzi(mat_pcd), cloud_name + "_origin;calib;pcd"); // 可视化
+		showCloud(mat2xyzi(mat_calib, true), cloud_name + "_calib"); // 可视化
+		// showCloud2(mat2xyzi(mat_origin, false), mat2xyzi(mat_calib,true),cloud_name + "_origin_calib"); // 可视化
+		// showCloud3(mat2xyzi(mat_origin), mat2xyzi(mat_calib,true), mat2xyzi(mat_pcd), cloud_name + "_origin;calib;pcd"); // 可视化
 		// showCloud2in1port(mat2pcl(mat_p0), mat2pcl(mat_p1, true), cloud_name + "_red:echo_0 ; blue:echo_1"); // 可视化
 		// showListCloudRGB(mat2pcl(mat_origin), list_cloud, cloud_name); // 可视化
 	}
