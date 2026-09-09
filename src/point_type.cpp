@@ -529,6 +529,25 @@ namespace algo_lidar
 
         return extracted_data;
     }
+    
+    /**
+     * @brief 矩形ROI截取PointMatrix
+     * @param src 原始矩阵
+     * @param r0 起始行
+     * @param r1 结束行(包含)
+     * @param c0 起始列
+     * @param c1 结束列(包含)
+     * @return roi子矩阵
+     */
+    PointMatrix extractData(const PointMatrix &src, int r0, int r1, int c0, int c1)
+    {
+        std::vector<int> rows, cols;
+        for (int r = r0; r <= r1; r++)
+            rows.push_back(r);
+        for (int c = c0; c <= c1; c++)
+            cols.push_back(c);
+        return extractData(src, rows, cols);
+    }
 
     // 对目标矩阵按行重写 r_offset 并重新计算点数据 (检查矩阵的行数是否等于 r_offset 的 size ) （若offset 的大小为 1，则将偏移量应用到矩阵中的所有点）
     void resetROffset(PointMatrix &mat, const std::vector<float> &r_offset)

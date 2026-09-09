@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-02-17 10:07:58
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-08-31 17:28:52
+ * @LastEditTime : 2026-09-09 13:25:33
  * @FilePath     : /pcl_viewer/include/point_type.h
  * @Description  : 
  * 
@@ -124,6 +124,17 @@ namespace algo_lidar
 
     // 按指定行列截取矩阵数据
     PointMatrix extractData(const PointMatrix &mat, const std::vector<int> &row_indices, const std::vector<int> &col_indices);
+
+    /**
+     * @brief 矩形ROI截取PointMatrix
+     * @param src 原始矩阵
+     * @param r0 起始行
+     * @param r1 结束行(包含)
+     * @param c0 起始列
+     * @param c1 结束列(包含)
+     * @return roi子矩阵
+     */
+    PointMatrix extractData(const PointMatrix &src, int r0, int r1, int c0, int c1);
 
     // 对 mat 应用 r_offset
     void resetROffset(PointMatrix &mat, const std::vector<float> &r_offset);

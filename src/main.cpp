@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-09-09 12:11:29
+ * @LastEditTime : 2026-09-09 16:05:30
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -198,7 +198,7 @@ int testShowCloud()
 		const bool is_6031_frame_csv =
 			fs::path(filename).extension() == ".csv" && isFrameCsv6031(filename);
 		// 读取脉冲数据文件
-		PointMatrix mat_origin, mat_src, mat_calib, mat_p0, mat_p1, mat_pcd, mat_v0, mat_v1, mat_v2, mat_v3;
+		PointMatrix mat_origin, mat_roi, mat_calib, mat_p0, mat_p1, mat_pcd, mat_v0, mat_v1, mat_v2, mat_v3;
 		if (fs::path(filename).extension() == ".csv")
 		{
 			if (is_6031_frame_csv)
@@ -207,7 +207,7 @@ int testShowCloud()
 				// readFrameCsv_6031(filename, mat_v1, "v1");
 				// readFrameCsv_6031(filename, mat_v2, "v2");
 				// readFrameCsv_6031(filename, mat_v3, "v3");
-				readFrameCsv_6031(filename, mat_origin, "v3");
+				readFrameCsv_6031(filename, mat_origin, "v1");
 			}
 
 			else
@@ -251,9 +251,9 @@ int testShowCloud()
 		}
 		// 反射率标定
 		// algo_reflect.calcCloudIntensity(mat_calib);
-		m_intensity_src_name = "r"; // 设置点云强度着色来源为r
+		// m_intensity_src_name = "r"; // 设置点云强度着色来源为r
 		// m_intensity_src_name = "z"; // 设置点云强度着色来源为z
-		// m_intensity_src_name = "peak"; // 设置点云强度着色来源为峰值
+		m_intensity_src_name = "peak"; // 设置点云强度着色来源为峰值
 		// m_intensity_src_name = "timestamp"; // 设置点云强度着色来源为时间戳
 		// m_intensity_src_name = "intensity"; // 设置点云强度着色来源为标定后的反射率
 		// filtTailPoints(mat_src); // 托尾点滤波
@@ -272,6 +272,8 @@ int testShowCloud()
 		// 	continue; // 跳过后续处理，直接进入下一文件
 		// }
 
+		// 按行列截取矩阵数据
+		// mat_roi =  extractData(mat_origin, 0, 150, 200, 250);
 		// 转换为 pcl 点云
 		auto cloud_pcl = mat2xyzi(mat_origin, true);
 		// 快速欧式聚类分割
@@ -281,9 +283,9 @@ int testShowCloud()
 		// 调用 getsubcloud
 		pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_main(new pcl::PointCloud<pcl::PointXYZI>);
 		pclHelper.getSubCloud(cloud_pcl, cluster_fec[0], cloud_main);
-		showCloud(cloud_main, cloud_name + "_main"); // 可视化
+		// showCloud(cloud_main, cloud_name + "_main"); // 可视化
 
-		// showCloud(mat2xyzi(mat_origin, true), cloud_name + "_origin"); // 可视化
+		showCloud(mat2xyzi(mat_origin, true), cloud_name + "_origin"); // 可视化
 		// showCloud(mat2xyzi(mat_calib, true), cloud_name + "_calib"); // 可视化
 		// showCloud2(mat2xyzi(mat_origin, false), mat2xyzi(mat_calib,true),cloud_name + "_origin_calib"); // 可视化
 		// showCloud3(mat2xyzi(mat_origin), mat2xyzi(mat_calib,true), mat2xyzi(mat_pcd), cloud_name + "_origin;calib;pcd"); // 可视化
