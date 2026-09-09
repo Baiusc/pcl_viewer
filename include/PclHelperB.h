@@ -2,7 +2,7 @@
  * @Author       : baizs zhongshan.bai@vitalchem.com
  * @Date         : 2024-11-21 09:44:32
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-09-02 15:52:33
+ * @LastEditTime : 2026-09-09 11:28:46
  * @FilePath     : /pcl_viewer/include/PclHelperB.h
  * @Description  : PCL库算法助手
  *
@@ -61,6 +61,9 @@
 #include <pcl/visualization/common/shapes.h>
 #include <pcl/visualization/pcl_visualizer.h>
 #include <pcl/visualization/cloud_viewer.h>
+
+// 3rd算法
+#include "fast_euclidean_clustering.h"
 
 // 定义 POINTSWITHINDEX 宏以启用索引支持
 #define POINTSWITHINDEX
@@ -628,6 +631,30 @@ public:
 
 		// 执行欧式聚类分割
 		ec.extract(cluster_indices);
+		std::cerr << ">> Done: " << tt.toc() << " ms, 提取到 " << cluster_indices.size() << " 个簇\n";
+	}
+	
+	// 快速欧式聚类分割
+	void fastEuclideanClustering(const pcl::PointCloud<PointT>::Ptr cloud, std::vector<pcl::PointIndices> &cluster_indices, float tolerance = 0.02, float quality = 0.5)
+	{
+		std::cerr << "\n快速欧氏聚类：" << cloud->points.size() << "个点...\n", tt.tic();
+		// 创建 KdTree 对象
+		pcl::search::KdTree<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
+		tree->setInputCloud(cloud);
+		// 创建欧式聚类分割对象
+		FastEuclideanClustering<pcl::PointXYZ> fec;
+		fec.setClusterTolerance(tolerance); // 设置聚类容忍度
+		size_t min_size = cloud->points.size() / 1000 > 100 ? 100 : cloud->points.size() / 1000;
+		fec.setMinClusterSize(min_size);			 // 设置最小簇大小
+		fec.setMaxClusterSize(cloud->points.size()); // 设置最大簇大小
+		fec.setQuality(quality);
+		// 填充点云数据...
+		fec.setInputCloud(cloud);
+		fec.setSearchMethod(tree);
+		// 执行快速欧式聚类分割
+		fec.segment(cluster_indices);
+		// 族排序 size大的在前面
+		sortClusters(cluster_indices);
 		std::cerr << ">> Done: " << tt.toc() << " ms, 提取到 " << cluster_indices.size() << " 个簇\n";
 	}
 

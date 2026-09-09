@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-07 10:10:49
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-09-01 09:08:41
+ * @LastEditTime : 2026-09-08 17:22:52
  * @FilePath     : /pcl_viewer/include/debug_visual.h
  * @Description  : 
  * 
@@ -48,6 +48,11 @@ namespace algo_lidar
     // 读取 Frame*_ROI*.csv(离线重建的原始点云, 一像素一行含 row/col/角度/距离/双回波) → PointMatrix
     bool readFrameCsv(const std::string &filename, PointMatrix &mat, const std::string &dist_method = "smart");
 
+    // 读取 FL6031 直方图离线算法生成的 Frame6031 CSV。
+    // range_method 可选 v0/v1/v2/v3；所选算法的 distance_m 用于 r/XYZ，候选峰写入 list_pulse。
+    bool readFrameCsv_6031(const std::string &filename, PointMatrix &mat,
+                           const std::string &range_method = "v3");
+
     // 从PCD点云构建PointMatrix（适用于标准XYZ点云）
     bool buildMatFromPcd(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud, PointMatrix &mat, float scale_factor = 0.01f);
 
@@ -91,8 +96,7 @@ namespace algo_lidar
                     pcl::PointCloud<pcl::PointXYZI>::Ptr cloud3,
                     std::string name);
     // 显示四个点云
-    void showCloud4(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud1, pcl::PointCloud<pcl::PointXYZ>::Ptr cloud2,
-                    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud3, pcl::PointCloud<pcl::PointXYZ>::Ptr cloud4);
+    void showCloud4(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud1, pcl::PointCloud<pcl::PointXYZI>::Ptr cloud2,
+                    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud3, pcl::PointCloud<pcl::PointXYZI>::Ptr cloud4);
 
 } // namespace debug_visual
- 

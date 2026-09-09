@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:17:38
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-09-01 09:05:26
+ * @LastEditTime : 2026-09-09 11:20:49
  * @FilePath     : /pcl_viewer/src/debug_visual.cpp
  * @Description  :
  *
@@ -15,6 +15,8 @@
 #include <deque>
 #include <ctime> // 添加头文件
 #include <sstream>
+#include <unordered_map>
+#include <cctype>
 namespace algo_lidar
 {
     namespace
@@ -298,10 +300,6 @@ namespace algo_lidar
             return point.z;
         }
         if (m_intensity_src_name == "r")
-        {
-            return point.r;
-        }
-                if (m_intensity_src_name == "r")
         {
             return point.r;
         }
@@ -1099,6 +1097,262 @@ namespace algo_lidar
         return true;
     }
 
+    bool readFrameCsv_6031(const std::string &filename, PointMatrix &mat,
+                           const std::string &range_method)
+    {
+        std::string method = range_method;
+        std::transform(method.begin(), method.end(), method.begin(),
+                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        if (method != "v0" && method != "v1" && method != "v2" && method != "v3")
+        {
+            std::cerr << "FL6031 range_method must be v0/v1/v2/v3, got: "
+                      << range_method << std::endl;
+            return false;
+        }
+
+        std::ifstream infile(filename);
+        if (!infile.is_open())
+        {
+            std::cerr << "Failed to open FL6031 Frame CSV: " << filename << std::endl;
+            return false;
+        }
+
+        auto splitCsv = [](const std::string &line)
+        {
+            std::vector<std::string> fields;
+            std::string field;
+            bool quoted = false;
+            for (std::size_t i = 0; i < line.size(); ++i)
+            {
+                const char ch = line[i];
+                if (ch == '"')
+                {
+                    if (quoted && i + 1 < line.size() && line[i + 1] == '"')
+                    {
+                        field.push_back('"');
+                        ++i;
+                    }
+                    else
+                    {
+                        quoted = !quoted;
+                    }
+                }
+                else if (ch == ',' && !quoted)
+                {
+                    fields.push_back(field);
+                    field.clear();
+                }
+                else
+                {
+                    field.push_back(ch);
+                }
+            }
+            fields.push_back(field);
+            return fields;
+        };
+
+        auto splitBy = [](const std::string &text, char delimiter)
+        {
+            std::vector<std::string> values;
+            std::stringstream stream(text);
+            std::string value;
+            while (std::getline(stream, value, delimiter))
+                values.push_back(value);
+            return values;
+        };
+
+        std::string line;
+        if (!std::getline(infile, line))
+        {
+            std::cerr << "Empty FL6031 Frame CSV: " << filename << std::endl;
+            return false;
+        }
+        auto header = splitCsv(line);
+        if (!header.empty() && header[0].size() >= 3 &&
+            static_cast<unsigned char>(header[0][0]) == 0xEF &&
+            static_cast<unsigned char>(header[0][1]) == 0xBB &&
+            static_cast<unsigned char>(header[0][2]) == 0xBF)
+        {
+            header[0].erase(0, 3);
+        }
+        std::unordered_map<std::string, std::size_t> column;
+        for (std::size_t i = 0; i < header.size(); ++i)
+            column[header[i]] = i;
+
+        const std::vector<std::string> required = {
+            "timestamp", "row", "col", "horizontal_deg", "vertical_deg",
+            "bin_width_ps", "time_zero_ps", method + "_valid",
+            method + "_distance_m", method + "_peak", method + "_width_bin",
+            method + "_timing_bin", method + "_candidate_count", method + "_candidates"};
+        for (const auto &name : required)
+        {
+            if (column.find(name) == column.end())
+            {
+                std::cerr << "FL6031 Frame CSV missing column: " << name << std::endl;
+                return false;
+            }
+        }
+
+        struct Candidate
+        {
+            float center = -1.0f;
+            float timing = -1.0f;
+            float amplitude = 0.0f;
+            float width = 0.0f;
+        };
+        struct FramePt6031
+        {
+            int row = 0;
+            int col = 0;
+            int valid = 0;
+            uint32_t timestamp = 0;
+            float horizontal = 0.0f;
+            float vertical = 0.0f;
+            float binWidthPs = 1000.0f;
+            float timeZeroPs = 0.0f;
+            float distance = 0.0f;
+            float peak = 0.0f;
+            float width = 0.0f;
+            float timing = -1.0f;
+            int candidateCount = 0;
+            std::vector<Candidate> candidates;
+        };
+
+        const std::string prefix = method + "_";
+        std::vector<FramePt6031> points;
+        int maxRow = -1;
+        int maxCol = -1;
+        std::size_t lineNumber = 1;
+        std::size_t skipped = 0;
+        while (std::getline(infile, line))
+        {
+            ++lineNumber;
+            if (line.empty())
+                continue;
+            const auto fields = splitCsv(line);
+            auto get = [&](const std::string &name) -> const std::string &
+            {
+                static const std::string empty;
+                const auto it = column.find(name);
+                return (it != column.end() && it->second < fields.size()) ? fields[it->second] : empty;
+            };
+            try
+            {
+                FramePt6031 p;
+                p.timestamp = get("timestamp").empty()
+                                  ? 0U
+                                  : static_cast<uint32_t>(std::stoul(get("timestamp")));
+                p.row = std::stoi(get("row"));
+                p.col = std::stoi(get("col"));
+                p.horizontal = std::stof(get("horizontal_deg"));
+                p.vertical = std::stof(get("vertical_deg"));
+                p.binWidthPs = std::stof(get("bin_width_ps"));
+                p.timeZeroPs = std::stof(get("time_zero_ps"));
+                p.valid = std::stoi(get(prefix + "valid"));
+                p.distance = std::stof(get(prefix + "distance_m"));
+                p.peak = std::stof(get(prefix + "peak"));
+                p.width = std::stof(get(prefix + "width_bin"));
+                p.timing = std::stof(get(prefix + "timing_bin"));
+                p.candidateCount = std::stoi(get(prefix + "candidate_count"));
+
+                for (const auto &encoded : splitBy(get(prefix + "candidates"), ';'))
+                {
+                    if (encoded.empty())
+                        continue;
+                    const auto values = splitBy(encoded, '|');
+                    if (values.size() < 8)
+                        continue;
+                    Candidate candidate;
+                    candidate.center = std::stof(values[0]);
+                    candidate.timing = std::stof(values[1]);
+                    candidate.amplitude = std::stof(values[2]);
+                    candidate.width = std::stof(values[4]);
+                    p.candidates.push_back(candidate);
+                }
+                if (p.candidates.empty() && p.valid != 0 && p.timing >= 0.0f)
+                    p.candidates.push_back(Candidate{p.timing, p.timing, p.peak, p.width});
+
+                points.push_back(std::move(p));
+                maxRow = std::max(maxRow, points.back().row);
+                maxCol = std::max(maxCol, points.back().col);
+            }
+            catch (const std::exception &error)
+            {
+                ++skipped;
+                if (skipped <= 5)
+                    std::cerr << "Skip malformed FL6031 CSV line " << lineNumber
+                              << ": " << error.what() << std::endl;
+            }
+        }
+
+        if (points.empty() || maxRow < 0 || maxCol < 0)
+        {
+            std::cerr << "No FL6031 data in " << filename << std::endl;
+            return false;
+        }
+
+        mat.assign(static_cast<std::size_t>(maxRow + 1),
+                   std::vector<PointData>(static_cast<std::size_t>(maxCol + 1)));
+        constexpr float PI = 3.14159265358979323846f;
+        constexpr float LIGHT_SPEED_M_S = 299792458.0f;
+        int validCount = 0;
+        int multiCount = 0;
+        for (const auto &p : points)
+        {
+            if (p.row < 0 || p.col < 0 || p.row > maxRow || p.col > maxCol)
+                continue;
+            PointData pd{};
+            pd.pixel_idx = static_cast<uint16_t>(p.row);
+            pd.slot_idx = static_cast<uint16_t>(p.col);
+            pd.timestamp = p.timestamp;
+            pd.slot_ang = p.horizontal;
+            pd.omega_rad = p.horizontal * PI / 180.0f;
+            pd.theta = p.vertical;
+            pd.theta_rad = p.vertical * PI / 180.0f;
+            float selectedDistance = p.distance;
+            if (!(selectedDistance > 0.0f) && p.timing >= 0.0f)
+            {
+                const float tofSeconds = (p.timeZeroPs + p.timing * p.binWidthPs) * 1.0e-12f;
+                selectedDistance = tofSeconds * LIGHT_SPEED_M_S * 0.5f;
+            }
+            pd.r = selectedDistance;
+            pd.peak = static_cast<uint16_t>(std::clamp(std::lround(p.peak), 0L, 65535L));
+            const float intensity = std::clamp(p.peak / 4095.0f * 255.0f, 0.0f, 255.0f);
+            pd.intensity = static_cast<uint8_t>(std::lround(intensity));
+            pd.reflect = intensity / 255.0f;
+            pd.is_valid = p.valid != 0 && std::isfinite(pd.r) &&
+                          pd.r > 0.0f && pd.r < 1000.0f;
+            pd.select_idx = 0;
+            if (pd.is_valid)
+            {
+                pd.x = pd.r * std::cos(pd.theta_rad) * std::cos(pd.omega_rad);
+                pd.y = pd.r * std::cos(pd.theta_rad) * std::sin(pd.omega_rad);
+                pd.z = pd.r * std::sin(pd.theta_rad);
+                ++validCount;
+            }
+
+            for (const auto &candidate : p.candidates)
+            {
+                if (candidate.timing < 0.0f)
+                    continue;
+                const float tofPs = p.timeZeroPs + candidate.timing * p.binWidthPs;
+                if (tofPs <= 0.0f)
+                    continue;
+                pd.list_pulse.emplace_back(tofPs, candidate.width, candidate.amplitude);
+            }
+            multiCount += static_cast<int>(pd.list_pulse.size() >= 2);
+            pd.is_tail_pt = p.width > 0.0f && p.width < 2.0f;
+
+            mat[static_cast<std::size_t>(p.row)][static_cast<std::size_t>(p.col)] = std::move(pd);
+        }
+
+        std::cout << "FL6031 Frame CSV(" << method << "): " << points.size()
+                  << " 行, 矩阵 " << maxRow + 1 << "x" << maxCol + 1
+                  << ", 有效点 " << validCount << ", 多回波点 " << multiCount
+                  << ", 跳过 " << skipped << std::endl;
+        return true;
+    }
+
     // 显示单个点云  强度着色
     void showCloud(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud, std::string viewer_name)
     {
@@ -1335,16 +1589,23 @@ namespace algo_lidar
     }
 
     // 显示四个点云
-    void showCloud4(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud1, pcl::PointCloud<pcl::PointXYZ>::Ptr cloud2,
-                    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud3, pcl::PointCloud<pcl::PointXYZ>::Ptr cloud4)
+    void showCloud4(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud1, pcl::PointCloud<pcl::PointXYZI>::Ptr cloud2,
+                    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud3, pcl::PointCloud<pcl::PointXYZI>::Ptr cloud4)
     {
         PclHelperB pclHelper;
         pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer("showCloud4"));
         pclHelper.initViewer(viewer, cloud1);
-        pclHelper.addViewport(viewer, 1, 2);
-        pclHelper.addViewport(viewer, 2, 2);
-        pclHelper.addCloud(viewer, cloud1, 1, "cloud1");
-        pclHelper.addCloud(viewer, cloud2, 2, "cloud2");
+        // 创建4个视口：2行2列
+        pclHelper.addViewport(viewer, 1, 4);
+        pclHelper.addViewport(viewer, 2, 4);
+        pclHelper.addViewport(viewer, 3, 4);
+        pclHelper.addViewport(viewer, 4, 4);
+
+        // 分别添加4个点云到对应的视口
+        pclHelper.addCloudI(viewer, cloud1, 1, "showCloud4_cloud_1");
+        pclHelper.addCloudI(viewer, cloud2, 2, "showCloud4_cloud_2");
+        pclHelper.addCloudI(viewer, cloud3, 3, "showCloud4_cloud_3");
+        pclHelper.addCloudI(viewer, cloud4, 4, "showCloud4_cloud_4");
 
         viewer->spin();
     }
