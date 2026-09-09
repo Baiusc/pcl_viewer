@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-09-09 11:39:15
+ * @LastEditTime : 2026-09-09 12:11:29
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -277,8 +277,11 @@ int testShowCloud()
 		// 快速欧式聚类分割
 		float clusterTolerance = 0.5f;
 		std::vector<pcl::PointIndices> cluster_fec;
-		// pclHelper.fastEuclideanClustering(cloud_pcl, cluster_fec, clusterTolerance);
-		showCloud(cloud_pcl, cloud_name + "_origin"); // 可视化
+		pclHelper.fastEuclideanClustering(cloud_pcl, cluster_fec, clusterTolerance);
+		// 调用 getsubcloud
+		pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_main(new pcl::PointCloud<pcl::PointXYZI>);
+		pclHelper.getSubCloud(cloud_pcl, cluster_fec[0], cloud_main);
+		showCloud(cloud_main, cloud_name + "_main"); // 可视化
 
 		// showCloud(mat2xyzi(mat_origin, true), cloud_name + "_origin"); // 可视化
 		// showCloud(mat2xyzi(mat_calib, true), cloud_name + "_calib"); // 可视化

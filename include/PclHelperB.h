@@ -4,7 +4,7 @@
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @LastEditTime : 2026-09-09 11:28:46
  * @FilePath     : /pcl_viewer/include/PclHelperB.h
- * @Description  : PCL库算法助手
+ * @Description  : PCL库算法助手（普通类 + 可推导成员函数模板）（普通类 + 成员函数模板，支持多种PCL点类型）
  *
  * Copyright (c) 2024 by vitalchem, All Rights Reserved.
  */
@@ -12,6 +12,18 @@
 #pragma once
 #include <iostream>
 #include <thread>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdio>
+#include <fstream>
+#include <iomanip>
+#include <limits>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 // Boost Library
 #include <boost/make_shared.hpp>
 
@@ -70,9 +82,10 @@
 class PclHelperB
 {
 private:
-	// 定义点云类型模板
-	typedef pcl::PointXYZ PointT;
-	typedef pcl::PointXYZLNormal NormalT;
+	// 法向相关的固定辅助点类型。
+	// 主点云类型不再在类级别固定，而由各成员函数模板自动推导。
+	using NormalT = pcl::PointXYZLNormal;
+
 	pcl::console::TicToc tt; // 测耗时
 
 public:
@@ -90,34 +103,8 @@ public:
 	}
 
 	// 保存点云
-	void savePcd(pcl::PointCloud<PointT>::Ptr cloud, std::string filename = "cloud_latest.pcd")
-	{
-		if (cloud->points.size() == 0)
-		{
-			std::cerr << filename << "的size为0，无法保存点云\n";
-			return;
-		}
-		// 检查文件是否已存在
-		std::ifstream ifile(filename); // 尝试打开名为filename的文件
-		if (ifile)
-		{
-			// 如果文件存在(能被打开)，则删除它
-			ifile.close();				   // 删除前必须首先关闭文件
-			std::remove(filename.c_str()); // 删除后，再保存。达到替换的目的
-		}
-		// 如果点云的宽度或高度为0，那么设置宽度和高度
-		if (cloud->width == 0 || cloud->height == 0)
-		{
-			cloud->width = cloud->points.size();
-			cloud->height = 1;
-		}
-		// 保存点云为PCD文件
-		// pcl::io::savePCDFile(filename, *cloud); // 读写慢
-		pcl::PCDWriter writer;
-		writer.writeBinary(filename, *cloud); // 读写快
-	}
-	// 保存点云
-	void savePcd(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud, std::string filename = "cloud_latest.pcd")
+	template <typename PointT>
+	void savePcd(pcl::shared_ptr<pcl::PointCloud<PointT>> cloud, std::string filename = "cloud_latest.pcd")
 	{
 		if (cloud->points.size() == 0)
 		{
@@ -199,7 +186,8 @@ public:
 
 #pragma region 通用算法
 	// 模型异常值剔除  (从点云中提取与模型距离小于阈值的点)
-	void removeModelOutlier(const pcl::PointCloud<PointT>::Ptr cloud, pcl::PointCloud<PointT>::Ptr cloud_filtered, pcl::SacModel mode, const pcl::ModelCoefficients::Ptr coeff, float distanceThreshold)
+	template <typename PointT>
+	void removeModelOutlier(const pcl::shared_ptr<pcl::PointCloud<PointT>> cloud, pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_filtered, pcl::SacModel mode, const pcl::ModelCoefficients::Ptr coeff, float distanceThreshold)
 	{
 		std::cerr << "\n模型异常值剔除...\n", tt.tic();
 		float radius = 0.5f;														 // 请根据你的实际需求设置法向计算的半径
@@ -259,11 +247,12 @@ public:
 	}
 
 	// 区域生长分割
-	void regionGrowingSegmentation(pcl::PointCloud<PointT>::Ptr cloud, std::vector<pcl::PointIndices> &clusters)
+	template <typename PointT>
+	void regionGrowingSegmentation(pcl::shared_ptr<pcl::PointCloud<PointT>> cloud, std::vector<pcl::PointIndices> &clusters)
 	{
 		std::cerr << "\n区域生长分割...\n", tt.tic();
 		// 建立搜索KD树
-		pcl::search::Search<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
+		typename pcl::search::Search<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
 		// 计算点云法向
 		pcl::PointCloud<pcl::Normal>::Ptr normals(new pcl::PointCloud<pcl::Normal>);
 		pcl::NormalEstimationOMP<PointT, pcl::Normal> normal_estimator;
@@ -295,7 +284,8 @@ public:
 		std::cerr << ">> Done: " << tt.toc() << " ms, 提取到 " << clusters.size() << " 个簇\n";
 	}
 	// 过点沿z轴方向的直线与点云的最近点 nkn
-	PointT getNearestPlanePointNKN(PointT point, pcl::PointCloud<PointT>::Ptr cloud)
+	template <typename PointT>
+	PointT getNearestPlanePointNKN(PointT point, pcl::shared_ptr<pcl::PointCloud<PointT>> cloud)
 	{
 		// 创建二维点云
 		pcl::PointCloud<pcl::PointXY>::Ptr cloud_2d(new pcl::PointCloud<pcl::PointXY>);
@@ -330,6 +320,7 @@ public:
 	}
 
 	// 过点沿z轴方向的直线与平面的交点
+	template <typename PointT>
 	PointT getNearestPlanePoint(PointT point, pcl::ModelCoefficients::Ptr coeff)
 	{
 		// 平面方程为 ax + by + cz + d = 0
@@ -348,6 +339,7 @@ public:
 	}
 
 	// 计算点到平面的距离 有正负
+	template <typename PointT>
 	float computePointToPlaneDistance(const PointT point, const pcl::ModelCoefficients::Ptr &plane_coefficients)
 	{
 		// 距离值含正负  代表在平面的正侧还是反侧
@@ -363,6 +355,7 @@ public:
 		return distance;
 	}
 	// 计算两点之间的三维距离
+	template <typename PointT>
 	float computePointDistance3d(const PointT point1, const PointT point2)
 	{
 		float distance = std::sqrt(
@@ -372,6 +365,7 @@ public:
 		return distance;
 	}
 	// 已知一个平面上的三维点和该平面的法向量，求该平面方程系数
+	template <typename PointT>
 	void computePlaneCoeff(const PointT &point, const Eigen::Vector3f &normal, pcl::ModelCoefficients::Ptr &plane_coefficients)
 	{
 		Eigen::Vector3f unit_normal = normal.normalized();
@@ -389,7 +383,8 @@ public:
 		std::cout << std::endl;
 	}
 	// 计算簇内中位数点
-	void computeClusterMedian(pcl::PointCloud<PointT>::Ptr points_3d, pcl::IndicesClustersPtr cluster_euc, pcl::PointCloud<PointT>::Ptr cloud_median)
+	template <typename PointT>
+	void computeClusterMedian(pcl::shared_ptr<pcl::PointCloud<PointT>> points_3d, pcl::IndicesClustersPtr cluster_euc, pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_median)
 	{
 		for (std::vector<pcl::PointIndices>::const_iterator it = cluster_euc->begin(); it != cluster_euc->end(); ++it)
 		{
@@ -419,7 +414,8 @@ public:
 		}
 	}
 	// 点云投影
-	void projectCloudToPlane(pcl::PointCloud<PointT>::Ptr &cloud, pcl::ModelCoefficients::Ptr &plane_coefficients, pcl::PointCloud<PointT>::Ptr &cloud_projected)
+	template <typename PointT>
+	void projectCloudToPlane(pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud, pcl::ModelCoefficients::Ptr &plane_coefficients, pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud_projected)
 	{
 		std::cerr << "\n投影...\n", tt.tic();
 		// 创建滤波器对象
@@ -433,7 +429,8 @@ public:
 	}
 
 	// 倒置点云
-	void reverseCloud(pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud)
+	template <typename PointT>
+	void reverseCloud(pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud)
 	{
 		Eigen::Vector3f normal_z(0.0f, 0.0f, 1.0f);				 // 标准Z向量
 		Eigen::Matrix4f transform = Eigen::Matrix4f::Identity(); // 创建一个旋转矩阵，用于将点云旋转180度
@@ -442,7 +439,8 @@ public:
 		pcl::transformPointCloud(*cloud, *cloud, transform);	 // 旋转
 	}
 	// 倒置点云
-	void reverseCloud(pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud_in, pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud_out)
+	template <typename PointT>
+	void reverseCloud(pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud_in, pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud_out)
 	{
 		Eigen::Vector3f normal_z(0.0f, 0.0f, 1.0f);					// 标准Z向量
 		Eigen::Matrix4f transform = Eigen::Matrix4f::Identity();	// 创建一个旋转矩阵，用于将点云旋转180度
@@ -451,7 +449,8 @@ public:
 		pcl::transformPointCloud(*cloud_in, *cloud_out, transform); // 旋转
 	}
 	// 计算点云尺度
-	float computeScale(const pcl::PointCloud<PointT>::Ptr &cloud)
+	template <typename PointT>
+	float computeScale(const pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud)
 	{
 		Eigen::Vector4f min_pt, max_pt;
 		pcl::getMinMax3D(*cloud, min_pt, max_pt);
@@ -460,7 +459,8 @@ public:
 		return scale;
 	}
 	// 根据索引，提取子点云
-	void getSubCloud(const pcl::PointCloud<PointT>::Ptr &cloud, pcl::PointIndicesPtr &ids, pcl::PointCloud<PointT>::Ptr &sub_cloud)
+	template <typename PointT>
+	void getSubCloud(const pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud, pcl::PointIndicesPtr &ids, pcl::shared_ptr<pcl::PointCloud<PointT>> &sub_cloud)
 	{
 		// 创建ExtractIndices过滤器对象
 		pcl::ExtractIndices<PointT> extract;
@@ -474,7 +474,8 @@ public:
 		extract.filter(*sub_cloud);
 	}
 	// 重载版本，直接支持pcl::PointIndices类型（自动转换为pcl::PointIndicesPtr）
-	void getSubCloud(const pcl::PointCloud<PointT>::Ptr &cloud, pcl::PointIndices &ids, pcl::PointCloud<PointT>::Ptr &sub_cloud)
+	template <typename PointT>
+	void getSubCloud(const pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud, pcl::PointIndices &ids, pcl::shared_ptr<pcl::PointCloud<PointT>> &sub_cloud)
 	{
 		// 将pcl::PointIndices转换为pcl::PointIndicesPtr
 		pcl::PointIndicesPtr ids_ptr(new pcl::PointIndices(ids));
@@ -483,7 +484,8 @@ public:
 		getSubCloud(cloud, ids_ptr, sub_cloud);
 	}
 	// 根据索引，提取子点云
-	void getSubCloud(pcl::PointCloud<PointT>::Ptr &cloud, pcl::IndicesPtr ids, pcl::PointCloud<PointT>::Ptr &sub_cloud)
+	template <typename PointT>
+	void getSubCloud(pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud, pcl::IndicesPtr ids, pcl::shared_ptr<pcl::PointCloud<PointT>> &sub_cloud)
 	{
 		// 创建ExtractIndices过滤器对象
 		pcl::ExtractIndices<PointT> extract;
@@ -493,10 +495,11 @@ public:
 		// 调用filter函数提取子集
 		extract.filter(*sub_cloud);
 	}
+	template <typename PointT>
 	void getSubCloud(
-		pcl::PointCloud<PointT>::Ptr &cloud,
+		pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud,
 		const std::vector<size_t> &target_indices,
-		pcl::PointCloud<PointT>::Ptr &sub_cloud)
+		pcl::shared_ptr<pcl::PointCloud<PointT>> &sub_cloud)
 	{
 		// 创建一个 pcl::PointIndices 对象来存储索引
 		pcl::PointIndices::Ptr indices(new pcl::PointIndices);
@@ -535,7 +538,8 @@ public:
 		}
 	}
 	// 阈值滤波器
-	void passThroughFilter(pcl::PointCloud<PointT>::Ptr &cloud, pcl::PointCloud<PointT>::Ptr &cloud_filtered, float z_min, float z_max)
+	template <typename PointT>
+	void passThroughFilter(pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud, pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud_filtered, float z_min, float z_max)
 	{
 		// 创建过滤器
 		pcl::PassThrough<PointT> pass;
@@ -548,11 +552,12 @@ public:
 		pass.filter(*cloud_filtered);
 	}
 	// 计算点云法向
-	void computeNormals(const pcl::PointCloud<PointT>::Ptr cloud, pcl::PointCloud<pcl::Normal>::Ptr normals, float radius)
+	template <typename PointT>
+	void computeNormals(const pcl::shared_ptr<pcl::PointCloud<PointT>> cloud, pcl::PointCloud<pcl::Normal>::Ptr normals, float radius)
 	{
 		// std::cerr << "计算法向:" << cloud->points.size() << " points ...\n", tt.tic();
 		// 建立搜索KD树
-		pcl::search::Search<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
+		typename pcl::search::Search<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
 		// 计算点云法向
 		pcl::NormalEstimationOMP<PointT, pcl::Normal> normal_estimator;
 		normal_estimator.setSearchMethod(tree); // 搜索方法为kd树走索
@@ -567,11 +572,12 @@ public:
 	}
 
 	// 求子点云在原点云中的索引（kdtree）
-	void findIndices(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_src, pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_region, std::vector<int> &indices)
+	template <typename PointT>
+	void findIndices(pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_src, pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_region, std::vector<int> &indices)
 	{
 		std::cerr << "\n计算在源点云中的索引...\n", tt.tic();
 		// 创建一个KdTreeFLANN对象
-		pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
+		pcl::KdTreeFLANN<PointT> kdtree;
 		kdtree.setInputCloud(cloud_src);
 
 		// 遍历子点云，找到每个点在源点云中的索引
@@ -588,7 +594,8 @@ public:
 		std::cerr << ">> Done: " << tt.toc() << " ms\n";
 	}
 	// 求子点云在原点云中的索引 （哈希表）
-	void findIndices_Hashtable(const pcl::PointCloud<PointT>::Ptr cloud_src, const pcl::PointCloud<PointT>::Ptr cloud_region, std::vector<int> &indices)
+	template <typename PointT>
+	void findIndices_Hashtable(const pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_src, const pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_region, std::vector<int> &indices)
 	{
 		// 创建一个哈希表来存储源点云中每个点的索引
 		std::unordered_map<std::string, int> src_map;
@@ -614,11 +621,12 @@ public:
 	}
 
 	// 欧式聚类分割
-	void euclideanClustering(const pcl::PointCloud<PointT>::Ptr cloud, std::vector<pcl::PointIndices> &cluster_indices, float tolerance = 0.1)
+	template <typename PointT>
+	void euclideanClustering(const pcl::shared_ptr<pcl::PointCloud<PointT>> cloud, std::vector<pcl::PointIndices> &cluster_indices, float tolerance = 0.1)
 	{
 		std::cerr << "\n欧氏聚类：" << cloud->points.size() << "个点...\n", tt.tic();
 		// 创建 KdTree 对象
-		pcl::search::KdTree<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
+		typename pcl::search::KdTree<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
 		tree->setInputCloud(cloud);
 		// 创建欧式聚类分割对象
 		pcl::EuclideanClusterExtraction<PointT> ec;
@@ -635,14 +643,15 @@ public:
 	}
 	
 	// 快速欧式聚类分割
-	void fastEuclideanClustering(const pcl::PointCloud<PointT>::Ptr cloud, std::vector<pcl::PointIndices> &cluster_indices, float tolerance = 0.02, float quality = 0.5)
+	template <typename PointT>
+	void fastEuclideanClustering(const pcl::shared_ptr<pcl::PointCloud<PointT>> cloud, std::vector<pcl::PointIndices> &cluster_indices, float tolerance = 0.02, float quality = 0.5)
 	{
 		std::cerr << "\n快速欧氏聚类：" << cloud->points.size() << "个点...\n", tt.tic();
 		// 创建 KdTree 对象
-		pcl::search::KdTree<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
+		typename pcl::search::KdTree<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
 		tree->setInputCloud(cloud);
 		// 创建欧式聚类分割对象
-		FastEuclideanClustering<pcl::PointXYZ> fec;
+		FastEuclideanClustering<PointT> fec;
 		fec.setClusterTolerance(tolerance); // 设置聚类容忍度
 		size_t min_size = cloud->points.size() / 1000 > 100 ? 100 : cloud->points.size() / 1000;
 		fec.setMinClusterSize(min_size);			 // 设置最小簇大小
@@ -659,7 +668,8 @@ public:
 	}
 
 	// 从簇群中找出已知点所在的簇
-	void findClusterContainingPoint(const PointT &point, const pcl::PointCloud<PointT>::Ptr &region, const std::vector<pcl::PointIndices> &clusters, pcl::PointCloud<PointT>::Ptr &plane)
+	template <typename PointT>
+	void findClusterContainingPoint(const PointT &point, const pcl::shared_ptr<pcl::PointCloud<PointT>> &region, const std::vector<pcl::PointIndices> &clusters, pcl::shared_ptr<pcl::PointCloud<PointT>> &plane)
 	{
 		std::cerr << "\n从簇群中找出已知点所在的簇...\n", tt.tic();
 		int containing_cluster_index = -1;
@@ -695,9 +705,10 @@ public:
 	}
 
 	// 从NNK最近邻搜索中找出与已知点最近的点所在的簇
-	void findClusterByNNK(const PointT &point, const pcl::PointCloud<PointT>::Ptr &region,
+	template <typename PointT>
+	void findClusterByNNK(const PointT &point, const pcl::shared_ptr<pcl::PointCloud<PointT>> &region,
 						  const std::vector<pcl::PointIndices> &clusters,
-						  pcl::PointCloud<PointT>::Ptr &plane, std::vector<size_t> &plane_indices)
+						  pcl::shared_ptr<pcl::PointCloud<PointT>> &plane, std::vector<size_t> &plane_indices)
 	{
 		std::cerr << "\n从簇群中找出与已知点最近的簇...\n", tt.tic();
 
@@ -758,9 +769,10 @@ public:
 	}
 
 	// 计算轴端点 axis必须是单位向量
-	std::pair<PointT, PointT> getAxisEndPoints(const pcl::PointCloud<PointT>::Ptr &cloud_cone, const Eigen::Vector3f &center, const Eigen::Vector3f &axis)
+	template <typename PointT>
+	std::pair<PointT, PointT> getAxisEndPoints(const pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud_cone, const Eigen::Vector3f &center, const Eigen::Vector3f &axis)
 	{
-		pcl::PointXYZ min_pt, max_pt;
+		PointT min_pt, max_pt;
 		pcl::getMinMax3D(*cloud_cone, min_pt, max_pt);
 		// 计算点云中所有点在轴线方向上的投影
 		std::vector<float> projections(cloud_cone->points.size());
@@ -793,11 +805,12 @@ public:
 	}
 
 	// SAC形状拟合 输出coeff
-	void sacComputeNormal(const pcl::PointCloud<PointT>::Ptr &cloud, pcl::ModelCoefficients::Ptr &coeff, int mode, float distanceThreshold, float radius = 0.1f)
+	template <typename PointT>
+	void sacComputeNormal(const pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud, pcl::ModelCoefficients::Ptr &coeff, int mode, float distanceThreshold, float radius = 0.1f)
 	{
 		// std::cerr << "\nSAC形状拟合...\n", tt.tic();
 		// 建立搜索KD树
-		pcl::search::Search<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
+		typename pcl::search::Search<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
 		// 计算点云法向
 		pcl::PointCloud<pcl::Normal>::Ptr normals(new pcl::PointCloud<pcl::Normal>);
 		computeNormals(cloud, normals, radius);
@@ -828,11 +841,12 @@ public:
 	}
 
 	// SAC形状拟合 输出indices
-	void sacComputeNormal(const pcl::PointCloud<PointT>::Ptr &cloud, pcl::PointIndices::Ptr &inliers, int mode, float distanceThreshold, float radius = 0.1f)
+	template <typename PointT>
+	void sacComputeNormal(const pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud, pcl::PointIndices::Ptr &inliers, int mode, float distanceThreshold, float radius = 0.1f)
 	{
 		std::cerr << "\nSAC形状拟合...\n", tt.tic();
 		// 建立搜索KD树
-		pcl::search::Search<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
+		typename pcl::search::Search<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
 		// 计算点云法向
 		pcl::PointCloud<pcl::Normal>::Ptr normals(new pcl::PointCloud<pcl::Normal>);
 		computeNormals(cloud, normals, radius);
@@ -865,16 +879,8 @@ public:
 #pragma region PCL可视化
 
 	// 初始化viewer
-	void initViewer(pcl::visualization::PCLVisualizer::Ptr &viewer, pcl::PointCloud<PointT>::Ptr &cloud)
-	{
-		viewer->initCameraParameters();
-		viewer->setBackgroundColor(37, 37, 37);
-		Eigen::Vector4f centroid;
-		pcl::compute3DCentroid(*cloud, centroid);
-		viewer->setCameraPosition(centroid[0], centroid[1], centroid[2] + 10.0f, centroid[0], centroid[1], centroid[2], 0, 1, 0);
-	}
-	// 初始化viewer
-	void initViewer(pcl::visualization::PCLVisualizer::Ptr &viewer, pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud)
+	template <typename PointT>
+	void initViewer(pcl::visualization::PCLVisualizer::Ptr &viewer, pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud)
 	{
 		viewer->initCameraParameters();
 		viewer->setBackgroundColor(37, 37, 37);
@@ -920,6 +926,7 @@ public:
 	}
 
 	// 在可视化工具中添加线段
+	template <typename PointT>
 	void addLine(pcl::visualization::PCLVisualizer::Ptr &viewer, PointT point1, PointT point2, std::string name = "line", int viewport = 1)
 	{
 		if (viewer->contains(name))
@@ -935,6 +942,7 @@ public:
 	}
 
 	// 在可视化工具中添加线段
+	template <typename PointT>
 	void addLine(pcl::visualization::PCLVisualizer::Ptr &viewer, PointT point1, PointT point2, int viewport)
 	{
 		std::string name = "line" + std::to_string(viewport);
@@ -950,7 +958,8 @@ public:
 		viewer->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 2, name);
 	}
 	// 添加点云 自定义hsv
-	void addCloud(pcl::visualization::PCLVisualizer::Ptr &viewer, const pcl::PointCloud<PointT>::Ptr &cloud, float hue, int viewport, int pt_size = 2)
+	template <typename PointT>
+	void addCloud(pcl::visualization::PCLVisualizer::Ptr &viewer, const pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud, float hue, int viewport, int pt_size = 2)
 	{
 		// 将HSV值转换为RGB
 		float r, g, b;
@@ -961,7 +970,8 @@ public:
 		viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, pt_size, cloud_id);
 	}
 	// 添加点云 自定义hsv  传入id
-	void addCloud(pcl::visualization::PCLVisualizer::Ptr &viewer, const pcl::PointCloud<PointT>::Ptr &cloud, float hue, int viewport, int pt_size = 2, std::string id = "cloud_src")
+	template <typename PointT>
+	void addCloud(pcl::visualization::PCLVisualizer::Ptr &viewer, const pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud, float hue, int viewport, int pt_size = 2, std::string id = "cloud_src")
 	{
 		// 将HSV值转换为RGB
 		float r, g, b;
@@ -971,7 +981,8 @@ public:
 		viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, pt_size, id);
 	}
 	// 添加点云 黑色
-	void addCloud(pcl::visualization::PCLVisualizer::Ptr &viewer, const pcl::PointCloud<PointT>::Ptr &cloud, std::string id = "cloud_src", int viewport = 1)
+	template <typename PointT>
+	void addCloud(pcl::visualization::PCLVisualizer::Ptr &viewer, const pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud, std::string id = "cloud_src", int viewport = 1)
 	{
 		pcl::visualization::PointCloudColorHandlerCustom<PointT> color(cloud, 37, 37, 37);
 		viewer->addPointCloud(cloud, color, id, viewport);
@@ -979,14 +990,16 @@ public:
 	}
 
 	// 添加点云 Z值着色
-	void addCloud(pcl::visualization::PCLVisualizer::Ptr &viewer, const pcl::PointCloud<PointT>::Ptr &cloud, int viewport, std::string axis, int pt_size = 2, std::string cloud_id = "cloud_src")
+	template <typename PointT>
+	void addCloud(pcl::visualization::PCLVisualizer::Ptr &viewer, const pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud, int viewport, std::string axis, int pt_size = 2, std::string cloud_id = "cloud_src")
 	{
 		pcl::visualization::PointCloudColorHandlerGenericField<PointT> color_handler(cloud, axis); // 按Z轴值着色
 		viewer->addPointCloud(cloud, color_handler, cloud_id, viewport);
 		viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, pt_size, cloud_id);
 	}
+	template <typename PointT>
 	void addCloudWithCustomColor(pcl::visualization::PCLVisualizer::Ptr &viewer,
-								 const typename pcl::PointCloud<PointT>::Ptr &cloud,
+								 const pcl::shared_ptr<pcl::PointCloud<PointT>> &cloud,
 								 int viewport,
 								 float x_min,
 								 float x_max,
@@ -1170,7 +1183,8 @@ public:
 	}
 
 	// 可视化簇群
-	void addClusters(pcl::visualization::PCLVisualizer::Ptr &viewer, const pcl::PointCloud<PointT>::Ptr cloud, const std::vector<pcl::PointIndices> &cluster_indices, std::string name = "cluster_", int viewport = 1)
+	template <typename PointT>
+	void addClusters(pcl::visualization::PCLVisualizer::Ptr &viewer, const pcl::shared_ptr<pcl::PointCloud<PointT>> cloud, const std::vector<pcl::PointIndices> &cluster_indices, std::string name = "cluster_", int viewport = 1)
 	{
 		// 构造颜色句柄
 		std::vector<pcl::visualization::PointCloudColorHandlerCustom<PointT>> color_handlers;
@@ -1184,7 +1198,7 @@ public:
 		// 添加点云到可视化对象中
 		for (size_t i = 0; i < cluster_indices.size(); ++i)
 		{
-			pcl::PointCloud<PointT>::Ptr cluster(new pcl::PointCloud<PointT>);
+			pcl::shared_ptr<pcl::PointCloud<PointT>> cluster(new pcl::PointCloud<PointT>);
 			for (auto index : cluster_indices[i].indices)
 				cluster->push_back(cloud->points[index]);
 			name += std::to_string(i);
@@ -1196,6 +1210,7 @@ public:
 	}
 
 	// 添加点到点的线段及打印其距离
+	template <typename PointT>
 	void addLine_point2point(pcl::visualization::PCLVisualizer::Ptr &viewer, const PointT &point1, const PointT &point2, float hue, int viewport, std::string name)
 	{
 		// 计算两点之间的距离
@@ -1232,10 +1247,11 @@ public:
 	}
 
 	// 添加点到面的线段及 打印其距离 自定义hsv
+	template <typename PointT>
 	void addLine_point2plane(pcl::visualization::PCLVisualizer::Ptr &viewer, const PointT &point, const pcl::ModelCoefficientsPtr &plane, float hue, int viewport, std::string name)
 	{
 		// 计算点到平面的距离
-		float distance = computePointToPlaneDistance(point, plane);
+		float distance = this->computePointToPlaneDistance(point, plane);
 		std::ostringstream stream;
 		stream << std::fixed << std::setprecision(3) << distance;
 		std::string distance_str = stream.str(); // 这个字符串就是保留了两位小数的距离
