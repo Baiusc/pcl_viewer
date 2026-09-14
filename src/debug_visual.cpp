@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-03-06 17:17:38
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-09-09 11:20:49
+ * @LastEditTime : 2026-09-11 16:25:10
  * @FilePath     : /pcl_viewer/src/debug_visual.cpp
  * @Description  :
  *
@@ -1097,19 +1097,8 @@ namespace algo_lidar
         return true;
     }
 
-    bool readFrameCsv_6031(const std::string &filename, PointMatrix &mat,
-                           const std::string &range_method)
+    bool readFrameCsv_6031(const std::string &filename, PointMatrix &mat)
     {
-        std::string method = range_method;
-        std::transform(method.begin(), method.end(), method.begin(),
-                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-        if (method != "v0" && method != "v1" && method != "v2" && method != "v3")
-        {
-            std::cerr << "FL6031 range_method must be v0/v1/v2/v3, got: "
-                      << range_method << std::endl;
-            return false;
-        }
-
         std::ifstream infile(filename);
         if (!infile.is_open())
         {
@@ -1117,6 +1106,8 @@ namespace algo_lidar
             return false;
         }
 
+        // ---------- CSV 字段解析辅助 ----------
+        // splitCsv：处理带引号字段的 CSV 行拆列
         auto splitCsv = [](const std::string &line)
         {
             std::vector<std::string> fields;
@@ -1151,6 +1142,7 @@ namespace algo_lidar
             return fields;
         };
 
+        // splitBy：按单字符分割（用于 candidates / echo_bins 等复合字段）
         auto splitBy = [](const std::string &text, char delimiter)
         {
             std::vector<std::string> values;
@@ -1161,6 +1153,7 @@ namespace algo_lidar
             return values;
         };
 
+        // ---------- 读取表头 ----------
         std::string line;
         if (!std::getline(infile, line))
         {
@@ -1168,6 +1161,7 @@ namespace algo_lidar
             return false;
         }
         auto header = splitCsv(line);
+        // 去掉 UTF-8 BOM（Excel 保存 CSV 时常有）
         if (!header.empty() && header[0].size() >= 3 &&
             static_cast<unsigned char>(header[0][0]) == 0xEF &&
             static_cast<unsigned char>(header[0][1]) == 0xBB &&
@@ -1179,11 +1173,14 @@ namespace algo_lidar
         for (std::size_t i = 0; i < header.size(); ++i)
             column[header[i]] = i;
 
+        // ---------- 必需列校验 ----------
+        // 列名统一、无算法前缀；具体算法由 "algorithm" 列区分。
+        // 峰位实际存放在 center_bin（peak 列由生成脚本固定写 0，仅作兼容字段保留）。
         const std::vector<std::string> required = {
             "timestamp", "row", "col", "horizontal_deg", "vertical_deg",
-            "bin_width_ps", "time_zero_ps", method + "_valid",
-            method + "_distance_m", method + "_peak", method + "_width_bin",
-            method + "_timing_bin", method + "_candidate_count", method + "_candidates"};
+            "bin_width_ps", "time_zero_ps",
+            "valid", "distance_m", "center_bin", "width_bin", "timing_bin",
+            "candidate_count", "candidates"};
         for (const auto &name : required)
         {
             if (column.find(name) == column.end())
@@ -1193,12 +1190,13 @@ namespace algo_lidar
             }
         }
 
+        // ---------- 行级数据结构 ----------
         struct Candidate
         {
-            float center = -1.0f;
-            float timing = -1.0f;
-            float amplitude = 0.0f;
-            float width = 0.0f;
+            float center = -1.0f;   // 峰位（bin）
+            float timing = -1.0f;   // CFD 定时（bin）
+            float amplitude = 0.0f; // 峰高
+            float width = 0.0f;     // FWHM（bin）
         };
         struct FramePt6031
         {
@@ -1206,36 +1204,41 @@ namespace algo_lidar
             int col = 0;
             int valid = 0;
             uint32_t timestamp = 0;
-            float horizontal = 0.0f;
-            float vertical = 0.0f;
+            float horizontal = 0.0f; // 水平角（度）
+            float vertical = 0.0f;   // 俯仰角（度）
             float binWidthPs = 1000.0f;
             float timeZeroPs = 0.0f;
-            float distance = 0.0f;
-            float peak = 0.0f;
-            float width = 0.0f;
-            float timing = -1.0f;
+            float distance = 0.0f;  // 距离（m）
+            float centerBin = 0.0f; // 峰位（bin）
+            float width = 0.0f;     // FWHM（bin）
+            float timing = -1.0f;   // 最优候选的 timing（bin）
             int candidateCount = 0;
             std::vector<Candidate> candidates;
         };
 
-        const std::string prefix = method + "_";
         std::vector<FramePt6031> points;
         int maxRow = -1;
         int maxCol = -1;
         std::size_t lineNumber = 1;
         std::size_t skipped = 0;
+
+        // ---------- 逐行解析数据 ----------
         while (std::getline(infile, line))
         {
             ++lineNumber;
             if (line.empty())
                 continue;
             const auto fields = splitCsv(line);
+
             auto get = [&](const std::string &name) -> const std::string &
             {
                 static const std::string empty;
                 const auto it = column.find(name);
-                return (it != column.end() && it->second < fields.size()) ? fields[it->second] : empty;
+                return (it != column.end() && it->second < fields.size())
+                           ? fields[it->second]
+                           : empty;
             };
+
             try
             {
                 FramePt6031 p;
@@ -1248,29 +1251,52 @@ namespace algo_lidar
                 p.vertical = std::stof(get("vertical_deg"));
                 p.binWidthPs = std::stof(get("bin_width_ps"));
                 p.timeZeroPs = std::stof(get("time_zero_ps"));
-                p.valid = std::stoi(get(prefix + "valid"));
-                p.distance = std::stof(get(prefix + "distance_m"));
-                p.peak = std::stof(get(prefix + "peak"));
-                p.width = std::stof(get(prefix + "width_bin"));
-                p.timing = std::stof(get(prefix + "timing_bin"));
-                p.candidateCount = std::stoi(get(prefix + "candidate_count"));
+                p.valid = std::stoi(get("valid"));
+                p.distance = std::stof(get("distance_m"));
+                p.centerBin = std::stof(get("center_bin"));
+                p.width = std::stof(get("width_bin"));
+                p.timing = std::stof(get("timing_bin"));
+                p.candidateCount = std::stoi(get("candidate_count"));
 
-                for (const auto &encoded : splitBy(get(prefix + "candidates"), ';'))
+                // candidates 支持两种格式：
+                //   1) 完整版（FPGA 系列，由候选算法适配层生成）：
+                //        center_bin|timing_bin|amplitude|prominence|width|snr|score|support
+                //   2) 精简版（v0~v3 / fpga_v0_1）：
+                //        peak_bin|timing_bin
+                for (const auto &encoded : splitBy(get("candidates"), ';'))
                 {
                     if (encoded.empty())
                         continue;
                     const auto values = splitBy(encoded, '|');
-                    if (values.size() < 8)
-                        continue;
                     Candidate candidate;
-                    candidate.center = std::stof(values[0]);
-                    candidate.timing = std::stof(values[1]);
-                    candidate.amplitude = std::stof(values[2]);
-                    candidate.width = std::stof(values[4]);
+                    if (values.size() >= 8)
+                    {
+                        candidate.center = std::stof(values[0]);
+                        candidate.timing = std::stof(values[1]);
+                        candidate.amplitude = std::stof(values[2]);
+                        // values[3] = prominence
+                        candidate.width = std::stof(values[4]);
+                        // values[5]=snr, values[6]=score, values[7]=support
+                    }
+                    else if (values.size() >= 2)
+                    {
+                        candidate.center = std::stof(values[0]);
+                        candidate.timing = std::stof(values[1]);
+                        // 精简版未提供 amplitude / width，回退到 CSV 的同名列
+                        candidate.amplitude = p.centerBin;
+                        candidate.width = p.width;
+                    }
+                    else
+                    {
+                        continue;
+                    }
                     p.candidates.push_back(candidate);
                 }
+
+                // 兜底：candidates 为空但 timing 有效时，构造单候选
                 if (p.candidates.empty() && p.valid != 0 && p.timing >= 0.0f)
-                    p.candidates.push_back(Candidate{p.timing, p.timing, p.peak, p.width});
+                    p.candidates.push_back(
+                        Candidate{p.centerBin, p.timing, p.centerBin, p.width});
 
                 points.push_back(std::move(p));
                 maxRow = std::max(maxRow, points.back().row);
@@ -1291,16 +1317,37 @@ namespace algo_lidar
             return false;
         }
 
+        // ---------- 构造 PointMatrix ----------
         mat.assign(static_cast<std::size_t>(maxRow + 1),
                    std::vector<PointData>(static_cast<std::size_t>(maxCol + 1)));
+
         constexpr float PI = 3.14159265358979323846f;
         constexpr float LIGHT_SPEED_M_S = 299792458.0f;
         int validCount = 0;
         int multiCount = 0;
+
+        // 从 CSV 的 algorithm 列读取算法名，用于打印统计信息
+        std::string algorithmName;
+        if (auto it = column.find("algorithm"); it != column.end())
+        {
+            // 只需读第一行即可（整张 CSV 是单算法文件）
+            std::ifstream head(filename);
+            std::string firstDataLine;
+            std::getline(head, firstDataLine); // header
+            std::getline(head, firstDataLine); // first data row
+            if (!firstDataLine.empty())
+            {
+                const auto fields = splitCsv(firstDataLine);
+                if (it->second < fields.size())
+                    algorithmName = fields[it->second];
+            }
+        }
+
         for (const auto &p : points)
         {
             if (p.row < 0 || p.col < 0 || p.row > maxRow || p.col > maxCol)
                 continue;
+
             PointData pd{};
             pd.pixel_idx = static_cast<uint16_t>(p.row);
             pd.slot_idx = static_cast<uint16_t>(p.col);
@@ -1309,20 +1356,29 @@ namespace algo_lidar
             pd.omega_rad = p.horizontal * PI / 180.0f;
             pd.theta = p.vertical;
             pd.theta_rad = p.vertical * PI / 180.0f;
+
+            // distance_m 优先；若为空/0，则用 timing × bin_width_ps 反推
             float selectedDistance = p.distance;
             if (!(selectedDistance > 0.0f) && p.timing >= 0.0f)
             {
-                const float tofSeconds = (p.timeZeroPs + p.timing * p.binWidthPs) * 1.0e-12f;
+                const float tofSeconds =
+                    (p.timeZeroPs + p.timing * p.binWidthPs) * 1.0e-12f;
                 selectedDistance = tofSeconds * LIGHT_SPEED_M_S * 0.5f;
             }
             pd.r = selectedDistance;
-            pd.peak = static_cast<uint16_t>(std::clamp(std::lround(p.peak), 0L, 65535L));
-            const float intensity = std::clamp(p.peak / 4095.0f * 255.0f, 0.0f, 255.0f);
+
+            // center_bin 表示峰位（bin），映射到 0~4095 再归一化到 0~255 作为强度。
+            pd.peak = static_cast<uint16_t>(
+                std::clamp(std::lround(p.centerBin), 0L, 65535L));
+            const float intensity =
+                std::clamp(p.centerBin / 4095.0f * 255.0f, 0.0f, 255.0f);
             pd.intensity = static_cast<uint8_t>(std::lround(intensity));
             pd.reflect = intensity / 255.0f;
+
             pd.is_valid = p.valid != 0 && std::isfinite(pd.r) &&
                           pd.r > 0.0f && pd.r < 1000.0f;
             pd.select_idx = 0;
+
             if (pd.is_valid)
             {
                 pd.x = pd.r * std::cos(pd.theta_rad) * std::cos(pd.omega_rad);
@@ -1331,6 +1387,7 @@ namespace algo_lidar
                 ++validCount;
             }
 
+            // 每个候选转成一条 Pulse（tof 单位 ps，与原实现一致）
             for (const auto &candidate : p.candidates)
             {
                 if (candidate.timing < 0.0f)
@@ -1343,13 +1400,20 @@ namespace algo_lidar
             multiCount += static_cast<int>(pd.list_pulse.size() >= 2);
             pd.is_tail_pt = p.width > 0.0f && p.width < 2.0f;
 
-            mat[static_cast<std::size_t>(p.row)][static_cast<std::size_t>(p.col)] = std::move(pd);
+            mat[static_cast<std::size_t>(p.row)][static_cast<std::size_t>(p.col)] =
+                std::move(pd);
         }
 
-        std::cout << "FL6031 Frame CSV(" << method << "): " << points.size()
+        std::cout << "FL6031 Frame CSV";
+        if (!algorithmName.empty())
+            std::cout << "(" << algorithmName << ")";
+        std::cout << ": " << points.size()
                   << " 行, 矩阵 " << maxRow + 1 << "x" << maxCol + 1
-                  << ", 有效点 " << validCount << ", 多回波点 " << multiCount
-                  << ", 跳过 " << skipped << std::endl;
+                  << ", 有效点 " << validCount
+                  << ", 多回波点 " << multiCount
+                  << ", 跳过 " << skipped
+                  << std::endl;
+
         return true;
     }
 

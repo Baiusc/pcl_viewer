@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-09-09 16:05:30
+ * @LastEditTime : 2026-09-14 14:20:30
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -48,7 +48,7 @@ void testConvert()
 	}
 }
 
-// 获取文件夹中所有符合后缀的文件路径
+// 获取文件夹中所有符合后缀的文件路径（非递归，兼容旧调用）
 std::vector<std::string> getFullFilePath(const std::string &folder, const std::string &postfix)
 {
 	std::vector<std::string> filePaths;
@@ -63,13 +63,20 @@ std::vector<std::string> getFullFilePath(const std::string &folder, const std::s
 	return filePaths;
 }
 
+// 判断是否为 FL6031 单算法 Frame CSV（由 6031_直方图算单帧Csv_多版算法选一个.py 生成）。
+// 特征：表头含 center_bin / timing_bin / algorithm / echo_bins，且不含旧版前缀列。
 bool isFrameCsv6031(const std::string &filename)
 {
 	std::ifstream input(filename);
 	std::string header;
-	return std::getline(input, header) &&
-	       header.find("v0_distance_m") != std::string::npos &&
-	       header.find("v3_distance_m") != std::string::npos;
+	if (!std::getline(input, header))
+		return false;
+
+	// 新版 CSV 的判别依据（同时存在才算 6031 Frame CSV）
+	return header.find("center_bin") != std::string::npos &&
+	       header.find("timing_bin") != std::string::npos &&
+	       header.find("algorithm") != std::string::npos &&
+	       header.find("echo_bins") != std::string::npos;
 }
 
 /// @brief 获取指定目录下匹配后缀的文件完整路径
@@ -119,7 +126,7 @@ std::vector<std::string> getFullFilePath(const std::string &folder, const std::s
     return filePaths;
 }
 
-// 托尾点滤波测试 
+// 托尾点滤波测试
 void filtTailPoints(PointMatrix& mat) {
     // 1. 创建滤波器实例
     algo_lidar::TailPointFilter filter;
@@ -145,18 +152,17 @@ int testShowCloud()
 	Ground_I algo_gnd;
 	CalibReflect algo_reflect;
 	// 设置文件夹路径和文件后缀
-	// std::string folder = "../../algo_solid_lidar/data/固态雷达range模式data"; // 数据文件夹路径
+	// std::string folder = "../../algo_solid_lidar/data/固态雷达range模式data/6031_range_csv_output"; // 数据文件夹路径
 	std::string folder = "../../data/固态雷达标定数据/6031直方图算法效果对比"; // 数据文件夹路径
 	// std::string folder = "/mnt/windows_share/0_标定_bai/项目_固态雷达/6031直方图和点云/6031左墙右空点云";
 	// std::string folder = "../../data/beta薄款雷达点云问题分析/2026-08-19何工适配800线版本在工位"; // 数据文件夹路径
 	// std::string folder = "../data/地面修复场景"; // 数据文件夹路径
 	// std::string postfix = ".txt";	// 文件后缀，按需求替换
-	// std::string postfix = ".pcd";	
-	// std::string postfix = ".csv";	
-	std::string postfix = "";	
-	// FL6031 Frame CSV 的距离算法选择：v0 / v1 / v2 / v3。
-	// 仅当 CSV 表头含 v0_distance_m...v3_distance_m 时生效。
-	const std::string range_csv_6031_method = "v3";
+	// std::string postfix = ".pcd";
+	// std::string postfix = ".csv";
+	std::string postfix = "";
+	// FL6031 Frame CSV 的算法由文件自身的 algorithm 列标识，加载时无需再指定。
+
 	// 6532 标定程序输出；当前数据只有块内 4x8 偏置，默认不启用全局/块间/增益项。
 	const std::string calibration_csv = "../../data/固态雷达标定数据/20260902_6532range_data_公司走廊2%靶板多距离/range6532_calibration_result_all_stages/range6532_distance_calibration.csv";
 	Range6532CalibrationTable calibration_table;
@@ -167,12 +173,12 @@ int testShowCloud()
 	std::vector<float> list_sa;
 	std::vector<std::vector<float>> list_r2; // 固态雷达 距离偏差表
 	loadListFromFile(list_r, "../data/param/list_r.txt"); // 读取距离标定参数
-	
+
 	loadListFromFile(list_sa, "../data/param/list_sa.txt"); // 读取水平角标定参数
 	loadListFromFile(list_r2, "../data/param/map_single.csv"); // 读取固态雷达距离偏差表
 	std::map<uint16_t, std::map<float, std::array<float, 5>>> map_bin;
 	binary_storage::loadMapFromBinary("../data/map_device_0812_sum10_extend54.bin", map_bin);
-	algo_reflect._map = map_bin; 
+	algo_reflect._map = map_bin;
 	// 读取点云（同时支持 .pcd 与 Frame*.csv 原始点云）
 	std::vector<std::string> filePaths = getFullFilePath(folder, postfix, false);
 	// std::vector<std::string> filePaths;
@@ -203,17 +209,21 @@ int testShowCloud()
 		{
 			if (is_6031_frame_csv)
 			{
-				// readFrameCsv_6031(filename, mat_v0, "v0");
-				// readFrameCsv_6031(filename, mat_v1, "v1");
-				// readFrameCsv_6031(filename, mat_v2, "v2");
-				// readFrameCsv_6031(filename, mat_v3, "v3");
-				readFrameCsv_6031(filename, mat_origin, "v1");
-			}
+				// 6031 单算法 CSV：一次加载即可；如需对比不同算法，
+				// 分别加载对应算法的 CSV 文件，而不是在同一文件上切换 method。
+				readFrameCsv_6031(filename, mat_origin);
 
+				// 如需多算法对比：请准备 4 个各自只含一种 algorithm 的 CSV，
+				// 例如 Frame6031_v0.csv / _v1.csv / _v2.csv / _v3.csv，再分别加载：
+				// readFrameCsv_6031(dir + "/Frame6031_v0.csv", mat_v0);
+				// readFrameCsv_6031(dir + "/Frame6031_v1.csv", mat_v1);
+				// readFrameCsv_6031(dir + "/Frame6031_v2.csv", mat_v2);
+				// readFrameCsv_6031(dir + "/Frame6031_v3.csv", mat_v3);
+			}
 			else
 				readFrameCsv(filename, mat_origin);
 			// readPcdData(filename + ".pcd", mat_pcd);
-			// readFrameCsv(filename, mat_p0, "p0_only");   
+			// readFrameCsv(filename, mat_p0, "p0_only");
 			// readFrameCsv(filename, mat_p1, "p1_only");
 		}
 		else if (fs::path(filename).extension() == ".pcd")
@@ -229,11 +239,11 @@ int testShowCloud()
 		// mat_p0 = buildMatByPulseIdx(mat_origin, 0); // 以第1回波重建点云
 		// mat_p1 = buildMatByPulseIdx(mat_origin, 1); // 以第2回波重建点云
 
-		// // 地面反射点修复 
+		// // 地面反射点修复
 		// mat_src = mat_origin;
 		// algo_gnd.doRepair(mat_src);
 		// 距离和水平角联合标定
-		// mat_calib = applyRsaOffset(mat_src, list_r, list_sa); 
+		// mat_calib = applyRsaOffset(mat_src, list_r, list_sa);
 		// 6532 模组标定
 		if (is_6031_frame_csv)
 		{
@@ -251,9 +261,9 @@ int testShowCloud()
 		}
 		// 反射率标定
 		// algo_reflect.calcCloudIntensity(mat_calib);
-		// m_intensity_src_name = "r"; // 设置点云强度着色来源为r
+		m_intensity_src_name = "r"; // 设置点云强度着色来源为r
 		// m_intensity_src_name = "z"; // 设置点云强度着色来源为z
-		m_intensity_src_name = "peak"; // 设置点云强度着色来源为峰值
+		// m_intensity_src_name = "peak"; // 设置点云强度着色来源为峰值
 		// m_intensity_src_name = "timestamp"; // 设置点云强度着色来源为时间戳
 		// m_intensity_src_name = "intensity"; // 设置点云强度着色来源为标定后的反射率
 		// filtTailPoints(mat_src); // 托尾点滤波
@@ -273,9 +283,9 @@ int testShowCloud()
 		// }
 
 		// 按行列截取矩阵数据
-		// mat_roi =  extractData(mat_origin, 0, 150, 200, 250);
+		mat_roi =  extractData(mat_origin, 0, 150, 100, 250);
 		// 转换为 pcl 点云
-		auto cloud_pcl = mat2xyzi(mat_origin, true);
+		auto cloud_pcl = mat2xyzi(mat_roi, true);
 		// 快速欧式聚类分割
 		float clusterTolerance = 0.5f;
 		std::vector<pcl::PointIndices> cluster_fec;
@@ -332,35 +342,35 @@ int testShowCloud()
 int main(int argc, char **argv)
 {
 	// MSVC 设置控制台输出为 UTF-8
-	//  SetConsoleOutputCP(CP_UTF8);
-	// 直接打开 FL6031 Frame CSV：
-	// PCL_VIEWER --fl6031-csv Frame6031_1.csv --range-method v3
-	// 加 --validate-only 可只验证解析/XYZ，不打开 GUI。
+	// SetConsoleOutputCP(CP_UTF8);
+
+	// 直接打开 FL6031 单算法 Frame CSV：
+	//     PCL_VIEWER --fl6031-csv Frame6031.csv [--validate-only]
+	// CSV 内的 algorithm 列标明所使用的算法；加 --validate-only 可只验证解析/XYZ，
+	// 不打开 GUI。
 	if (argc >= 3 && std::string(argv[1]) == "--fl6031-csv")
 	{
 		const std::string filename = argv[2];
-		std::string method = "v3";
 		bool validate_only = false;
 		for (int i = 3; i < argc; ++i)
 		{
 			const std::string arg = argv[i];
-			if (arg == "--range-method" && i + 1 < argc)
-				method = argv[++i];
-			else if (arg == "--validate-only")
+			if (arg == "--validate-only")
 				validate_only = true;
 		}
 
 		PointMatrix mat;
-		if (!readFrameCsv_6031(filename, mat, method))
+		if (!readFrameCsv_6031(filename, mat))
 			return 2;
 		const auto cloud = mat2xyzi(mat, true);
-		std::cout << "FL6031 XYZ cloud(" << method << "): " << cloud->size()
+		std::cout << "FL6031 XYZ cloud: " << cloud->size()
 		          << " points" << std::endl;
 		if (validate_only)
 			return 0;
-		showCloud(cloud, "FL6031_" + method);
+		showCloud(cloud, "FL6031");
 		return 0;
 	}
+
 	testShowCloud();
 	// testConvert(); // 测试debug模拟点云格式转化
 }
