@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-02-17 10:32:59
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-07-14 14:50:07
+ * @LastEditTime : 2026-09-14 17:34:09
  * @FilePath     : /pcl_viewer/src/point_type.cpp
  * @Description  :
  *
@@ -1401,12 +1401,57 @@ namespace algo_lidar
             }
         }
     }
-    
+
     PointMatrix applyROffset(const PointMatrix &mat,
                              const std::vector<std::vector<float>> &list_r_offset)
     {
         PointMatrix result = mat;            // 深拷贝，不修改原矩阵
         resetROffset(result, list_r_offset); // 复用 reset 逻辑，避免代码重复
         return result;
+    }
+    PointMatrix flipMat(const PointMatrix &mat, bool flip_rows, bool flip_cols)
+    {
+        if (mat.empty())
+        {
+            return PointMatrix{};
+        }
+
+        PointMatrix result = mat;
+
+        if (flip_rows)
+        {
+            std::reverse(result.begin(), result.end());
+        }
+
+        if (flip_cols)
+        {
+            for (auto &row : result)
+            {
+                std::reverse(row.begin(), row.end());
+            }
+        }
+
+        return result;
+    }
+
+    void flipMatInPlace(PointMatrix &mat, bool flip_rows, bool flip_cols)
+    {
+        if (mat.empty())
+        {
+            return;
+        }
+
+        if (flip_rows)
+        {
+            std::reverse(mat.begin(), mat.end());
+        }
+
+        if (flip_cols)
+        {
+            for (auto &row : mat)
+            {
+                std::reverse(row.begin(), row.end());
+            }
+        }
     }
 }

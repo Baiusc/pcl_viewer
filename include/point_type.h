@@ -2,11 +2,11 @@
  * @Author       : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
  * @Date         : 2025-02-17 10:07:58
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-09-09 13:25:33
+ * @LastEditTime : 2026-09-14 17:33:10
  * @FilePath     : /pcl_viewer/include/point_type.h
- * @Description  : 
- * 
- * Copyright (c) 2025 by vitalchem, All Rights Reserved. 
+ * @Description  :
+ *
+ * Copyright (c) 2025 by vitalchem, All Rights Reserved.
  */
 
 #pragma once
@@ -14,7 +14,7 @@
 #include <vector>
 #include <cmath>
 #include <cstdint>
-#include <string> 
+#include <string>
 namespace algo_lidar
 {
     // 前端的极坐标点类型
@@ -25,8 +25,8 @@ namespace algo_lidar
             uint32_t u;
             float f;
         } r, theta_rad, omega_rad; // 极坐标的距离, 俯仰角（弧度），水平角（弧度）
-        uint8_t intensity;      // 强度
-        uint16_t peak;      // 峰值
+        uint8_t intensity;         // 强度
+        uint16_t peak;             // 峰值
     };
     // 前端的笛卡尔点类型
     struct CartesianPoint
@@ -54,17 +54,17 @@ namespace algo_lidar
     // 算法点类型
     struct PointData
     {
-        uint16_t pixel_idx;           // 行号
-        uint16_t slot_idx;           // 列号
-        uint16_t peak;           // 峰值
-        float r;           // 距离
-        float theta_rad;   // 俯仰角（弧度）
-        float omega_rad;   // 水平角（弧度）
-        float theta;       // 俯仰角（角度）
-        float slot_ang;    // 水平角（角度）
-        float reflect; // 反射率 0~1.0
+        uint16_t pixel_idx; // 行号
+        uint16_t slot_idx;  // 列号
+        uint16_t peak;      // 峰值
+        float r;            // 距离
+        float theta_rad;    // 俯仰角（弧度）
+        float omega_rad;    // 水平角（弧度）
+        float theta;        // 俯仰角（角度）
+        float slot_ang;     // 水平角（角度）
+        float reflect;      // 反射率 0~1.0
         uint32_t timestamp; // 时间戳
-        uint8_t intensity; // 强度 0~255
+        uint8_t intensity;  // 强度 0~255
         float x;
         float y;
         float z;
@@ -99,14 +99,14 @@ namespace algo_lidar
 
     struct Range6532CalibrationApplyOptions
     {
-        bool apply_global_offset = false;      // 全局项在单距离拟合中可能不可辨识，默认不使用。
+        bool apply_global_offset = false;     // 全局项在单距离拟合中可能不可辨识，默认不使用。
         bool apply_inter_block_offset = true; // 是否应用块间偏置。
-        bool apply_gain = false; // 是否应用距离比例误差（斜率）。
+        bool apply_gain = false;              // 是否应用距离比例误差（斜率）。
     };
 
     /// @brief 读取 6532 标定程序输出的 range6532_distance_calibration.csv。
     bool loadRange6532CalibrationCsv(const std::string &filename,
-                                      Range6532CalibrationTable &table);
+                                     Range6532CalibrationTable &table);
 
     /// @brief 原地应用 6532 的块内/块间距离标定，并同步更新 r、xyz 和选中回波 tof。
     void applyRange6532Calibration(PointMatrix &mat,
@@ -114,7 +114,7 @@ namespace algo_lidar
                                    const Range6532CalibrationApplyOptions &options = {});
 
     // 矩阵转置
-    PointMatrix transMat(const PointMatrix& mat_src);
+    PointMatrix transMat(const PointMatrix &mat_src);
 
     // 将 PointMatrix 转换为 8 位单通道灰度图并保存为 BMP 格式
     void saveMatAsBMP(const PointMatrix &mat, const std::string &filename);
@@ -169,7 +169,7 @@ namespace algo_lidar
     void resetOmegaByListK(PointMatrix &mat, const std::vector<float> &list_k, int start_slot);
 
     // 重载方法 2：sa_offset 是单一的浮动值，mat 改为 std::vector<PointData> pts
-    void resetSaOffset(std::vector<PointData>& pts, float sa_offset);
+    void resetSaOffset(std::vector<PointData> &pts, float sa_offset);
 
     // 对目标矩阵按行重写 sa_offset，并重新计算点数据
     void resetSaOffset(PointMatrix &mat, const std::vector<float> &sa_offset);
@@ -212,6 +212,11 @@ namespace algo_lidar
     /// @return 加载的 PointMatrix。如果加载失败，则返回一个空的 PointMatrix。
     PointMatrix load_mat_by_json(const std::string &filename);
 
+    // 对 PointMatrix 的行和列进行取反（上下 / 左右翻转）
+    PointMatrix flipMat(const PointMatrix &mat, bool flip_rows, bool flip_cols);
+
+    // 原地对 PointMatrix 进行取反
+    void flipMatInPlace(PointMatrix &mat, bool flip_rows, bool flip_cols);
     class Converter
     {
     public:
@@ -226,9 +231,8 @@ namespace algo_lidar
         // 生成src数据 (debug用)
         static std::vector<PolarPoint> createPolarPt(int rows, int cols);
         // 将 PointMatrix 转换为 PolarPoint
-        static std::vector<PolarPoint> mat2Polar(const PointMatrix& matrix);
+        static std::vector<PolarPoint> mat2Polar(const PointMatrix &matrix);
         // 辅助函数：将 PointData 转换为 PolarPoint
-        static PolarPoint buildPolarPt(const PointData& point);
-
+        static PolarPoint buildPolarPt(const PointData &point);
     };
 }
