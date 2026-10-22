@@ -76,6 +76,35 @@ namespace algo_lidar
 
     using PointMatrix = std::vector<std::vector<PointData>>;
 
+    // 6532 老版 ROI0 逐像素标定表（128 行 x 192 列）。
+    struct Range6532Roi0PixelCalibration
+    {
+        std::array<std::array<float, 192>, 128> intensity_reference{};
+        std::array<std::array<float, 192>, 128> distance_correction_m{};
+        std::array<std::array<bool, 192>, 128> supported{};
+    };
+
+    // 由 0.99 m 白墙拟合的全局 time-peak-walk 模型：dr = offset + slope * ln(I/table_a)。
+    struct Range6532TimeWalkModel
+    {
+        bool enabled = true;
+        float offset_m = 0.49795377f;
+        float log_slope_m = 0.06324319f;
+        float min_intensity_ratio = 0.002f;
+        float max_intensity_ratio = 1.05f;
+    };
+
+    /// @brief 读取 parse_6532_legacy_calib_bin.py 输出的 roi0_pixel_tables.csv。
+    bool loadRange6532Roi0PixelCalibrationCsv(
+        const std::string &filename,
+        Range6532Roi0PixelCalibration &table);
+
+    /// @brief 应用 table_b 逐像素偏置，并用 table_a 归一化回波强度后补偿 time-peak-walk。
+    void applyRange6532Roi0PixelCalibration(
+        PointMatrix &mat,
+        const Range6532Roi0PixelCalibration &table,
+        const Range6532TimeWalkModel &time_walk = {});
+
     // 6532 标定程序输出的 range6532_distance_calibration.csv 对应的参数表，单位统一为 m。
     struct Range6532CalibrationTable
     {

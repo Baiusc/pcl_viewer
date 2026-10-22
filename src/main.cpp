@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-09-20 11:20:46
+ * @LastEditTime : 2026-10-22 10:49:54
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -79,6 +79,19 @@ bool isFrameCsv6031(const std::string &filename)
 	       header.find("echo_bins") != std::string::npos;
 }
 
+// 6532 Frame CSV 由 range 模式解析工程输出，包含 roi/行列/回波原始距离字段。
+bool isFrameCsv6532(const std::string &filename)
+{
+	std::ifstream input(filename);
+	std::string header;
+	if (!std::getline(input, header))
+		return false;
+	return header.find("roi") != std::string::npos &&
+	       header.find("行row") != std::string::npos &&
+	       header.find("列col") != std::string::npos &&
+	       header.find("p0_dist_rp_raw") != std::string::npos;
+}
+
 /// @brief 获取指定目录下匹配后缀的文件完整路径
 /// @param folder 根目录路径
 /// @param postfix 文件后缀（如 ".txt"，空则匹配所有文件）
@@ -152,9 +165,10 @@ int testShowCloud()
 	Ground_I algo_gnd;
 	CalibReflect algo_reflect;
 	// 设置文件夹路径和文件后缀
+	std::string folder = "../../data/固态雷达标定数据/6532标定算法效果对比"; // 数据文件夹路径
 	// std::string folder = "../../algo_solid_lidar/data/固态雷达range模式data/6031_range_csv_output_multi_algorithm"; // 数据文件夹路径
 	// std::string folder = "../../data/固态雷达标定数据/6031直方图算法效果对比"; // 数据文件夹路径
-	std::string folder = "/mnt/windows_share/0_标定_bai/项目_固态雷达/6031直方图和点云/20260918走廊26米靶板只有几个点r75c166";
+	// std::string folder = "/mnt/windows_share/0_标定_bai/项目_固态雷达/6031直方图和点云/20260918走廊26米靶板只有几个点r75c166";
 	// std::string folder = "/mnt/windows_share/0_标定_bai/项目_薄款雷达/薄款雷达_原始点云/20260917薄款雷达茶水间大楼点云异常/frame_8";
 	// std::string folder = "../../data/beta薄款雷达点云问题分析/2026-08-19何工适配800线版本在工位"; // 数据文件夹路径
 	// std::string folder = "../data/地面修复场景"; // 数据文件夹路径 
@@ -164,11 +178,13 @@ int testShowCloud()
 	std::string postfix = "";
 	// FL6031 Frame CSV 的算法由文件自身的 algorithm 列标识，加载时无需再指定。
 
-	// 6532 标定程序输出；当前数据只有块内 4x8 偏置，默认不启用全局/块间/增益项。
-	const std::string calibration_csv = "../../data/固态雷达标定数据/20260902_6532range_data_公司走廊2%靶板多距离/range6532_calibration_result_all_stages/range6532_distance_calibration.csv";
-	Range6532CalibrationTable calibration_table;
-	const bool has_6532_calibration = loadRange6532CalibrationCsv(calibration_csv, calibration_table);
-	const Range6532CalibrationApplyOptions calibration_options{};
+	// 6532 老版 ROI0 逐像素标定表；只在确认输入为 6532 Frame CSV 时应用。
+	const std::string calibration_csv =
+		"../../algo_solid_lidar/build/calib_data_legacy_parse/roi0_pixel_tables.csv";
+	Range6532Roi0PixelCalibration calibration_table;
+	const Range6532TimeWalkModel time_walk_model{}; // enabled=false 可只观察 table_b 偏置效果。
+	bool has_6532_calibration = false;
+	bool tried_6532_calibration = false;
 
 	std::vector<float> list_r;
 	std::vector<float> list_sa;
@@ -204,6 +220,14 @@ int testShowCloud()
 		std::string filename = filePaths[i];
 		const bool is_6031_frame_csv =
 			fs::path(filename).extension() == ".csv" && isFrameCsv6031(filename);
+		const bool is_6532_frame_csv =
+			fs::path(filename).extension() == ".csv" && isFrameCsv6532(filename);
+		if (is_6532_frame_csv && !tried_6532_calibration)
+		{
+			has_6532_calibration =
+				loadRange6532Roi0PixelCalibrationCsv(calibration_csv, calibration_table);
+			tried_6532_calibration = true;
+		}
 		// 读取脉冲数据文件
 		PointMatrix mat_origin, mat_roi, mat_calib, mat_p0, mat_p1, mat_pcd, mat_v0, mat_v1, mat_v2, mat_v3;
 		if (fs::path(filename).extension() == ".csv")
@@ -214,12 +238,6 @@ int testShowCloud()
 				// 分别加载对应算法的 CSV 文件，而不是在同一文件上切换 method。
 				readFrameCsv_6031(filename, mat_origin);
 
-				// 如需多算法对比：请准备 4 个各自只含一种 algorithm 的 CSV，
-				// 例如 Frame6031_v0.csv / _v1.csv / _v2.csv / _v3.csv，再分别加载：
-				// readFrameCsv_6031(dir + "/Frame6031_v0.csv", mat_v0);
-				// readFrameCsv_6031(dir + "/Frame6031_v1.csv", mat_v1);
-				// readFrameCsv_6031(dir + "/Frame6031_v2.csv", mat_v2);
-				// readFrameCsv_6031(dir + "/Frame6031_v3.csv", mat_v3);
 			}
 			else
 				readFrameCsv(filename, mat_origin);
@@ -248,13 +266,12 @@ int testShowCloud()
 		// 6532 模组标定
 		if (is_6031_frame_csv)
 		{
-			// 6031 CSV 已按所选算法计算距离，不套用 6532 的分块标定表。
-			mat_calib = mat_origin;
+			mat_calib = applyROffset(mat_origin, list_r2);
 		}
-		else if (has_6532_calibration)
+		else if (is_6532_frame_csv && has_6532_calibration)
 		{
 			mat_calib = mat_origin;
-			applyRange6532Calibration(mat_calib, calibration_table, calibration_options);
+			applyRange6532Roi0PixelCalibration(mat_calib, calibration_table, time_walk_model);
 		}
 		else
 		{
@@ -299,7 +316,8 @@ int testShowCloud()
 		// 行列同时取反
 		// algo_lidar::flipMatInPlace(mat_origin, true, true);
 		showCloud(mat2xyzi(mat_origin, true), cloud_name + "_origin"); // 可视化
-		// showCloud(mat2xyzi(mat_calib, true), cloud_name + "_calib"); // 可视化
+		if (is_6532_frame_csv && has_6532_calibration)
+			showCloud(mat2xyzi(mat_calib, true), cloud_name + "_calib"); // 6532 标定后点云
 		// showCloud2(mat2xyzi(mat_origin, false), mat2xyzi(mat_calib,true),cloud_name + "_origin_calib"); // 可视化
 		// showCloud3(mat2xyzi(mat_origin), mat2xyzi(mat_calib,true), mat2xyzi(mat_pcd), cloud_name + "_origin;calib;pcd"); // 可视化
 		// showCloud2in1port(mat2pcl(mat_p0), mat2pcl(mat_p1, true), cloud_name + "_red:echo_0 ; blue:echo_1"); // 可视化

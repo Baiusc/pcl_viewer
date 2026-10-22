@@ -51,6 +51,127 @@ namespace algo_lidar
         }
     } // namespace
 
+    bool loadRange6532Roi0PixelCalibrationCsv(
+        const std::string &filename,
+        Range6532Roi0PixelCalibration &table)
+    {
+        table = {};
+        std::ifstream input(filename);
+        if (!input.is_open())
+        {
+            std::cerr << "[6532 ROI0标定] 无法打开标定表: " << filename << std::endl;
+            return false;
+        }
+
+        std::string line;
+        if (!std::getline(input, line))
+            return false;
+
+        std::vector<std::string> headers;
+        std::stringstream header_stream(line);
+        std::string field;
+        while (std::getline(header_stream, field, ','))
+        {
+            field = trim(field);
+            // 兼容 UTF-8 BOM。
+            if (headers.empty() && field.size() >= 3 &&
+                static_cast<unsigned char>(field[0]) == 0xEF &&
+                static_cast<unsigned char>(field[1]) == 0xBB &&
+                static_cast<unsigned char>(field[2]) == 0xBF)
+                field.erase(0, 3);
+            headers.push_back(field);
+        }
+
+        const auto columnIndex = [&headers](const std::string &name) -> int {
+            const auto it = std::find(headers.begin(), headers.end(), name);
+            return it == headers.end() ? -1 : static_cast<int>(it - headers.begin());
+        };
+        const int roi_col = columnIndex("roi");
+        const int row_col = columnIndex("row");
+        const int col_col = columnIndex("col");
+        const int intensity_col = columnIndex("table_a_raw");
+        const int correction_col = columnIndex("table_b_if_cm_m");
+        if (roi_col < 0 || row_col < 0 || col_col < 0 ||
+            intensity_col < 0 || correction_col < 0)
+        {
+            std::cerr << "[6532 ROI0标定] 表头缺少 roi/row/col/table_a_raw/table_b_if_cm_m" << std::endl;
+            return false;
+        }
+
+        std::size_t loaded = 0;
+        while (std::getline(input, line))
+        {
+            std::vector<std::string> fields;
+            std::stringstream stream(line);
+            while (std::getline(stream, field, ','))
+                fields.push_back(trim(field));
+            const int max_col = std::max({roi_col, row_col, col_col,
+                                          intensity_col, correction_col});
+            if (static_cast<int>(fields.size()) <= max_col)
+                continue;
+
+            try
+            {
+                const int roi = std::stoi(fields[roi_col]);
+                const int row = std::stoi(fields[row_col]);
+                const int col = std::stoi(fields[col_col]);
+                if (roi != 0 || row < 0 || row >= 128 || col < 0 || col >= 192)
+                    continue;
+                table.intensity_reference[row][col] = std::stof(fields[intensity_col]);
+                table.distance_correction_m[row][col] = std::stof(fields[correction_col]);
+                if (!table.supported[row][col])
+                    ++loaded;
+                table.supported[row][col] = true;
+            }
+            catch (const std::exception &)
+            {
+                std::cerr << "[6532 ROI0标定] 忽略格式错误行: " << line << std::endl;
+            }
+        }
+
+        std::cout << "[6532 ROI0标定] 已加载 " << loaded << "/24576 个像素: "
+                  << filename << std::endl;
+        return loaded == 128U * 192U;
+    }
+
+    void applyRange6532Roi0PixelCalibration(
+        PointMatrix &mat,
+        const Range6532Roi0PixelCalibration &table,
+        const Range6532TimeWalkModel &time_walk)
+    {
+        for (auto &row : mat)
+        {
+            for (auto &point : row)
+            {
+                if (!point.is_valid || point.pixel_idx >= 128 || point.slot_idx >= 192 ||
+                    !table.supported[point.pixel_idx][point.slot_idx])
+                    continue;
+
+                const auto pixel = point.pixel_idx;
+                const auto slot = point.slot_idx;
+                float correction_m = table.distance_correction_m[pixel][slot];
+
+                // table_a 是本像素的强度参考值；使用选中回波的 conv_intensity 消除像素响应差异。
+                float echo_intensity = static_cast<float>(point.peak);
+                if (point.select_idx < point.list_pulse.size())
+                    echo_intensity = point.list_pulse[point.select_idx].peak;
+                const float intensity_reference = table.intensity_reference[pixel][slot];
+                if (time_walk.enabled && echo_intensity > 0.0f && intensity_reference > 0.0f)
+                {
+                    const float ratio = std::clamp(echo_intensity / intensity_reference,
+                                                   time_walk.min_intensity_ratio,
+                                                   time_walk.max_intensity_ratio);
+                    correction_m += time_walk.offset_m + time_walk.log_slope_m * std::log(ratio);
+                }
+
+                point.r += correction_m;
+                point.is_valid = point.r > 0.0f;
+                if (point.is_valid)
+                    updateRangePoint(point);
+            }
+        }
+    }
+
     bool loadRange6532CalibrationCsv(const std::string &filename,
                                       Range6532CalibrationTable &table)
     {
