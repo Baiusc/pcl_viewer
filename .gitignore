@@ -90,4 +90,5 @@ external/
 *.pcd
 build_gdb/
 data/
-
+# 忽略 python 目录下所有包含 round 的 py 文件
+python/*_round*.py

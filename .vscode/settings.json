@@ -98,5 +98,6 @@
         "shared_mutex": "cpp",
         "valarray": "cpp"
     },
-    "C_Cpp.default.compilerPath": "/usr/bin/g++-9"
+    "C_Cpp.default.compilerPath": "/usr/bin/g++-9",
+    "python-envs.defaultEnvManager": "ms-python.python:system"
 }

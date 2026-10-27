@@ -105,6 +105,60 @@ namespace algo_lidar
         const Range6532Roi0PixelCalibration &table,
         const Range6532TimeWalkModel &time_walk = {});
 
+    // 6532 老固件 calib_data.bin：每个 ROI 依次为 table_a、table_b、tail3。
+    struct Range6532LegacyRoiCalibration
+    {
+        uint16_t rows = 0;
+        uint16_t cols = 0;
+        uint16_t physical_row_begin = 0;
+        std::vector<float> intensity_reference;
+        std::vector<float> distance_correction_cm;
+        std::array<float, 3> tail3_raw{}; // 精确自 bin 读取；语义尚未由固件源码证实。
+    };
+
+    struct Range6532LegacyCalibrationBin
+    {
+        std::array<Range6532LegacyRoiCalibration, 2> roi;
+        // 老固件 tail3 对数自变量的全局等效偏置，读取 calib_data.bin 后默认设为 12.9。
+        float log_intensity_bias = 12.9f;
+    };
+
+    /// @brief 直接读取老固件 calib_data.bin，不使用代码外的经验拟合系数。
+    bool loadRange6532LegacyCalibrationBin(
+        const std::string &filename,
+        Range6532LegacyCalibrationBin &calibration);
+
+    enum class Range6532LegacyModel
+    {
+        TableBOnly,
+        Tail3Range,
+        Tail3LnQ,
+        Tail3LnIntensity,   // 当前纯 bin 候选中最好，但 ROI1 绝对距离仍未通过。
+        Tail3LnFixed,       // 第六轮模型：ln(selected_intensity / table_a) + 12.9。
+        Tail3RangeTimesLnQ,
+        Tail3FwhmRejected, // 反例：会产生前后分层，只保留用于复现实验。
+        EmpiricalTableALog // 当前效果基准，含两个 bin 外拟合系数。
+    };
+
+    const char *range6532LegacyModelName(Range6532LegacyModel model);
+
+    struct Range6532LegacyApplyOptions
+    {
+        Range6532LegacyModel model = Range6532LegacyModel::EmpiricalTableALog;
+        float empirical_offset_m = 0.49795377f;
+        float empirical_log_slope_m = 0.06324319f;
+        float min_q = 0.002f;
+        float max_q = 1.05f;
+        bool update_relative_reflectivity = true;
+    };
+
+    /// @brief 应用可切换候选模型；tail3 的精确语义尚在反向验证中。
+    void applyRange6532LegacyCalibration(
+        PointMatrix &mat,
+        const Range6532LegacyCalibrationBin &calibration,
+        uint8_t roi,
+        const Range6532LegacyApplyOptions &options = {});
+
     // 6532 标定程序输出的 range6532_distance_calibration.csv 对应的参数表，单位统一为 m。
     struct Range6532CalibrationTable
     {

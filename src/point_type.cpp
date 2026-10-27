@@ -172,6 +172,173 @@ namespace algo_lidar
         }
     }
 
+    bool loadRange6532LegacyCalibrationBin(
+        const std::string &filename,
+        Range6532LegacyCalibrationBin &calibration)
+    {
+        calibration = {};
+        calibration.log_intensity_bias = 12.9f;
+        calibration.roi[0].rows = 128;
+        calibration.roi[0].cols = 192;
+        calibration.roi[0].physical_row_begin = 0;
+        calibration.roi[1].rows = 48;
+        calibration.roi[1].cols = 192;
+        calibration.roi[1].physical_row_begin = 16;
+
+        std::ifstream input(filename, std::ios::binary | std::ios::ate);
+        if (!input.is_open())
+        {
+            std::cerr << "[6532 legacy bin] 无法打开: " << filename << std::endl;
+            return false;
+        }
+        constexpr std::size_t expected_float_count =
+            128U * 192U * 2U + 3U + 48U * 192U * 2U + 3U;
+        const auto byte_count = input.tellg();
+        if (byte_count != static_cast<std::streamoff>(expected_float_count * sizeof(float)))
+        {
+            std::cerr << "[6532 legacy bin] 长度不符: " << byte_count
+                      << " B，预期 " << expected_float_count * sizeof(float) << " B" << std::endl;
+            return false;
+        }
+        input.seekg(0);
+
+        const auto readFloats = [&input](std::vector<float> &values, std::size_t count) {
+            values.resize(count);
+            input.read(reinterpret_cast<char *>(values.data()),
+                       static_cast<std::streamsize>(count * sizeof(float)));
+            return static_cast<bool>(input);
+        };
+        for (auto &roi : calibration.roi)
+        {
+            const std::size_t pixels = static_cast<std::size_t>(roi.rows) * roi.cols;
+            if (!readFloats(roi.intensity_reference, pixels) ||
+                !readFloats(roi.distance_correction_cm, pixels))
+                return false;
+            input.read(reinterpret_cast<char *>(roi.tail3_raw.data()),
+                       static_cast<std::streamsize>(roi.tail3_raw.size() * sizeof(float)));
+            if (!input)
+                return false;
+            for (const float value : roi.intensity_reference)
+                if (!std::isfinite(value))
+                    return false;
+            for (const float value : roi.distance_correction_cm)
+                if (!std::isfinite(value))
+                    return false;
+            for (const float value : roi.tail3_raw)
+                if (!std::isfinite(value))
+                    return false;
+        }
+        std::cout << "[6532 legacy bin] 已加载 ROI0/ROI1 的 table_a、table_b、tail3: "
+                  << filename << std::endl;
+        return true;
+    }
+
+    const char *range6532LegacyModelName(Range6532LegacyModel model)
+    {
+        switch (model)
+        {
+        case Range6532LegacyModel::TableBOnly: return "TableBOnly";
+        case Range6532LegacyModel::Tail3Range: return "Tail3Range";
+        case Range6532LegacyModel::Tail3LnQ: return "Tail3LnQ";
+        case Range6532LegacyModel::Tail3LnIntensity: return "Tail3LnIntensity";
+        case Range6532LegacyModel::Tail3LnFixed: return "Tail3LnFixed";
+        case Range6532LegacyModel::Tail3RangeTimesLnQ: return "Tail3RangeTimesLnQ";
+        case Range6532LegacyModel::Tail3FwhmRejected: return "Tail3FwhmRejected";
+        case Range6532LegacyModel::EmpiricalTableALog: return "EmpiricalTableALog";
+        }
+        return "Unknown";
+    }
+
+    void applyRange6532LegacyCalibration(
+        PointMatrix &mat,
+        const Range6532LegacyCalibrationBin &calibration,
+        uint8_t roi_index,
+        const Range6532LegacyApplyOptions &options)
+    {
+        if (roi_index >= calibration.roi.size())
+            return;
+        const auto &roi = calibration.roi[roi_index];
+        const std::size_t pixels = static_cast<std::size_t>(roi.rows) * roi.cols;
+        if (roi.intensity_reference.size() != pixels ||
+            roi.distance_correction_cm.size() != pixels)
+            return;
+
+        for (auto &row : mat)
+        {
+            for (auto &point : row)
+            {
+                if (!point.is_valid || point.slot_idx >= roi.cols ||
+                    point.pixel_idx < roi.physical_row_begin)
+                    continue;
+                const unsigned local_row = point.pixel_idx - roi.physical_row_begin;
+                if (local_row >= roi.rows)
+                    continue;
+                const std::size_t index = local_row * roi.cols + point.slot_idx;
+                if (point.select_idx >= point.list_pulse.size())
+                    continue;
+
+                const auto &pulse = point.list_pulse[point.select_idx];
+                const float reference = roi.intensity_reference[index];
+                const float q = reference > 0.0f ? pulse.peak / reference : 0.0f;
+                const auto &c = roi.tail3_raw;
+                const auto tailPolynomialCm = [&c](float x) {
+                    return (c[0] * x + c[1]) * x + c[2];
+                };
+
+                float correction_m = roi.distance_correction_cm[index] / 100.0f;
+                switch (options.model)
+                {
+                case Range6532LegacyModel::TableBOnly:
+                    break;
+                case Range6532LegacyModel::Tail3Range:
+                    correction_m += tailPolynomialCm(point.r) / 100.0f;
+                    break;
+                case Range6532LegacyModel::Tail3LnQ:
+                    if (q > 0.0f)
+                        correction_m += tailPolynomialCm(std::log(q)) / 100.0f;
+                    break;
+                case Range6532LegacyModel::Tail3LnIntensity:
+                    if (pulse.peak > 0.0f)
+                        correction_m += tailPolynomialCm(std::log(pulse.peak)) / 100.0f;
+                    break;
+                case Range6532LegacyModel::Tail3LnFixed:
+                    // 第六轮最优模型：table_a 先做像素强度归一化，再平移到 tail3 的工作区间。
+                    if (q > 0.0f)
+                    {
+                        const float x = std::log(q) + calibration.log_intensity_bias;
+                        correction_m += tailPolynomialCm(x) / 100.0f;
+                    }
+                    break;
+                case Range6532LegacyModel::Tail3RangeTimesLnQ:
+                    if (q > 0.0f)
+                        correction_m += tailPolynomialCm(point.r * std::log(q)) / 100.0f;
+                    break;
+                case Range6532LegacyModel::Tail3FwhmRejected:
+                    correction_m += tailPolynomialCm(pulse.width) / 100.0f;
+                    break;
+                case Range6532LegacyModel::EmpiricalTableALog:
+                    if (q > 0.0f)
+                    {
+                        const float q_clamped = std::clamp(q, options.min_q, options.max_q);
+                        correction_m += options.empirical_offset_m +
+                                        options.empirical_log_slope_m * std::log(q_clamped);
+                    }
+                    break;
+                }
+
+                point.r += correction_m;
+                point.is_valid = std::isfinite(point.r) && point.r > 0.0f;
+                if (!point.is_valid)
+                    continue;
+
+                // table_a 消除 ROI 发光功率和像素响应差；r^2 只做传播衰减补偿。
+                if (options.update_relative_reflectivity)
+                    point.reflect = q * point.r * point.r;
+                updateRangePoint(point);
+            }
+        }
+    }
+
     bool loadRange6532CalibrationCsv(const std::string &filename,
                                       Range6532CalibrationTable &table)
     {
