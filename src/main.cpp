@@ -2,7 +2,7 @@
  * @Author       : baizs_work_pc_ubuntu zhongshan.bai@vitalchem.com
  * @Date         : 2024-12-02 16:48:05
  * @LastEditors  : baizs_work_pc_ubuntu_kioxia zhongshan.bai@vitalchem.com
- * @LastEditTime : 2026-10-22 17:24:13
+ * @LastEditTime : 2026-10-27 14:51:10
  * @FilePath     : /pcl_viewer/src/main.cpp
  * @Description  : 算法本地测试的主程序
  *
@@ -182,17 +182,17 @@ int testShowCloud()
 	Ground_I algo_gnd;
 	CalibReflect algo_reflect;
 	// 设置文件夹路径和文件后缀
-	std::string folder = "../../data/固态雷达标定数据/6532标定算法效果对比"; // 数据文件夹路径
+	// std::string folder = "../../data/固态雷达标定数据/6532标定算法效果对比"; // 数据文件夹路径
 	// std::string folder = "../../algo_solid_lidar/data/固态雷达range模式data/6031_range_csv_output_multi_algorithm"; // 数据文件夹路径
 	// std::string folder = "../../data/固态雷达标定数据/6031直方图算法效果对比"; // 数据文件夹路径
-	// std::string folder = "/mnt/windows_share/0_标定_bai/项目_薄款雷达/薄款雷达_原始点云/20261022薄款雷达角度换位问题";
+	std::string folder = "/mnt/windows_share/0_标定_bai/项目_薄款雷达/薄款雷达_原始点云/20261027薄款雷达会议室白墙原始点云-何工软件左右颠倒问题排查800slot实际人手应该在左边";
 	// std::string folder = "/mnt/windows_share/0_标定_bai/项目_薄款雷达/薄款雷达_原始点云/20260917薄款雷达茶水间大楼点云异常/frame_8";
 	// std::string folder = "../../data/beta薄款雷达点云问题分析/2026-08-19何工适配800线版本在工位"; // 数据文件夹路径
 	// std::string folder = "../data/地面修复场景"; // 数据文件夹路径 
 	// std::string postfix = ".txt";	// 文件后缀，按需求替换 
 	// std::string postfix = ".pcd";
-	std::string postfix = ".csv";
-	// std::string postfix = "";
+	// std::string postfix = ".csv";
+	std::string postfix = "";
 	// FL6031 Frame CSV 的算法由文件自身的 algorithm 列标识，加载时无需再指定。
 
 	// 只改这一行即可切换模型；默认使用第六轮实测最优的固定对数模型。
@@ -302,7 +302,7 @@ int testShowCloud()
 		}
 		else
 		{
-			mat_calib = applyROffset(mat_origin, list_r2);
+			mat_calib = applyROffset(mat_origin, list_r);
 		}
 		// 反射率标定
 		// algo_reflect.calcCloudIntensity(mat_calib);
@@ -343,8 +343,7 @@ int testShowCloud()
 		// 行列同时取反
 		// algo_lidar::flipMatInPlace(mat_origin, true, true);
 		showCloud(mat2xyzi(mat_origin, true), cloud_name + "_origin"); // 可视化
-		if (is_6532_frame_csv && has_6532_calibration)
-			showCloud(mat2xyzi(mat_calib, true), cloud_name + "_calib"); // 6532 标定后点云
+		showCloud(mat2xyzi(mat_calib, true), cloud_name + "_calib"); // 6532 标定后点云
 		// showCloud2(mat2xyzi(mat_origin, false), mat2xyzi(mat_calib,true),cloud_name + "_origin_calib"); // 可视化
 		// showCloud3(mat2xyzi(mat_origin), mat2xyzi(mat_calib,true), mat2xyzi(mat_pcd), cloud_name + "_origin;calib;pcd"); // 可视化
 		// showCloud2in1port(mat2pcl(mat_p0), mat2pcl(mat_p1, true), cloud_name + "_red:echo_0 ; blue:echo_1"); // 可视化
