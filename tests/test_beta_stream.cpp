@@ -3,8 +3,60 @@
 #include <cstring>
 #include <iostream>
 #include <vector>
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <chrono>
+#include <thread>
+#endif
 
 #include "cloud_viewer/stream/BetaUdpStream.h"
+
+#ifndef _WIN32
+static bool testSourceFilter(const std::vector<std::uint8_t> &packet)
+{
+    using namespace std::chrono_literals;
+    int reserve = socket(AF_INET, SOCK_DGRAM, 0);
+    if (reserve < 0) return false;
+    sockaddr_in local{}; local.sin_family = AF_INET;
+    local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(reserve, reinterpret_cast<sockaddr *>(&local), sizeof(local)) != 0)
+    { close(reserve); return false; }
+    socklen_t len = sizeof(local);
+    if (getsockname(reserve, reinterpret_cast<sockaddr *>(&local), &len) != 0)
+    { close(reserve); return false; }
+    const auto port = ntohs(local.sin_port); close(reserve);
+    cloud_viewer::BetaUdpStream stream;
+    cloud_viewer::BetaUdpStream::Config config;
+    config.radarIp = "127.0.0.1"; config.localPort = port;
+    std::string error;
+    if (!stream.open(config, {}, error)) return false;
+    std::this_thread::sleep_for(200ms);
+    auto sendFrom = [&](const char *ip) {
+        int fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (fd < 0) return false;
+        sockaddr_in from{}; from.sin_family = AF_INET;
+        inet_pton(AF_INET, ip, &from.sin_addr);
+        if (bind(fd, reinterpret_cast<sockaddr *>(&from), sizeof(from)) != 0)
+        { close(fd); return false; }
+        for (int i = 0; i < 10; ++i)
+            if (sendto(fd, packet.data(), packet.size(), 0,
+                       reinterpret_cast<sockaddr *>(&local), sizeof(local)) < 0)
+            { close(fd); return false; }
+        close(fd); return true;
+    };
+    const bool sentForeign = sendFrom("127.0.0.2");
+    std::this_thread::sleep_for(200ms);
+    const auto foreign = stream.stats().packets;
+    const bool sentSelected = sendFrom("127.0.0.1");
+    std::this_thread::sleep_for(200ms);
+    const auto selected = stream.stats().packets;
+    stream.stop();
+    std::cout << "SOURCE_FILTER foreign=" << foreign << " selected=" << selected << "\n";
+    return sentForeign && sentSelected && foreign == 0 && selected == 10;
+}
+#endif
 
 int main()
 {
@@ -64,6 +116,13 @@ int main()
         return 3;
     }
 
+#ifndef _WIN32
+    if (!testSourceFilter(packet))
+    {
+        std::cerr << "BETA_TEST_FAIL source filtering\n";
+        return 4;
+    }
+#endif
     std::cout << "BETA_TEST_PASS frame=" << outFrame << " slot=" << outSlot << std::endl;
     return 0;
 }

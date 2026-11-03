@@ -5,7 +5,7 @@
             "name": "构建+编译+调试",  // 配置名称
             "type": "cppdbg",  // 调试类型
             "request": "launch",  // 请求类型：启动调试会话
-            "program": "${workspaceFolder}/build/PCL_VIEWER",  // 调试的可执行程序路径
+            "program": "${workspaceFolder}/build-lite/cloud_viewer",  // 调试的可执行程序路径
             "args": [],  // 可传递的命令行参数
             "stopAtEntry": false,  // 是否在入口停住
             "cwd": "${fileDirname}",  // 当前工作目录
@@ -25,7 +25,7 @@
             "name": "仅调试(不生成)",  // 配置名称
             "type": "cppdbg",  // 调试类型
             "request": "launch",  // 启动调试会话
-            "program": "${workspaceFolder}/build/PCL_VIEWER",  // 调试的可执行程序路径
+            "program": "${workspaceFolder}/build-lite/cloud_viewer",  // 调试的可执行程序路径
             "args": [],  // 可传递的命令行参数
             "stopAtEntry": false,  // 是否在入口停住
             "cwd": "${fileDirname}",  // 当前工作目录

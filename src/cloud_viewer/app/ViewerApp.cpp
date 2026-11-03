@@ -259,6 +259,8 @@ void ViewerApp::setupInteraction()
     faceButtonIndex_ = ui_.size();
     ui_.addButton("Faces: All", 0.808, 0.863, 0.185, kButtonHeight,
                   [this] { cycleBetaFace(); });
+    ui_.addButton("Connect Beta IP", 0.010, 0.735, 0.220, kButtonHeight,
+                  [this] { connectBetaManual(); });
 
     // 动态设备按钮从该索引开始，刷新时只移除这一段，避免误删固定按钮。
     firstDeviceButtonIndex_ = ui_.size();
@@ -425,18 +427,141 @@ ViewerApp::~ViewerApp()
     if (radar_) radar_->stop();
 }
 
+// ---- 设备 SSH：主机密钥（TOFU）与自动恢复 ---------------------------------
+
+/// 设备主机密钥文件；环境变量优先，默认 ~/.config/cloud_viewer/beta_known_hosts。
+static std::string betaKnownHostsPath()
+{
+    const char *configured = std::getenv("CV_BETA_KNOWN_HOSTS");
+    if (configured != nullptr && configured[0] != '\0')
+    {
+        return configured;
+    }
+    const char *home = std::getenv("HOME");
+    if (home != nullptr && home[0] != '\0')
+    {
+        return std::string(home) + "/.config/cloud_viewer/beta_known_hosts";
+    }
+    return {};
+}
+
+struct ShellOutput
+{
+    int rc = -1;
+    std::string text;
+};
+
+static ShellOutput runShellCommand(const std::string &command)
+{
+    ShellOutput result;
+    FILE *pipe = popen(command.c_str(), "r");
+    if (pipe == nullptr)
+    {
+        result.text = "无法执行 SSH 命令";
+        return result;
+    }
+    char buffer[512];
+    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr)
+    {
+        result.text += buffer;
+    }
+    result.rc = pclose(pipe);
+    return result;
+}
+
+/// 主机密钥与本地记录不一致：通常意味着换了一台雷达，或设备重刷过固件。
+static bool hostKeyMismatch(const std::string &output)
+{
+    return output.find("REMOTE HOST IDENTIFICATION HAS CHANGED") != std::string::npos;
+}
+
+/// 只删除该 IP 的旧条目，不影响其它主机；不放开全局校验。
+static bool forgetHostKey(const std::string &ip, const std::string &knownHosts)
+{
+    if (knownHosts.empty())
+    {
+        return false;
+    }
+    return std::system(("ssh-keygen -R " + ip + " -f " + shellQuote(knownHosts) +
+                        " >/dev/null 2>&1").c_str()) == 0;
+}
+
+/// 把 SSH 原始输出翻译成可定位的原因，避免把整段 banner 直接丢给用户。
+static std::string betaSshFailureReason(const std::string &output)
+{
+    if (hostKeyMismatch(output)) return "设备 SSH 主机密钥与本地记录冲突，自动更新信任失败";
+    if (output.find("Permission denied") != std::string::npos) return "SSH 密码错误";
+    if (output.find("Connection refused") != std::string::npos)
+        return "设备 22 端口未开放（sshd 未运行）";
+    if (output.find("Connection timed out") != std::string::npos ||
+        output.find("No route to host") != std::string::npos)
+        return "无法到达设备，检查网线与设备 IP";
+    if (output.find("UNSUPPORTED_MODE=") != std::string::npos) return "设备 work_mode 不被支持";
+    // 固件在编译期固定了数据模式：改配置后 you_see 会拒绝启动并回滚。
+    if (output.find("与当前固件数据模式不匹配") != std::string::npos ||
+        output.find("load config fail") != std::string::npos)
+        return "该固件不支持此 work_mode（配置与固件数据模式不一致），已回滚原模式";
+    if (output.find("CONFIG_INVALID") != std::string::npos ||
+        output.find("PORT_CONFIG_INVALID") != std::string::npos)
+        return "设备 /etc/ys_conf.ini 缺少 center_ip / center_data_port";
+    if (output.find("START_FAILED") != std::string::npos ||
+        output.find("RESTART_FAILED") != std::string::npos)
+        return "设备 you_see 进程启动失败";
+    return output.substr(0, 200);
+}
+
+/// 设备的 mode 文件决定加载哪套驱动与库，work_mode 必须与之匹配：
+/// histogram -> 0 直方图；point_cloud -> 1/2 原始/真实点云；point_cloud_gray -> 4 灰度。
+/// 返回允许的 work_mode 位图（bit N 表示 mode N）。
+static std::uint8_t betaAllowedModesForDeviceMode(const std::string &deviceMode)
+{
+    if (deviceMode == "histogram") return static_cast<std::uint8_t>(1u << 0);
+    if (deviceMode == "point_cloud_gray") return static_cast<std::uint8_t>(1u << 4);
+    // point_cloud 或未知：只能在同一驱动下切换原始点云/真实点云。
+    return static_cast<std::uint8_t>((1u << 1) | (1u << 2));
+}
+
+/// 在设备上执行脚本；主机密钥变更时更新信任并重试一次（新密钥仍会写回文件）。
+static bool runBetaSsh(const std::string &ip, const std::string &password,
+                       const std::string &knownHosts, const std::string &script,
+                       const std::string &remoteArgs, std::string &output)
+{
+    auto build = [&](const char *policy)
+    {
+        return "printf '%s' " + shellQuote(script) + " | SSHPASS=" + shellQuote(password) +
+               " timeout 25 sshpass -e ssh -o StrictHostKeyChecking=" + policy +
+               " -o UserKnownHostsFile=" + shellQuote(knownHosts) +
+               " -o ConnectTimeout=6 -o ServerAliveInterval=3 root@" + ip +
+               " sh -s" + remoteArgs + " 2>&1";
+    };
+
+    ShellOutput run = runShellCommand(build("yes"));
+    if (!hostKeyMismatch(run.text))
+    {
+        output = run.text;
+        return run.rc == 0;
+    }
+
+    const bool forgotten = forgetHostKey(ip, knownHosts);
+    run = runShellCommand(build("accept-new"));
+    output = run.text;
+    if (forgotten)
+    {
+        output += "\n[HOST-KEY] 设备主机密钥已变更（换了雷达或设备重刷固件），已更新信任并自动重试";
+    }
+    return run.rc == 0;
+}
+
 // 修改前验证 host key；只在目标 IP 确实变化时重启指定雷达进程。
-static bool prepareBetaTarget(const std::string &ip, const std::string &password,
-                              std::string &message)
+static bool prepareBetaTarget(const std::string &ip, std::uint16_t dataPort,
+                              const std::string &password, std::string &message,
+                              std::string &deviceMode)
 {
     if (ip == "10.42.0.221") { message = "该设备不允许自动修改"; return false; }
     const std::string localIp = betaRouteSource(ip);
     if (localIp.empty()) { message = "无法从路由确定到 " + ip + " 的本机 IPv4"; return false; }
     if (password.empty()) { message = "未配置 Beta SSH 密码"; return false; }
-    const char *home = std::getenv("HOME");
-    const char *configured = std::getenv("CV_BETA_KNOWN_HOSTS");
-    const std::string knownHosts = configured && *configured ? configured :
-        (home && *home ? std::string(home) + "/.config/cloud_viewer/beta_known_hosts" : "");
+    const std::string knownHosts = betaKnownHostsPath();
     if (knownHosts.empty() || !std::filesystem::exists(knownHosts))
     {
         message = "缺少已确认的 SSH 主机密钥文件: " + knownHosts;
@@ -445,9 +570,17 @@ static bool prepareBetaTarget(const std::string &ip, const std::string &password
     const std::string script = R"SH(set -eu
 conf=/etc/ys_conf.ini
 expected="$1"
+expected_port="$2"
+# 设备 mode 文件决定加载哪套驱动/库，work_mode 必须与之匹配（point_cloud/histogram/point_cloud_gray）。
+dev_mode=$(cat /mnt/mtdblock2/mode 2>/dev/null || echo unknown)
+echo "DEVICE_MODE=$dev_mode"
+mode=$(awk -F '"' '/^[[:space:]]*work_mode[[:space:]]*=/{n++; v=$2} END{if(n==1) print v}' "$conf")
+case "$mode" in 0|1|2) ;; *) echo "UNSUPPORTED_MODE=$mode"; exit 1;; esac
+old_port=$(awk -F '"' '/^[[:space:]]*center_data_port[[:space:]]*=/{n++; v=$2} END{if(n==1) print v}' "$conf")
+[ -n "$old_port" ] || { echo PORT_CONFIG_INVALID; exit 1; }
 old=$(awk -F '"' '/^[[:space:]]*center_ip[[:space:]]*=/{n++; v=$2} END{if(n==1) print v}' "$conf")
 [ -n "$old" ] || { echo CONFIG_INVALID; exit 1; }
-if [ "$old" = "$expected" ]; then
+if [ "$old" = "$expected" ] && [ "$old_port" = "$expected_port" ]; then
   if ! pidof you_see >/dev/null; then
     setsid sh -c 'cd /root && exec ./you_see >>/tmp/you_stdout.log 2>&1' </dev/null >/dev/null 2>&1 &
     sleep 3
@@ -472,9 +605,13 @@ rollback() {
   rm -f "$backup" "$tmp"
 }
 trap rollback 0
-awk -v ip="$expected" '/^[[:space:]]*center_ip[[:space:]]*=/{sub(/"[^"]*"/, "\"" ip "\"")} {print}' "$conf" > "$tmp"
+awk -v ip="$expected" -v port="$expected_port" '
+/^[[:space:]]*center_ip[[:space:]]*=/{sub(/"[^"]*"/, "\"" ip "\"")}
+/^[[:space:]]*center_data_port[[:space:]]*=/{sub(/"[^"]*"/, "\"" port "\"")}
+{print}' "$conf" > "$tmp"
 actual=$(awk -F '"' '/^[[:space:]]*center_ip[[:space:]]*=/{n++; v=$2} END{if(n==1) print v}' "$tmp")
-[ "$actual" = "$expected" ] || { echo CONFIG_WRITE_FAILED; exit 1; }
+actual_port=$(awk -F '"' '/^[[:space:]]*center_data_port[[:space:]]*=/{n++; v=$2} END{if(n==1) print v}' "$tmp")
+[ "$actual" = "$expected" ] && [ "$actual_port" = "$expected_port" ] || { echo CONFIG_WRITE_FAILED; exit 1; }
 cp "$tmp" "$conf"
 changed=1
 pids=$(pidof you_see || true)
@@ -484,24 +621,24 @@ setsid sh -c 'cd /root && exec ./you_see >>/tmp/you_stdout.log 2>&1' </dev/null 
 sleep 3
 pidof you_see >/dev/null || { echo RESTART_FAILED; exit 1; }
 changed=0
-echo CENTER_UPDATED="$old"-"$expected"
+echo CENTER_UPDATED="$old:$old_port"-"$expected:$expected_port"
 )SH";
-    const std::string command = "printf %s " + shellQuote(script) +
-        " | SSHPASS=" + shellQuote(password) +
-        " timeout 20 sshpass -e ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=" +
-        shellQuote(knownHosts) + " -o ConnectTimeout=6 -o ServerAliveInterval=3 "
-        "root@" + ip + " sh -s -- " + shellQuote(localIp) + " 2>&1";
-    FILE *pipe = popen(command.c_str(), "r");
-    if (!pipe) { message = "无法启动 SSH"; return false; }
     std::string output;
-    char buf[512];
-    while (std::fgets(buf, sizeof(buf), pipe)) output += buf;
-    const int rc = pclose(pipe);
-    if (rc != 0 || (output.find("CENTER_UNCHANGED=") == std::string::npos &&
-                    output.find("CENTER_UPDATED=") == std::string::npos))
+    const bool sshOk = runBetaSsh(ip, password, knownHosts, script,
+                                  " -- " + shellQuote(localIp) + " " + std::to_string(dataPort),
+                                  output);
+    if (!sshOk || (output.find("CENTER_UNCHANGED=") == std::string::npos &&
+                   output.find("CENTER_UPDATED=") == std::string::npos))
     {
-        message = "设置 center_ip 失败: " + output.substr(0, 300);
+        message = "设置 center_ip 失败: " + betaSshFailureReason(output);
         return false;
+    }
+    const auto modePos = output.find("DEVICE_MODE=");
+    if (modePos != std::string::npos)
+    {
+        const std::size_t begin = modePos + std::string("DEVICE_MODE=").size();
+        const std::size_t end = output.find_first_of("\r\n", begin);
+        deviceMode = output.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
     }
     message = "目标 " + ip + "，本机 " + localIp + "：" + output;
     return true;
@@ -511,6 +648,8 @@ void ViewerApp::connectBeta(const std::string &ip)
 {
     // 用广播中的 work_mode 初始化当前模式，避免 HUD 与实际包格式不一致。
     betaWorkMode_ = 2;
+    // 换设备或重连后重新探测固件支持的模式。
+    betaUnsupportedModes_ = 0;
     for (const auto &device : discoveredDevices_)
     {
         if (device.ip == ip)
@@ -519,6 +658,20 @@ void ViewerApp::connectBeta(const std::string &ip)
         }
     }
 
+    for (const auto &device : discoveredDevices_)
+    {
+        if (device.ip == ip && device.workMode > 2)
+        {
+            radarState_ = RadarState::Error;
+            { std::lock_guard<std::mutex> lock(radarMessageMutex_);
+              radarMessage_ = "CS96 Beta 模式 " + std::to_string(device.workMode) +
+                              " 当前不支持；请使用匹配的固件和协议"; }
+            logUi("Connect Device", "设备模式 " + std::to_string(device.workMode) +
+                                   " 不支持，未修改设备配置", false);
+            updateHud(); renderer_.render();
+            return;
+        }
+    }
     if (ip == "10.42.0.221")
     {
         logUi("Connect Device", "该设备不允许连接操作", false);
@@ -535,14 +688,6 @@ void ViewerApp::connectBeta(const std::string &ip)
         betaStream_.reset();
     }
 
-    // 准备推流目标；失败时仍监听，并在 UI 明确显示原因，便于手动恢复。
-    logUi("Connect Device", "正在核对设备 center_ip 和本机路由地址");
-    updateHud();
-    renderer_.render();
-    std::string targetMessage;
-    const bool targetReady = prepareBetaTarget(ip, betaSshPassword(), targetMessage);
-    logUi("Beta Target", targetMessage, targetReady);
-
     betaStream_ = std::make_unique<BetaUdpStream>();
     BetaUdpStream::Config config;
     config.radarIp = ip;
@@ -553,6 +698,32 @@ void ViewerApp::connectBeta(const std::string &ip)
         {
             config.localPort = static_cast<std::uint16_t>(value);
         }
+    }
+
+    // 准备推流目标；失败时仍监听，并在 UI 明确显示原因，便于手动恢复。
+    logUi("Connect Device", "正在核对设备 center_ip 和本机路由地址");
+    updateHud();
+    renderer_.render();
+    std::string targetMessage;
+    std::string deviceMode;
+    const bool targetReady = prepareBetaTarget(ip, config.localPort, betaSshPassword(),
+                                               targetMessage, deviceMode);
+    // 记录设备 mode，后续 work_mode 切换只在该驱动支持的集合内循环。
+    betaDeviceMode_ = deviceMode;
+    betaAllowedModes_ = betaAllowedModesForDeviceMode(deviceMode);
+    logUi("Beta Target", targetMessage, targetReady);
+    if (!targetReady && targetMessage.find("UNSUPPORTED_MODE=") != std::string::npos)
+    {
+        betaStream_.reset();
+        radarConnected_ = false;
+        radarState_ = RadarState::Error;
+        {
+            std::lock_guard<std::mutex> lock(radarMessageMutex_);
+            radarMessage_ = "CS96 Beta 设备当前模式不支持；需要匹配固件";
+        }
+        updateHud();
+        renderer_.render();
+        return;
     }
 
     auto sink = [this](algo_lidar::PointMatrix &&matrix, std::uint64_t frameNumber)
@@ -665,16 +836,45 @@ void ViewerApp::connectBeta(const std::string &ip)
     renderer_.render();
 }
 
+void ViewerApp::connectBetaManual()
+{
+#ifndef _WIN32
+    std::string ip;
+    if (const char *value = std::getenv("CV_BETA_MANUAL_IP")) ip = value;
+    else
+    {
+        FILE *dialog = popen("zenity --entry --title='连接 CS96 Beta' --text='请输入雷达 IPv4 地址' 2>/dev/null", "r");
+        if (!dialog) { logUi("Connect Beta IP", "无法启动地址输入窗口", false); return; }
+        char text[128]{};
+        if (std::fgets(text, sizeof(text), dialog)) ip = text;
+        const int result = pclose(dialog);
+        if (result != 0) return;
+    }
+    ip.erase(ip.find_last_not_of(" \t\r\n") + 1);
+    const auto start = ip.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return;
+    ip.erase(0, start);
+    in_addr addr{};
+    if (inet_pton(AF_INET, ip.c_str(), &addr) != 1)
+    {
+        logUi("Connect Beta IP", "请输入有效的 IPv4 地址", false);
+        return;
+    }
+    connectBeta(ip);
+#else
+    logUi("Connect Beta IP", "请通过 CV_BETA_IP 指定地址", false);
+#endif
+}
+
 void ViewerApp::searchDevices()
 {
-    logUi("Search Device", "监听 UDP 55000 广播，最多 2.2 秒");
+    logUi("Search Device", "开始监听 UDP 55000 广播，等待 2200ms (覆盖约两个广播周期)...");
     if (!discovery_)
     {
         discovery_ = std::make_unique<DeviceDiscovery>();
     }
     discovery_->start(55000);
 
-    // 雷达广播周期约 1 秒，取两个周期以覆盖丢包。
     std::this_thread::sleep_for(std::chrono::milliseconds(2200));
     discoveredDevices_ = discovery_->snapshot();
     discovery_->stop();
@@ -686,13 +886,21 @@ void ViewerApp::searchDevices()
     }
     else
     {
-        std::ostringstream detail;
+        logUi("Search Device", "搜索完成，共发现 " + std::to_string(discoveredDevices_.size()) + " 台设备:");
+        
+        // 逐台设备打印详细信息，利用结构体里的全部字段
         for (const auto &device : discoveredDevices_)
         {
-            detail << "[" << device.model << " " << device.ip << " " << device.serialNumber << "] ";
+            std::ostringstream detail;
+            detail << "发现 [" << device.model << "]"
+                   << " | IP: " << device.ip
+                   << " | SN: " << device.serialNumber
+                   << " | 线数: " << device.lineCount
+                   << " | Slots/帧: " << device.slotsPerFrame
+                   << " | 工作模式: " << static_cast<int>(device.workMode);
+            
+            logUi("Search Device", detail.str());
         }
-        logUi("Search Device", "发现 " + std::to_string(discoveredDevices_.size()) +
-                                   " 台: " + detail.str());
     }
 
     rebuildDeviceButtons();
@@ -974,59 +1182,69 @@ bool ViewerApp::applyBetaWorkMode(const std::string &ip, int mode, std::string &
         return false;
     }
 
-    // 通过脚本文件传给设备执行，避免多层引号转义问题。
-    const std::string scriptPath = "/tmp/cv_beta_mode.sh";
+    // 脚本以字符串形式经 stdin 交给设备执行，避免多层引号转义问题。
+    std::ostringstream scriptBuilder;
     {
-        std::ofstream script(scriptPath, std::ios::trunc);
-        if (!script.is_open())
-        {
-            message = "无法创建本地切换脚本";
-            return false;
-        }
-        // 后台进程放进子 shell 并脱离会话，避免 SSH 等待其 stdout 而挂住。
-        script << "#!/bin/sh\n"
-               << "sed -i 's/^work_mode.*/work_mode                      = \"" << mode
-               << "\" ;工作模式/' /etc/ys_conf.ini\n"
-               << "kill -9 $(ps | grep you_see | grep -v grep | awk '{print $1}') 2>/dev/null\n"
-               << "sleep 1\n"
-               << "setsid sh -c 'cd /root && exec ./you_see >>/tmp/you_stdout.log 2>&1' "
-                  "</dev/null >/dev/null 2>&1 &\n"
-               << "sleep 2\n"
-               << "echo SWITCH_OK\n"
-               << "exit 0\n";
+        std::ostream &script = scriptBuilder;
+        // 配置写入或启动失败时恢复原文件并重启原模式，不能只凭 echo 判断成功。
+        script << R"SH(#!/bin/sh
+set -eu
+conf=/etc/ys_conf.ini
+backup=$(mktemp /tmp/cv_mode_backup.XXXXXX)
+cp -p "$conf" "$backup"
+changed=0
+rollback() {
+  rc=$?
+  if [ "$rc" -ne 0 ] && [ "$changed" = 1 ]; then
+    cp "$backup" "$conf"
+    pids=$(pidof you_see || true); [ -z "$pids" ] || kill -9 $pids || true
+    setsid sh -c 'cd /root && exec ./you_see >>/tmp/you_stdout.log 2>&1' </dev/null >/dev/null 2>&1 &
+    echo MODE_RESTORED
+  fi
+  rm -f "$backup"
+}
+trap rollback 0
+)SH" << "sed -i 's/^work_mode.*/work_mode                      = \"" << mode
+               << "\" ;工作模式/' \"$conf\"\n"
+               << R"SH(changed=1
+log=/var/log/ys.log
+log_before=0
+if [ -f "$log" ]; then log_before=$(wc -l < "$log"); fi
+pids=$(pidof you_see || true)
+[ -z "$pids" ] || kill -9 $pids
+sleep 1
+setsid sh -c 'cd /root && exec ./you_see >>/tmp/you_stdout.log 2>&1' </dev/null >/dev/null 2>&1 &
+sleep 3
+if ! pidof you_see >/dev/null; then
+  echo MODE_START_FAILED
+  # you_see 的报错进的是日志文件；把本次新增的关键行带回上位机，便于给出准确原因。
+  if [ -f "$log" ]; then
+    tail -n +$((log_before + 1)) "$log" 2>/dev/null | grep -E "与当前固件数据模式不匹配|load config fail" | head -n 2 || true
+  fi
+  exit 1
+fi
+changed=0
+echo SWITCH_OK
+)SH";
     }
 
-    const std::string command =
-        "timeout 25 sshpass -p " + shellQuote(password) +
-        " ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=6 "
-        "-o ServerAliveInterval=3 -o ServerAliveCountMax=2 " +
-        "root@" + ip + " sh -s < " + scriptPath + " 2>&1";
-
-    FILE *pipe = popen(command.c_str(), "r");
-    if (pipe == nullptr)
+    const std::string knownHosts = betaKnownHostsPath();
+    if (knownHosts.empty() || !std::filesystem::exists(knownHosts))
     {
-        message = "无法执行 SSH 命令";
-        std::remove(scriptPath.c_str());
+        message = "缺少已确认的 SSH 主机密钥文件";
         return false;
     }
 
     std::string output;
-    char buffer[512];
-    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr)
-    {
-        output += buffer;
-    }
-    const int rc = pclose(pipe);
-    std::remove(scriptPath.c_str());
-
     // 设备端 setsid 启动后 SSH 可能因 fd 未关闭而超时，以脚本回显为准。
-    (void)rc;
+    runBetaSsh(ip, password, knownHosts, scriptBuilder.str(), "", output);
     if (output.find("SWITCH_OK") != std::string::npos)
     {
         message = output;
         return true;
     }
-    message = "SSH 切换失败: " + output.substr(0, 200);
+    message = "CS96 Beta work_mode=" + std::to_string(mode) + " 切换失败: " +
+              betaSshFailureReason(output);
     return false;
 }
 
@@ -1067,7 +1285,22 @@ void ViewerApp::switchBetaMode()
         return;
     }
 
-    const int next = (betaWorkMode_ == 2) ? 1 : (betaWorkMode_ == 1 ? 0 : 2);
+    // 常规循环 2 -> 1 -> 0 -> 2，但只在设备 mode 支持的集合内循环，
+    // 并跳过该固件运行期已拒绝过的模式（避免反复中断推流）。
+    const std::uint8_t allowed =
+        betaAllowedModes_ & static_cast<std::uint8_t>(~betaUnsupportedModes_);
+    int next = (betaWorkMode_ == 2) ? 1 : (betaWorkMode_ == 1 ? 0 : 2);
+    for (int attempt = 0; attempt < 3 && (allowed & (1u << next)) == 0; ++attempt)
+    {
+        next = (next == 2) ? 1 : (next == 1 ? 0 : 2);
+    }
+    if ((allowed & (1u << next)) == 0)
+    {
+        logUi("Mode", "设备 mode=" + (betaDeviceMode_.empty() ? std::string("unknown")
+                                                              : betaDeviceMode_) +
+                          "，当前没有可切换的 work_mode", false);
+        return;
+    }
     const std::string ip = betaStream_ ? betaStream_->config().radarIp : std::string{};
     if (ip.empty())
     {
@@ -1288,7 +1521,16 @@ void ViewerApp::applyIncomingFrame()
                 logUi("Mode", "CS96 Beta 已切换到 work_mode=" + std::to_string(betaWorkMode_));
             } else {
                 controlState_ = "Beta mode switch failed: " + error;
-                logUi("Mode", "CS96 Beta 切换失败: " + error, false);
+                if (error.find("固件不支持") != std::string::npos &&
+                    requestedBetaMode_ >= 0 && requestedBetaMode_ <= 2)
+                {
+                    betaUnsupportedModes_ |= static_cast<std::uint8_t>(1u << requestedBetaMode_);
+                    logUi("Mode", "CS96 Beta 切换失败: " + error + "（后续将跳过该模式）", false);
+                }
+                else
+                {
+                    logUi("Mode", "CS96 Beta 切换失败: " + error, false);
+                }
             }
         } else if (error.empty()) {
             liveMode_ = requestedMode_;
@@ -2010,10 +2252,16 @@ int ViewerApp::run(const std::vector<std::string> &files, double fps,
     {
         connectBeta(betaIp);
         // 自动化验证：启动时直接把设备工作模式设为指定值。
-        if (const char *setMode = std::getenv("CV_BETA_SET_MODE"))
+        if (const char *setMode = betaStream_ ? std::getenv("CV_BETA_SET_MODE") : nullptr)
         {
             const int mode = std::atoi(setMode);
-            if (mode >= 0 && mode <= 2)
+            if (mode >= 0 && mode <= 2 &&
+                (betaAllowedModes_ & (1u << mode)) == 0)
+            {
+                logUi("Mode", "设备 mode=" + betaDeviceMode_ + " 不支持 work_mode=" +
+                                  std::to_string(mode) + "，已跳过", false);
+            }
+            else if (mode >= 0 && mode <= 2)
             {
                 std::string message;
                 const bool ok = applyBetaWorkMode(betaIp, mode, message);

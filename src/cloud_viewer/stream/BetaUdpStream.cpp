@@ -165,7 +165,7 @@ void applyFallbackNoTable(int line, std::uint32_t ft, std::uint16_t slot, std::u
     {
         const float horizontal = r * std::cos(theta);
         point.x = horizontal * std::cos(omega);
-        point.y = -horizontal * std::sin(omega);
+        point.y = horizontal * std::sin(omega);
         point.z = r * std::sin(theta);
     }
 }
@@ -543,6 +543,14 @@ struct BetaUdpStream::Impl
             return;
         }
 
+        in_addr expectedSource{};
+        if (inet_pton(AF_INET, config.radarIp.c_str(), &expectedSource) != 1)
+        {
+            ::close(sock);
+            std::lock_guard<std::mutex> lock(mutex);
+            active = false;
+            return;
+        }
         std::vector<std::uint8_t> buffer(kHistogramPacketSize);
         ParsedPacket packet;
 
@@ -611,6 +619,8 @@ struct BetaUdpStream::Impl
                 continue;
             }
 
+            // 只接收用户选中雷达，防止同端口上的其他设备污染帧。
+            if (from.sin_addr.s_addr != expectedSource.s_addr) continue;
             ++recvCount;
 
             // 诊断开关：只收包不解析，用于区分 socket 限流与解析耗时。

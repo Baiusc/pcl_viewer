@@ -1,0 +1,45 @@
+{
+    "version": "0.3.0",
+    "configurations": [
+        {
+            "name": "构建+编译+调试",  // 配置名称
+            "type": "cppdbg",  // 调试类型
+            "request": "launch",  // 请求类型：启动调试会话
+            "program": "${workspaceFolder}/build/PCL_VIEWER",  // 调试的可执行程序路径
+            "args": [],  // 可传递的命令行参数
+            "stopAtEntry": false,  // 是否在入口停住
+            "cwd": "${fileDirname}",  // 当前工作目录
+            "environment": [],  // 环境变量
+            "externalConsole": false,  // 是否使用外部控制台
+            "MIMode": "gdb",  // 调试器模式：GDB
+            "setupCommands": [
+                {
+                    "description": "为 gdb 启用整齐打印",
+                    "text": "-enable-pretty-printing",  // 启用 GDB 的漂亮打印功能
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "task_build"  // 在启动调试前执行构建任务
+        },
+        {
+            "name": "仅调试(不生成)",  // 配置名称
+            "type": "cppdbg",  // 调试类型
+            "request": "launch",  // 启动调试会话
+            "program": "${workspaceFolder}/build/PCL_VIEWER",  // 调试的可执行程序路径
+            "args": [],  // 可传递的命令行参数
+            "stopAtEntry": false,  // 是否在入口停住
+            "cwd": "${fileDirname}",  // 当前工作目录
+            "environment": [],  // 环境变量
+            "externalConsole": false,  // 是否使用外部控制台
+            "MIMode": "gdb",  // 调试器模式：GDB
+            "setupCommands": [
+                {
+                    "description": "为 gdb 启用整齐打印",
+                    "text": "-enable-pretty-printing",  // 启用 GDB 的漂亮打印功能
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "" 
+        }
+    ]
+}

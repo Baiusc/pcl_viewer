@@ -163,11 +163,18 @@ private:
     int betaWorkMode_ = 2;         // 0=直方图 1=原始点云 2=真实点云
     int requestedBetaMode_ = 2;
     bool betaModeSwitch_ = false;  // modeFuture_ 的结果用于 Beta 模式切换
+    /// 该固件明确拒绝过的 work_mode 位图（bit0=mode0）；避免反复做会中断推流的切换。
+    std::uint8_t betaUnsupportedModes_ = 0;
+    /// 设备 /mnt/mtdblock2/mode 的内容（histogram / point_cloud / point_cloud_gray）。
+    std::string betaDeviceMode_;
+    /// 该 mode 下允许的 work_mode 位图（bit N 表示 work_mode N）；默认 1/2。
+    std::uint8_t betaAllowedModes_ = static_cast<std::uint8_t>((1u << 1) | (1u << 2));
 
     void searchDevices();
     void rebuildDeviceButtons();
     void connectDiscoveredDevice(std::size_t index);
     void connectBeta(const std::string &ip);
+    void connectBetaManual();
     void switchBetaMode();
     void cycleBetaFace();
     static bool applyBetaWorkMode(const std::string &ip, int mode, std::string &message);

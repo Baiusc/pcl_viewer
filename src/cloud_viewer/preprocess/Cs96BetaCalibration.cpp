@@ -798,8 +798,7 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     point.omega_rad = omega;
     point.slot_ang = omegaDeg;
     point.x = r * std::cos(theta) * std::cos(omega);
-    // CS96 Beta 的 Y 轴方向与常规右手系相反。
-    point.y = -r * std::cos(theta) * std::sin(omega);
+    point.y = r * std::cos(theta) * std::sin(omega);
     point.z = r * std::sin(theta);
 
     // 反射率 —— 有表时复刻 CalibReflect::calcIntensity()：
