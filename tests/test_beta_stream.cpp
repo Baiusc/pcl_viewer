@@ -10,7 +10,8 @@ int main()
 {
     // 构造一个与实测格式一致的 1266B 包：18B 头 + 96 × 13B 点。
     std::vector<std::uint8_t> packet(cloud_viewer::BetaUdpStream::kCartesianPacketSize, 0);
-    const std::uint16_t frameIndex = 7;
+    // 真实点云包头的 frame 字段是面号（0~3），解析器会拒绝大于 3 的值。
+    const std::uint16_t frameIndex = 2;
     const std::uint16_t slot = 45;
     const std::uint16_t totalSlots = 800;
 

@@ -16,6 +16,12 @@ add_executable(cv_test_beta_stream test_beta_stream.cpp)
 target_link_libraries(cv_test_beta_stream PRIVATE cv_stream cv_core)
 add_test(NAME beta_packet_parse COMMAND cv_test_beta_stream)
 
+add_executable(cv_test_beta_calibration test_beta_calibration.cpp)
+target_link_libraries(cv_test_beta_calibration PRIVATE cv_stream cv_core)
+target_compile_definitions(cv_test_beta_calibration PRIVATE
+    CV_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../data")
+add_test(NAME beta_calibration_modes COMMAND cv_test_beta_calibration)
+
 add_executable(cv_test_discovery test_device_discovery.cpp)
 target_link_libraries(cv_test_discovery PRIVATE cv_stream cv_core)
 add_test(NAME device_broadcast_parse COMMAND cv_test_discovery)

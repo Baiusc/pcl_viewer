@@ -452,20 +452,31 @@ void ViewerApp::connectBeta(const std::string &ip)
     };
 
     // 原始点云标定表（距离 / 水平角 / 俯仰角 / 反射率）。
+    // 默认读取聚合成单文件的 CSV；目录布局作为兼容回退。
     if (!betaCalibration_)
     {
         betaCalibration_ = std::make_shared<Cs96BetaCalibration>();
-        std::filesystem::path directory = "data/param/cs96beta_calib_data";
-        if (const char *override = std::getenv("CV_BETA_CALIB_DIR"))
+        std::filesystem::path source = "data/param/cs96beta_calibration.csv";
+        if (const char *override = std::getenv("CV_BETA_CALIB"))
         {
-            directory = override;
+            source = override;
+        }
+        std::error_code ec;
+        if (!std::filesystem::exists(source, ec))
+        {
+            const std::filesystem::path legacy = "data/param/cs96beta_calib_data";
+            if (std::filesystem::is_directory(legacy, ec))
+            {
+                logUi("Calib", "未找到 " + source.string() + "，回退目录布局 " + legacy.string());
+                source = legacy;
+            }
         }
         std::string calibrationError;
-        if (betaCalibration_->load(directory, calibrationError))
+        if (betaCalibration_->load(source, calibrationError))
         {
             const auto &starts = betaCalibration_->startingAngles();
             std::ostringstream detail;
-            detail << "CS96 Beta 标定已加载: " << directory.string()
+            detail << "CS96 Beta 标定已加载: " << source.string()
                    << " start=" << starts[0] << "," << starts[1] << "," << starts[2] << "," << starts[3];
             logUi("Calib", detail.str());
         }
@@ -474,6 +485,12 @@ void ViewerApp::connectBeta(const std::string &ip)
             logUi("Calib", "CS96 Beta 标定加载失败: " + calibrationError, false);
             betaCalibration_.reset();
         }
+    }
+
+    // CV_BETA_CALIB_ENABLED=0 可在启动时关闭标定，便于对比纯几何结果。
+    if (const char *enabled = std::getenv("CV_BETA_CALIB_ENABLED"))
+    {
+        betaCalibrationEnabled_ = std::string(enabled) != "0";
     }
     // 自动化验证：CV_BETA_FACE=1..4 只显示单面；CV_BETA_FACE=ALL 显示全部。
     if (const char *faceEnv = std::getenv("CV_BETA_FACE"))
@@ -494,6 +511,7 @@ void ViewerApp::connectBeta(const std::string &ip)
     }
 
     betaStream_->setCalibration(betaCalibration_);
+    betaStream_->setCalibrationEnabled(betaCalibrationEnabled_);
     betaStream_->setFaceMask(betaFaceMask_);
 
     std::string error;
@@ -1056,6 +1074,29 @@ void ViewerApp::loadLiveCalibration()
 
 void ViewerApp::toggleLiveCalibration()
 {
+    // CS96 Beta 的标定开关独立于 6532：只控制原始点云是否套用标定表。
+    if (betaStream_)
+    {
+        if (!betaCalibration_)
+        {
+            controlState_ = "CS96 Beta: calibration table missing";
+            logUi("App Cal", "CS96 Beta 标定表未加载，当前固定为纯几何解算", false);
+            updateHud();
+            renderer_.render();
+            return;
+        }
+        betaCalibrationEnabled_ = !betaCalibrationEnabled_;
+        betaStream_->setCalibrationEnabled(betaCalibrationEnabled_);
+        controlState_ = betaCalibrationEnabled_ ? "CS96 Beta calibration ON"
+                                               : "CS96 Beta calibration OFF (raw geometry)";
+        logUi("App Cal", betaCalibrationEnabled_
+                             ? "CS96 Beta 标定 ON：编码器水平角 + 逐线修正 + 距离零点/系数 + 反射率查表"
+                             : "CS96 Beta 标定 OFF：纯几何（光速距离、slot 线性水平角、峰值反射率）");
+        updateHud();
+        renderer_.render();
+        return;
+    }
+
     if (liveMode_ != RadarOutputMode::Range)
     {
         controlState_ = "Cloud = device output; use RANGE for raw/calibrated comparison";
@@ -1748,8 +1789,17 @@ void ViewerApp::updateHud()
         ui_.setLabel(modeButtonIndex_, liveMode_ == RadarOutputMode::Range ? "Mode: Range" : "Mode: Cloud");
     }
     ui_.setLabel(roiButtonIndex_, std::string("ROI: ")+std::to_string(liveRoi_));
-    const char* cal = liveMode_ == RadarOutputMode::Cloud ? "App Cal: N/A (device Cloud)" :
-        !liveCalibration_ ? "App Cal: OFF" : "App Cal: ON";
+    const char* cal = nullptr;
+    if (betaStream_)
+    {
+        // Beta 的开关与 6532 的 Range/Cloud 无关，统一显示 ON/OFF。
+        cal = betaCalibrationEnabled_ ? "App Cal: ON" : "App Cal: OFF";
+    }
+    else
+    {
+        cal = liveMode_ == RadarOutputMode::Cloud ? "App Cal: N/A (device Cloud)" :
+            !liveCalibration_ ? "App Cal: OFF" : "App Cal: ON";
+    }
     ui_.setLabel(calibrationButtonIndex_,cal);
     hudActor_->SetInput(text.str().c_str());
 

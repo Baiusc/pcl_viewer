@@ -63,6 +63,11 @@ public:
     /// 原始点云模式使用的标定表；为空时退回简化公式。
     void setCalibration(std::shared_ptr<const Cs96BetaCalibration> calibration);
 
+    /// 是否对原始点云应用标定（逐线水平角、距离零点/系数、反射率查表）。
+    /// 关闭后只做纯几何解算，即使标定表已加载也不再引用其中的修正量。
+    void setCalibrationEnabled(bool enabled);
+    bool calibrationEnabled() const;
+
     /// 面选择独立于坐标标定：原始帧按起始 PA 判面，真实帧直接使用设备面 ID。
     /// bit0~bit3 对应 F1~F4，0xF 为全部。
     void setFaceMask(std::uint8_t mask);

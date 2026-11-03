@@ -158,6 +158,8 @@ private:
     // CS96 Beta 转镜雷达直收（真实点云，1266B/包）。
     std::unique_ptr<BetaUdpStream> betaStream_;
     std::shared_ptr<Cs96BetaCalibration> betaCalibration_;
+    /// 原始点云是否应用标定；关闭后距离/水平角/反射率全部退化为纯几何。
+    bool betaCalibrationEnabled_ = true;
     int betaWorkMode_ = 2;         // 0=直方图 1=原始点云 2=真实点云
     int requestedBetaMode_ = 2;
     bool betaModeSwitch_ = false;  // modeFuture_ 的结果用于 Beta 模式切换

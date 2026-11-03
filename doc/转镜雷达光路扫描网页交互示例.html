@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>半固态激光雷达 - 纯物理外表面反射版</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background-color: #121212; color: #fff; text-align: center; margin: 0; padding: 20px; }
+        canvas { background-color: #1e1e1e; border: 2px solid #444; border-radius: 8px; margin-top: 15px; box-shadow: 0 0 20px rgba(0,0,0,0.8); }
+        .controls { margin-top: 15px; background: #2c2c2c; padding: 15px; border-radius: 8px; display: inline-block; }
+        input[type=range] { width: 350px; cursor: pointer; }
+        .info { font-size: 16px; margin: 10px 0; color: #00ff88; font-weight: bold;}
+        button { padding: 8px 20px; font-size: 15px; background-color: #007BFF; color: white; border: none; border-radius: 5px; cursor: pointer; margin-left: 10px;}
+        button:hover { background-color: #0056b3; }
+        .alert { color: #ff3366; }
+        .desc { font-size: 14px; color: #aaa; max-width: 800px; margin: 10px auto; text-align: left; line-height: 1.6; }
+    </style>
+</head>
+<body>
+
+    <h2>激光雷达光路：从右侧入射 → 外表面反射 → 向上扫描 120°</h2>
+    
+    <div class="controls">
+        <label for="angleSlider">转镜机械角 (周期): <span id="angleValue">45</span>°</label><br>
+        <input type="range" id="angleSlider" min="0" max="90" step="0.5" value="45">
+        <button id="playBtn">自动播放</button>
+    </div>
+
+    <div class="info" id="statusText">当前在发光区间，正常扫描</div>
+
+    <canvas id="lidarCanvas" width="800" height="550"></canvas>
+
+    <div class="desc">
+        <strong>数学与物理细节修正：</strong><br>
+        1. <b>杜绝“折射”穿透：</b> 为保证从右入射不穿透，激光发射器在Y轴上精准上移了 <code>R * 0.707</code>，确保光束只打在右上方的<b>外侧镜面</b>上。<br>
+        2. <b>绝对反射点跟踪：</b> 反射点公式 <code>x = cx + (R - Δy*sinθ)/cosθ</code>，你会看到光斑完美黏在旋转的外侧面上滑动，到达边缘（15°或75°）时正好到达镜子棱角，随后雷达软件切断激光（死区）。
+    </div>
+
+    <script>
+        const canvas = document.getElementById('lidarCanvas');
+        const ctx = canvas.getContext('2d');
+        const slider = document.getElementById('angleSlider');
+        const angleValue = document.getElementById('angleValue');
+        const statusText = document.getElementById('statusText');
+        const playBtn = document.getElementById('playBtn');
+
+        // 系统参数
+        const cx = 400;         // 转镜中心X
+        const cy = 400;         // 转镜中心Y (靠下放，为了向上反射留空间)
+        const R = 75;           // 转镜中心到镜面的距离 (边心距)
+        
+        // 核心数学：为了让光从右侧打到“倾斜约45度”的右上方面上而不发生穿透，
+        // 入射光的高度必须精准偏移 R * cos(45°)。
+        const Y_ray = cy - R * Math.SQRT1_2; 
+
+        let currentAngle = 45; 
+        let isPlaying = false;
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 1. 绘制 120° FOV 背景区 (向上方扫描)
+            // 画布中 -90度 是正上方。左右各 60度，所以是 -150度 到 -30度
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.arc(cx, cy, 600, -150 * Math.PI / 180, -30 * Math.PI / 180);
+            ctx.fillStyle = "rgba(0, 255, 136, 0.1)";
+            ctx.fill();
+            
+            // 绘制FOV虚线边界
+            ctx.strokeStyle = "rgba(0, 255, 136, 0.4)";
+            ctx.lineWidth = 1;
+            ctx.setLineDash([5, 5]);
+            ctx.beginPath();
+            ctx.moveTo(cx, cy); ctx.lineTo(cx + 600 * Math.cos(-150 * Math.PI/180), cy + 600 * Math.sin(-150 * Math.PI/180));
+            ctx.moveTo(cx, cy); ctx.lineTo(cx + 600 * Math.cos(-30 * Math.PI/180), cy + 600 * Math.sin(-30 * Math.PI/180));
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // 2. 映射当前活动面的法线角度
+            // 当 mechanical=45度时，法线指向右上 (-45度)
+            let thetaN_deg = currentAngle - 90; 
+            let thetaN_rad = thetaN_deg * Math.PI / 180;
+
+            // 3. 计算真实的物理外表面相交点
+            // 直线方程: (x-cx)*cos(N) + (y-cy)*sin(N) = R
+            // 入射光线: y = Y_ray
+            let dy = Y_ray - cy; 
+            let Ix = cx + (R - dy * Math.sin(thetaN_rad)) / Math.cos(thetaN_rad);
+            let Iy = Y_ray;
+
+            let isFiring = (currentAngle >= 15 && currentAngle <= 75);
+
+            // 4. 发光与反射逻辑
+            if (isFiring) {
+                statusText.innerHTML = `✅ 激光发光区 (15°-75°) | 光束正沿镜面滑动 | FOV出射角: ${(thetaN_deg*2).toFixed(1)}°`;
+                statusText.className = "info";
+                
+                // 根据严密的反射定律：反射角 = 2 * 法线角
+                // 证明：入射是向左 (180度)，法线是 thetaN。
+                // 反射向量角 = 180 - 2*(180 - thetaN) (相对法线对称) 化简在笛卡尔坐标系下正好等于 2*thetaN
+                let out_angle_rad = 2 * thetaN_rad;
+                
+                let endX = Ix + 800 * Math.cos(out_angle_rad);
+                let endY = Iy + 800 * Math.sin(out_angle_rad);
+
+                // 绘制反射激光 (向上反射)
+                ctx.beginPath();
+                ctx.moveTo(Ix, Iy);
+                ctx.lineTo(endX, endY);
+                ctx.strokeStyle = "#ff3366";
+                ctx.lineWidth = 4;
+                ctx.stroke();
+            } else {
+                statusText.innerHTML = `❌ 扫描死区 (边缘避让) | 已到转镜棱角，激光切断`;
+                statusText.className = "info alert";
+            }
+
+            // 5. 绘制固定的入射光束 (从右侧发出，严格不穿透)
+            ctx.beginPath();
+            ctx.moveTo(800, Y_ray); 
+            ctx.lineTo(Ix, Iy);  // 精准连到外壁交点
+            ctx.strokeStyle = "rgba(0, 255, 255, 0.8)";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            ctx.fillStyle = "cyan";
+            ctx.font = "14px sans-serif";
+            ctx.fillText("← VECSEL光", 680, Y_ray - 10);
+
+            // 6. 绘制四面转镜
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.rotate(currentAngle * Math.PI / 180); 
+            
+            // 画方形底座
+            ctx.beginPath();
+            ctx.rect(-R, -R, R*2, R*2);
+            ctx.fillStyle = "#2c3e50";
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = "#7f8c8d";
+            ctx.stroke();
+
+            // 高亮当前的工作外表面 (本地坐标系下的顶面)
+            ctx.beginPath();
+            ctx.moveTo(-R, -R);
+            ctx.lineTo(R, -R);
+            ctx.lineWidth = 6;
+            ctx.strokeStyle = isFiring ? "#f1c40f" : "#555";
+            ctx.stroke();
+            ctx.restore();
+
+            // 7. 在交点画高亮光斑 (证明光斑在面上滑动)
+            ctx.beginPath();
+            ctx.arc(Ix, Iy, 5, 0, 2*Math.PI);
+            ctx.fillStyle = isFiring ? "#fff" : "#444";
+            ctx.fill();
+            if(isFiring) {
+                ctx.strokeStyle = "#ff3366";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+        }
+
+        slider.addEventListener('input', function() {
+            currentAngle = parseFloat(this.value);
+            angleValue.innerText = currentAngle.toFixed(1);
+            draw();
+        });
+
+        function animate() {
+            if (isPlaying) {
+                currentAngle += 0.3;
+                if (currentAngle > 90) currentAngle = 0;
+                slider.value = currentAngle;
+                angleValue.innerText = currentAngle.toFixed(1);
+                draw();
+            }
+            requestAnimationFrame(animate);
+        }
+
+        playBtn.addEventListener('click', function() {
+            isPlaying = !isPlaying;
+            this.innerText = isPlaying ? "暂停" : "自动播放";
+        });
+
+        draw();
+        animate();
+    </script>
+</body>
+</html>

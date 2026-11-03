@@ -135,7 +135,7 @@ bool parseCartesian(const std::uint8_t *data, ParsedPacket &packet)
 }
 
 bool parseOrigin(const std::uint8_t *data, ParsedPacket &packet,
-                 const Cs96BetaCalibration *calibration, int lockedFace)
+                 const Cs96BetaCalibration *calibration, bool calibrate, int lockedFace)
 {
     packet.frame = readLe16(data + 1);
     packet.index = readLe16(data + 3);
@@ -154,7 +154,8 @@ bool parseOrigin(const std::uint8_t *data, ParsedPacket &packet,
     // 中途接入（前 10% slot 全丢）不猜测该帧，等待下一帧；后续绝不逐 slot 重新判面。
     if (packet.face < 0 && packet.index > 0 && packet.index <= kSlots / 10)
     {
-        if (calibration != nullptr && calibration->loaded())
+        // 判面用整圈编码器表，属标定数据；关闭标定时退回协议固定四分区。
+        if (calibrate && calibration != nullptr && calibration->loaded())
         {
             const int scale = static_cast<int>((mirrorAngle >> 12) & 0xFF);
             const int realAngle = static_cast<int>(mirrorAngle & 0xFFF);
@@ -198,40 +199,15 @@ bool parseOrigin(const std::uint8_t *data, ParsedPacket &packet,
         }
 
         algo_lidar::PointData &point = packet.points[line];
-        if (calibration != nullptr && calibration->loaded())
+        if (calibrate && calibration != nullptr && calibration->loaded())
         {
             // 距离、水平角、俯仰角、反射率全部走标定表。
             calibration->apply(line, ft, mirrorAngle, packet.index, peak, packet.face, point);
             continue;
         }
 
-        // 无标定时的简化几何（仅供调试）。
-        const float r = (ft > 16) ? kLightSpeed * static_cast<float>(ft >> 1) : 0.0f;
-        const float theta = static_cast<float>((line - 47) * (20.0 / kLines) - 2.5) * kDegToRad;
-        // 无表时只能以 slot 近似面内 120 度；不冒充编码器标定。
-        const float omegaDeg = -60.0f + 120.0f * packet.index / kSlots;
-        const float omega = omegaDeg * kDegToRad;
-        point.r = r;
-        point.theta = theta / kDegToRad;
-        point.slot_ang = omegaDeg;
-        point.intensity = static_cast<std::uint8_t>(peak > 1638 ? 255 : (peak * 255u) / 1638u);
-        point.peak = peak;
-        point.reflect = static_cast<float>(peak);
-        point.select_idx = 0;
-        point.timestamp = 0;
-        point.pixel_idx = static_cast<std::uint16_t>(line);
-        point.slot_idx = packet.index;
-        point.is_valid = packet.face >= 0 && r > 0.1f && r < 200.0f;
-        point.x = point.y = point.z = std::numeric_limits<float>::quiet_NaN();
-        point.is_tail_pt = false;
-        point.list_pulse.clear();
-        if (point.is_valid)
-        {
-            const float horizontal = r * std::cos(theta);
-            point.x = horizontal * std::cos(omega);
-            point.y = -horizontal * std::sin(omega);
-            point.z = r * std::sin(theta);
-        }
+        // 不启用标定（或标定表缺失）：纯几何解算，不引用任何标定修正量。
+        Cs96BetaCalibration::applyRaw(line, ft, packet.index, peak, packet.face, point);
     }
     packet.pointCount = kLines;
     packet.mode = 1;
@@ -259,7 +235,7 @@ bool parseHistogram(const std::uint8_t *data, ParsedPacket &packet)
 }
 
 bool parseAny(const std::uint8_t *data, std::size_t size, ParsedPacket &packet,
-              const Cs96BetaCalibration *calibration, int lockedFace)
+              const Cs96BetaCalibration *calibration, bool calibrate, int lockedFace)
 {
     if (data == nullptr)
     {
@@ -273,7 +249,7 @@ bool parseAny(const std::uint8_t *data, std::size_t size, ParsedPacket &packet,
     }
     if (size == BetaUdpStream::kOriginPacketSize)
     {
-        return parseOrigin(data, packet, calibration, lockedFace);
+        return parseOrigin(data, packet, calibration, calibrate, lockedFace);
     }
     if (size == BetaUdpStream::kHistogramPacketSize)
     {
@@ -289,6 +265,7 @@ struct BetaUdpStream::Impl
     Config config;
     FrameSink sink;
     std::shared_ptr<const Cs96BetaCalibration> calibration;
+    bool calibrationEnabled = true;
     mutable std::mutex mutex;
     std::thread worker;
     bool stopRequested = false;
@@ -539,9 +516,11 @@ struct BetaUdpStream::Impl
         while (true)
         {
             std::shared_ptr<const Cs96BetaCalibration> packetCalibration;
+            bool packetCalibrate = true;
             {
                 std::lock_guard<std::mutex> lock(mutex);
                 packetCalibration = calibration;
+                packetCalibrate = calibrationEnabled;
                 if (stopRequested)
                 {
                     break;
@@ -597,7 +576,7 @@ struct BetaUdpStream::Impl
                 static_cast<std::size_t>(received) == kOriginPacketSize &&
                 readLe16(buffer.data() + 1) == currentFrame ? currentFace : -1;
             if (!parseAny(buffer.data(), static_cast<std::size_t>(received), packet,
-                          packetCalibration.get(), lockedFace))
+                          packetCalibration.get(), packetCalibrate, lockedFace))
             {
                 std::lock_guard<std::mutex> lock(mutex);
                 ++stats.invalidPackets;
@@ -752,6 +731,18 @@ void BetaUdpStream::setCalibration(std::shared_ptr<const Cs96BetaCalibration> ca
 {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->calibration = std::move(calibration);
+}
+
+void BetaUdpStream::setCalibrationEnabled(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->calibrationEnabled = enabled;
+}
+
+bool BetaUdpStream::calibrationEnabled() const
+{
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    return impl_->calibrationEnabled;
 }
 
 void BetaUdpStream::setFaceMask(std::uint8_t mask)
