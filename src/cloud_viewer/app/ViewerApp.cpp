@@ -11,6 +11,12 @@
 #include <sstream>
 #include <thread>
 
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 #include <vtkAxesActor.h>
 #include <vtkCallbackCommand.h>
 #include <vtkInteractorStyleTrackballCamera.h>
@@ -71,6 +77,30 @@ private:
 };
 
 vtkStandardNewMacro(SelectionStyle);
+
+// 读取内核到目标雷达的路由源地址；不会发送 UDP 包。
+std::string betaRouteSource(const std::string &ip)
+{
+#ifndef _WIN32
+    sockaddr_in remote{};
+    remote.sin_family = AF_INET;
+    remote.sin_port = htons(50007);
+    if (inet_pton(AF_INET, ip.c_str(), &remote.sin_addr) != 1) return {};
+    const int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return {};
+    sockaddr_in local{};
+    socklen_t size = sizeof(local);
+    const bool ok = connect(fd, reinterpret_cast<sockaddr *>(&remote), sizeof(remote)) == 0 &&
+                    getsockname(fd, reinterpret_cast<sockaddr *>(&local), &size) == 0;
+    close(fd);
+    char address[INET_ADDRSTRLEN]{};
+    if (!ok || !inet_ntop(AF_INET, &local.sin_addr, address, sizeof(address))) return {};
+    return address;
+#else
+    (void)ip;
+    return {};
+#endif
+}
 
 std::string formatFloat(float value, int precision = 3)
 {
@@ -395,6 +425,88 @@ ViewerApp::~ViewerApp()
     if (radar_) radar_->stop();
 }
 
+// 修改前验证 host key；只在目标 IP 确实变化时重启指定雷达进程。
+static bool prepareBetaTarget(const std::string &ip, const std::string &password,
+                              std::string &message)
+{
+    if (ip == "10.42.0.221") { message = "该设备不允许自动修改"; return false; }
+    const std::string localIp = betaRouteSource(ip);
+    if (localIp.empty()) { message = "无法从路由确定到 " + ip + " 的本机 IPv4"; return false; }
+    if (password.empty()) { message = "未配置 Beta SSH 密码"; return false; }
+    const char *home = std::getenv("HOME");
+    const char *configured = std::getenv("CV_BETA_KNOWN_HOSTS");
+    const std::string knownHosts = configured && *configured ? configured :
+        (home && *home ? std::string(home) + "/.config/cloud_viewer/beta_known_hosts" : "");
+    if (knownHosts.empty() || !std::filesystem::exists(knownHosts))
+    {
+        message = "缺少已确认的 SSH 主机密钥文件: " + knownHosts;
+        return false;
+    }
+    const std::string script = R"SH(set -eu
+conf=/etc/ys_conf.ini
+expected="$1"
+old=$(awk -F '"' '/^[[:space:]]*center_ip[[:space:]]*=/{n++; v=$2} END{if(n==1) print v}' "$conf")
+[ -n "$old" ] || { echo CONFIG_INVALID; exit 1; }
+if [ "$old" = "$expected" ]; then
+  if ! pidof you_see >/dev/null; then
+    setsid sh -c 'cd /root && exec ./you_see >>/tmp/you_stdout.log 2>&1' </dev/null >/dev/null 2>&1 &
+    sleep 3
+    pidof you_see >/dev/null || { echo START_FAILED; exit 1; }
+    echo PROCESS_STARTED
+  fi
+  echo CENTER_UNCHANGED="$old"
+  exit 0
+fi
+backup=$(mktemp /tmp/cv_center_backup.XXXXXX)
+tmp=$(mktemp /tmp/cv_center_new.XXXXXX)
+cp -p "$conf" "$backup"
+changed=0
+rollback() {
+  rc=$?
+  if [ "$rc" -ne 0 ] && [ "$changed" = 1 ]; then
+    cp "$backup" "$conf"
+    pids=$(pidof you_see || true); [ -z "$pids" ] || kill -9 $pids || true
+    setsid sh -c 'cd /root && exec ./you_see >>/tmp/you_stdout.log 2>&1' </dev/null >/dev/null 2>&1 &
+    echo CENTER_RESTORED
+  fi
+  rm -f "$backup" "$tmp"
+}
+trap rollback 0
+awk -v ip="$expected" '/^[[:space:]]*center_ip[[:space:]]*=/{sub(/"[^"]*"/, "\"" ip "\"")} {print}' "$conf" > "$tmp"
+actual=$(awk -F '"' '/^[[:space:]]*center_ip[[:space:]]*=/{n++; v=$2} END{if(n==1) print v}' "$tmp")
+[ "$actual" = "$expected" ] || { echo CONFIG_WRITE_FAILED; exit 1; }
+cp "$tmp" "$conf"
+changed=1
+pids=$(pidof you_see || true)
+[ -z "$pids" ] || kill -9 $pids
+sleep 1
+setsid sh -c 'cd /root && exec ./you_see >>/tmp/you_stdout.log 2>&1' </dev/null >/dev/null 2>&1 &
+sleep 3
+pidof you_see >/dev/null || { echo RESTART_FAILED; exit 1; }
+changed=0
+echo CENTER_UPDATED="$old"-"$expected"
+)SH";
+    const std::string command = "printf %s " + shellQuote(script) +
+        " | SSHPASS=" + shellQuote(password) +
+        " timeout 20 sshpass -e ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=" +
+        shellQuote(knownHosts) + " -o ConnectTimeout=6 -o ServerAliveInterval=3 "
+        "root@" + ip + " sh -s -- " + shellQuote(localIp) + " 2>&1";
+    FILE *pipe = popen(command.c_str(), "r");
+    if (!pipe) { message = "无法启动 SSH"; return false; }
+    std::string output;
+    char buf[512];
+    while (std::fgets(buf, sizeof(buf), pipe)) output += buf;
+    const int rc = pclose(pipe);
+    if (rc != 0 || (output.find("CENTER_UNCHANGED=") == std::string::npos &&
+                    output.find("CENTER_UPDATED=") == std::string::npos))
+    {
+        message = "设置 center_ip 失败: " + output.substr(0, 300);
+        return false;
+    }
+    message = "目标 " + ip + "，本机 " + localIp + "：" + output;
+    return true;
+}
+
 void ViewerApp::connectBeta(const std::string &ip)
 {
     // 用广播中的 work_mode 初始化当前模式，避免 HUD 与实际包格式不一致。
@@ -407,6 +519,11 @@ void ViewerApp::connectBeta(const std::string &ip)
         }
     }
 
+    if (ip == "10.42.0.221")
+    {
+        logUi("Connect Device", "该设备不允许连接操作", false);
+        return;
+    }
     if (radar_)
     {
         radar_->stop();
@@ -417,6 +534,14 @@ void ViewerApp::connectBeta(const std::string &ip)
         betaStream_->stop();
         betaStream_.reset();
     }
+
+    // 准备推流目标；失败时仍监听，并在 UI 明确显示原因，便于手动恢复。
+    logUi("Connect Device", "正在核对设备 center_ip 和本机路由地址");
+    updateHud();
+    renderer_.render();
+    std::string targetMessage;
+    const bool targetReady = prepareBetaTarget(ip, betaSshPassword(), targetMessage);
+    logUi("Beta Target", targetMessage, targetReady);
 
     betaStream_ = std::make_unique<BetaUdpStream>();
     BetaUdpStream::Config config;
@@ -532,7 +657,7 @@ void ViewerApp::connectBeta(const std::string &ip)
     autoStartAttempted_ = true; // Beta 为被动接收，不做 SSH 拉起
     {
         std::lock_guard<std::mutex> lock(radarMessageMutex_);
-        radarMessage_.clear();
+        radarMessage_ = targetReady ? std::string{} : targetMessage;
     }
     logUi("Connect Device", "CS96 Beta 监听 UDP " + std::to_string(config.localPort) +
                                "，等待 " + ip + " 推流");
@@ -1090,8 +1215,8 @@ void ViewerApp::toggleLiveCalibration()
         controlState_ = betaCalibrationEnabled_ ? "CS96 Beta calibration ON"
                                                : "CS96 Beta calibration OFF (raw geometry)";
         logUi("App Cal", betaCalibrationEnabled_
-                             ? "CS96 Beta 标定 ON：编码器水平角 + 逐线修正 + 距离零点/系数 + 反射率查表"
-                             : "CS96 Beta 标定 OFF：纯几何（光速距离、slot 线性水平角、峰值反射率）");
+                             ? "CS96 Beta 标定 ON：距离系数/零点 + 逐线水平角 + FPGA 旋转角 + 反射率查表"
+                             : "CS96 Beta 标定 OFF：四项修正全关，保留编码器表/面起始角/俯仰角");
         updateHud();
         renderer_.render();
         return;

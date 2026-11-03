@@ -19,14 +19,32 @@ constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
 constexpr float kPaCountsPerRevolution = 240.0f;
 constexpr int kFaces = 4;
 
-// 纯几何路径使用的光学标称值（非逐设备标定），与 ys_calibration.ini 出厂默认一致。
-constexpr int kLinesV = 96;
-constexpr int kSlotsPerFace = 800;
-constexpr int kNominalPixelCenter = 47;
-constexpr float kNominalFov = 120.0f;      // 单面水平视场（度）
-constexpr float kNominalOmega0 = -60.0f;   // 水平视场左边界
-constexpr float kNominalThetaFov = 20.0f;  // 俯仰视场（度）
-constexpr float kNominalThetaTilt = -2.5f; // 俯仰倾斜（度）
+// ys_algo_calib_reflectivity.c: #define MIN_PEAK 51
+constexpr std::uint16_t kMinPeak = 51;
+
+// calib_reflectivity/include/calc_intensity.h: _reflectances = {0.1, 0.3, 0.5, 0.7, 0.9}
+// 反射率表存的是 5 档参考峰值，插值结果是这 5 个固定反射率之间的值。
+constexpr float kReflectanceLevels[5] = {0.1f, 0.3f, 0.5f, 0.7f, 0.9f};
+
+// include/Spline.h: linearExtrapolate() 的外推锚点
+constexpr float kExtrapolateMinPeak = 0.0f;
+constexpr float kExtrapolateMinReflect = 0.0f;
+constexpr float kExtrapolateMaxPeak = 1600.0f;
+constexpr float kExtrapolateMaxReflect = 1.0f;
+
+/// 复刻 ys_algo_calib_reflectivity.c 的 get_reflect_by_peak()：返回 0~1。
+float reflectByPeak(std::uint16_t peak, std::uint16_t maxPeak)
+{
+    if (peak <= kMinPeak)
+    {
+        return 0.0f;
+    }
+    if (peak >= maxPeak)
+    {
+        return 1.0f;
+    }
+    return static_cast<float>(peak - kMinPeak) / static_cast<float>(maxPeak - kMinPeak);
+}
 
 std::string trim(const std::string &text)
 {
@@ -132,29 +150,27 @@ bool Cs96BetaCalibration::finalizeGeometry(std::string &error)
         return false;
     }
 
-    // 面起始角：设备实测 face0~3 = 357.00 / 87.43 / 177.54 / 267.03，
-    // 对应编码器 scale 238 / 58 / 118 / 178，即 (238 + face*60) % 240。
-    // 仓库里的 standard_encoder 公式在本设备上与其他面不吻合，改用整圈表插值（误差 < 0.6°）。
+    // 与设备端 PA 公式一致，不能用编码器表采样点代替面起始参数。
     for (int face = 0; face < kFaces; ++face)
     {
-        const int scale = (238 + face * 60) % 240;
-        if (scale < static_cast<int>(encoderAngle_.size()))
-        {
-            startingAngle_[face] = encoderAngle_[scale];
-        }
-        else
-        {
-            startingAngle_[face] = (standardEncoder_[face] * 256.0f +
-                                    sideAngularOffset_[face]) / 256.0f * 360.0f /
-                                   kPaCountsPerRevolution;
-        }
+        startingAngle_[face] = (standardEncoder_[face] * 256.0f + sideAngularOffset_[face]) /
+                               256.0f * 360.0f / kPaCountsPerRevolution;
     }
+
 
     // 俯仰角：与下位机 CalculateTheta 一致（像素倒序映射）。
     const float step = (thetaMax_ - thetaMin_) / static_cast<float>(linesV_);
     for (int i = linesV_ - 1, j = 0; i >= 0; --i, ++j)
     {
         theta_[j] = static_cast<float>(i - u_) * step + thetaTilt_;
+    }
+
+    // FPGA 旋转角曲线按角度升序排列，保证插值/外推的单调前提。
+    for (auto &curve : spotSlope_)
+    {
+        std::sort(curve.begin(), curve.end(),
+                  [](const std::pair<float, float> &a, const std::pair<float, float> &b)
+                  { return a.first < b.first; });
     }
 
     loaded_ = true;
@@ -217,6 +233,7 @@ bool Cs96BetaCalibration::parseIni(const std::filesystem::path &path, std::strin
             else if (key == "lines_h") linesH_ = std::atoi(value.c_str());
             else if (key == "u") u_ = std::atoi(value.c_str());
             else if (key == "omega0") omega0_ = std::stof(value);
+            else if (key == "sat_peak_max") satPeakMax_ = static_cast<std::uint16_t>(std::atoi(value.c_str()));
             else if (key == "theta_min") thetaMin_ = std::stof(value);
             else if (key == "theta_max") thetaMax_ = std::stof(value);
             else if (key == "theta_tilt") thetaTilt_ = std::stof(value);
@@ -227,7 +244,7 @@ bool Cs96BetaCalibration::parseIni(const std::filesystem::path &path, std::strin
         }
         else if (section == "zero_distance_offset" && index >= 0 && index < 96)
         {
-            dDelta_[index] = std::stof(value); // 单位 cm
+            dDelta_[index] = std::stof(value); // 单位 m
         }
         else if (section == "distance_factor" && index >= 0 && index < 96)
         {
@@ -410,6 +427,7 @@ bool Cs96BetaCalibration::parseUnifiedCsv(const std::filesystem::path &path, std
             else if (key == "lines_h") linesH_ = std::atoi(value0.c_str());
             else if (key == "u") u_ = std::atoi(value0.c_str());
             else if (key == "omega0") omega0_ = std::strtof(value0.c_str(), nullptr);
+            else if (key == "sat_peak_max") satPeakMax_ = static_cast<std::uint16_t>(std::atoi(value0.c_str()));
             else if (key == "theta_min") thetaMin_ = std::strtof(value0.c_str(), nullptr);
             else if (key == "theta_max") thetaMax_ = std::strtof(value0.c_str(), nullptr);
             else if (key == "theta_tilt") thetaTilt_ = std::strtof(value0.c_str(), nullptr);
@@ -637,21 +655,37 @@ float Cs96BetaCalibration::reflectivity(int pixel, float distance, std::uint16_t
         }
     }
 
-    // peak 在 5 个反射率基准之间的位置（0~4）。
+    // 复刻 CalibReflect::calcIntensity()：把 peak 对 5 个参考峰值做线性插值，
+    // 得到 _reflectances = {0.1, 0.3, 0.5, 0.7, 0.9} 之间的值；越界按 linearExtrapolate()
+    // 的锚点 (0, 0) 与 (1600, 1) 外推并钳到 [0, 1]。
+    float reflect = 0.0f;
     if (peak <= reference[0])
     {
-        return 0.0f;
+        const float span = reference[0] - kExtrapolateMinPeak;
+        const float ratio = span > 0.0f ? (peak - kExtrapolateMinPeak) / span : 0.0f;
+        reflect = kExtrapolateMinReflect + ratio * (kReflectanceLevels[0] - kExtrapolateMinReflect);
     }
-    for (int k = 1; k < 5; ++k)
+    else if (peak >= reference[4])
     {
-        if (peak <= reference[k])
+        const float span = kExtrapolateMaxPeak - reference[4];
+        const float ratio = span > 0.0f ? (peak - reference[4]) / span : 0.0f;
+        reflect = kReflectanceLevels[4] + ratio * (kExtrapolateMaxReflect - kReflectanceLevels[4]);
+    }
+    else
+    {
+        for (int k = 1; k < 5; ++k)
         {
-            const float span = reference[k] - reference[k - 1];
-            const float ratio = span > 0.0f ? (peak - reference[k - 1]) / span : 0.0f;
-            return (static_cast<float>(k - 1) + ratio) / 4.0f * 100.0f;
+            if (peak <= reference[k])
+            {
+                const float span = reference[k] - reference[k - 1];
+                const float ratio = span > 0.0f ? (peak - reference[k - 1]) / span : 0.0f;
+                reflect = kReflectanceLevels[k - 1] +
+                          ratio * (kReflectanceLevels[k] - kReflectanceLevels[k - 1]);
+                break;
+            }
         }
     }
-    return 100.0f;
+    return std::clamp(reflect, 0.0f, 1.0f) * 100.0f;
 }
 
 float Cs96BetaCalibration::paAngle(int scale, int realAngle) const
@@ -690,50 +724,9 @@ int Cs96BetaCalibration::faceByPa(float paAngleDeg) const
     return matched;
 }
 
-void Cs96BetaCalibration::applyRaw(int pixel, std::uint32_t ft, std::uint16_t slot,
-                                   std::uint16_t peak, int face, algo_lidar::PointData &point)
-{
-    point.pixel_idx = static_cast<std::uint16_t>(pixel);
-    point.slot_idx = slot;
-    point.peak = peak;
-    point.select_idx = 0;
-    point.timestamp = 0;
-    point.is_tail_pt = false;
-    point.list_pulse.clear();
-
-    // 距离：直接用光速换算，不做 a_factor 距离系数，也不做 d_delta 零点偏移。
-    const float r = (ft > 16) ? kLightSpeed * static_cast<float>(ft >> 1) : 0.0f;
-    // 俯仰：光学设计标称值（视场 ±10°、中心像素 47、倾斜 -2.5°），非逐设备标定。
-    const float theta = static_cast<float>((pixel - kNominalPixelCenter) *
-                                               (kNominalThetaFov / kLinesV) +
-                                           kNominalThetaTilt) *
-                        kDegToRad;
-    // 水平角：按 slot 线性铺满单面 120° 视场，不查编码器表，不加逐线修正。
-    const float omegaDeg = kNominalOmega0 + kNominalFov * slot / kSlotsPerFace;
-    const float omega = omegaDeg * kDegToRad;
-
-    point.r = r;
-    point.theta = theta / kDegToRad;
-    point.omega_rad = omega;
-    point.slot_ang = omegaDeg;
-    point.intensity = static_cast<std::uint8_t>(peak > 1638 ? 255 : (peak * 255u) / 1638u);
-    // 反射率：不查 reflectivity_map，直接用峰值强度。
-    point.reflect = static_cast<float>(peak);
-    point.is_valid = face >= 0 && r > 0.1f && r < 200.0f;
-
-    point.x = point.y = point.z = std::numeric_limits<float>::quiet_NaN();
-    if (point.is_valid)
-    {
-        const float horizontal = r * std::cos(theta);
-        point.x = horizontal * std::cos(omega);
-        point.y = -horizontal * std::sin(omega);
-        point.z = r * std::sin(theta);
-    }
-}
-
 void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirrorAngle,
                                 std::uint16_t slot, std::uint16_t peak, int face,
-                                algo_lidar::PointData &point) const
+                                const DecodeOptions &options, algo_lidar::PointData &point) const
 {
     point.pixel_idx = static_cast<std::uint16_t>(pixel);
     point.slot_idx = slot;
@@ -753,27 +746,50 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     }
 
     const int index = std::clamp(pixel, 0, linesV_ - 1);
-    const float r = kLightSpeed * static_cast<float>(ft >> 1) * aFactor_[index] +
-                    dDelta_[index] * 0.01f; // d_delta 单位 cm
 
+    // 距离 —— ys_decode_common.c: calculate_distance()
+    //   r = c·(ft >> 1)·a[pixel] + d_delta[pixel]
+    // 关闭 distanceCorrection 等价于 a = 1、d_delta = 0。
+    float r = kLightSpeed * static_cast<float>(ft >> 1);
+    if (options.distanceCorrection)
+    {
+        r = r * aFactor_[index] + dDelta_[index]; // 设备端直接按米相加（ys_decode_common.c）
+    }
+
+    // 水平角 —— ys_algo_horizontal_corners.c
+    //   hc    = encoder[scale] + 0.0009·real - starting[face]，wrap 到 ±180
+    //   omega = hc·2 + omega0
+    // 编码器表与面起始角属结构参数（PA 实测、非逐线修正），任何开关下都保留。
     const int scale = static_cast<int>((mirrorAngle >> 12) & 0xFF);
     const int realAngle = static_cast<int>(mirrorAngle & 0xFFF);
-    const int faceIndex = face;
     if (slot != 0 && scale >= static_cast<int>(encoderAngle_.size())) return;
     // slot0 为同步标记，严格保留设备的 omega0 -> *2 + omega0 分支。
     float hc = omega0_;
     if (slot != 0)
     {
-        hc = encoderAngle_[scale] + 0.0009f * static_cast<float>(realAngle) -
-             startingAngle_[faceIndex];
+        hc = encoderAngle_[scale] + 0.0009f * static_cast<float>(realAngle) - startingAngle_[face];
         if (hc > 180.0f) hc -= 360.0f;
         else if (hc < -180.0f) hc += 360.0f;
     }
+    // 单面视场只有约 120°，面间 90° 偏移不能加进来，否则 4 个面会被摊成 360°。
+    float omegaDeg = hc * 2.0f + omega0_;
 
-    // 与下位机一致：hc * 2 + omega0，再加逐线水平角修正。
-    // 单面视场只有约 120°，slot_ang 必须落在 [-60, 60]；面间 90° 偏移不能加进来，
-    // 否则 4 个面会被摊成 360° 的圆环（这正是之前"转圈圈"的根因）。
-    const float omegaDeg = hc * 2.0f + omega0_ + omegaDelta_[index];
+    // FPGA 旋转角标定 —— ys_algo_horizontal_corners.c 在同一位置调用
+    // get_beta_spot_slope()，入参正是"已乘 2 加 omega0"的水平角。
+    // spot_slope_map 缺失时设备端原样返回，等价于关闭本项。
+    if (slot != 0 && options.spotSlope)
+    {
+        omegaDeg = spotSlopeCorrection(omegaDeg, face);
+    }
+
+    // 逐线（VCSEL 通道）水平角修正 —— [horizontal_angular_offset]。
+    // 这是设备端 deal_orgin_point_cloud_data() 里唯一一处单独叠加的标定量：
+    //   omega = horizontal_corner + g_omega_delta[pixel]
+    if (options.lineOmegaDelta)
+    {
+        omegaDeg += omegaDelta_[index];
+    }
+
     const float omega = omegaDeg * kDegToRad;
     const float theta = theta_[index] * kDegToRad;
 
@@ -785,11 +801,75 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     // CS96 Beta 的 Y 轴方向与常规右手系相反。
     point.y = -r * std::cos(theta) * std::sin(omega);
     point.z = r * std::sin(theta);
-    point.intensity = static_cast<std::uint8_t>(peak > 1638 ? 255 : (peak * 255u) / 1638u);
 
-    const float reflected = reflectivity(index, r, peak);
-    point.reflect = reflected >= 0.0f ? reflected : static_cast<float>(peak);
+    // 反射率 —— 有表时复刻 CalibReflect::calcIntensity()：
+    //   用 5 个参考峰值对 peak 做线性插值，得到 0.1~0.9 的反射率。
+    // 关闭标定或该像素查不到时，退回 get_reflect() 的 handle == NULL 分支。
+    float reflectNorm = -1.0f;
+    if (options.reflectivityMap)
+    {
+        const float mapped = reflectivity(index, r, peak); // 0~100
+        if (mapped >= 0.0f)
+        {
+            reflectNorm = mapped * 0.01f;
+        }
+    }
+    if (reflectNorm < 0.0f)
+    {
+        reflectNorm = reflectByPeak(peak, satPeakMax_);
+    }
+    point.reflect = reflectNorm * 100.0f;
+    point.intensity = static_cast<std::uint8_t>(std::clamp(reflectNorm * 255.0f, 0.0f, 255.0f));
     point.is_valid = r > 0.1f && r < 200.0f;
+}
+
+float Cs96BetaCalibration::spotSlopeCorrection(float angleDeg, int face) const
+{
+    if (face < 0 || face >= kFaces)
+    {
+        return angleDeg;
+    }
+    const auto &curve = spotSlope_[face];
+    // 与 repairRotateAngle() 一致：数据不足 2 点、查表失败都原样返回。
+    if (curve.size() < 2)
+    {
+        return angleDeg;
+    }
+
+    float diff = 0.0f;
+    if (angleDeg <= curve.front().first)
+    {
+        const float x1 = curve.front().first;
+        const float y1 = curve.front().second;
+        const float x2 = curve[1].first;
+        const float y2 = curve[1].second;
+        const float slope = (x2 != x1) ? (y2 - y1) / (x2 - x1) : 0.0f;
+        diff = y1 + slope * (angleDeg - x1);
+    }
+    else if (angleDeg >= curve.back().first)
+    {
+        const std::size_t n = curve.size();
+        const float x1 = curve[n - 2].first;
+        const float y1 = curve[n - 2].second;
+        const float x2 = curve[n - 1].first;
+        const float y2 = curve[n - 1].second;
+        const float slope = (x2 != x1) ? (y2 - y1) / (x2 - x1) : 0.0f;
+        diff = y2 + slope * (angleDeg - x2);
+    }
+    else
+    {
+        for (std::size_t i = 1; i < curve.size(); ++i)
+        {
+            if (angleDeg <= curve[i].first)
+            {
+                const float span = curve[i].first - curve[i - 1].first;
+                const float ratio = span > 0.0f ? (angleDeg - curve[i - 1].first) / span : 0.0f;
+                diff = curve[i - 1].second + ratio * (curve[i].second - curve[i - 1].second);
+                break;
+            }
+        }
+    }
+    return angleDeg + diff;
 }
 
 } // namespace cloud_viewer

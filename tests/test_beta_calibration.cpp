@@ -1,10 +1,13 @@
 /**
- * @brief CS96 Beta 标定路径与纯几何路径的对照测试。
+ * @brief CS96 Beta 原始点云四项标定开关的对照测试。
  *
- * 关键约束：
- *   1. 单文件聚合 CSV 必须能被加载，且解析出的面起始角与目录布局一致；
- *   2. applyRaw() 完全不依赖标定表（光速距离、slot 线性水平角、峰值反射率）；
- *   3. 同一回波在“启用标定”与“不启用标定”下必须得到不同结果。
+ * 对应 you_see_arm 的四份可缺失标定数据：
+ *   1. [distance_factor]/[zero_distance_offset]  -> distanceCorrection
+ *   2. [horizontal_angular_offset]               -> lineOmegaDelta
+ *   3. spot_slope_map                            -> spotSlope
+ *   4. reflectivity_map                          -> reflectivityMap
+ *
+ * 结构参数（编码器表、面起始角、omega0、俯仰角）在任何开关下都保持生效。
  */
 
 #include "cloud_viewer/preprocess/Cs96BetaCalibration.h"
@@ -17,7 +20,12 @@
 namespace
 {
 
+using cloud_viewer::Cs96BetaCalibration;
+using Options = Cs96BetaCalibration::DecodeOptions;
+
 constexpr float kLightSpeed = 299792458.0f * 1e-12f; // 米/皮秒
+constexpr std::uint16_t kSatPeakMax = 1612;
+constexpr std::uint16_t kMinPeak = 51;
 
 std::filesystem::path findCalibration()
 {
@@ -58,7 +66,7 @@ int main()
         return 0;
     }
 
-    cloud_viewer::Cs96BetaCalibration calibration;
+    Cs96BetaCalibration calibration;
     std::string error;
     if (!calibration.load(source, error))
     {
@@ -78,41 +86,75 @@ int main()
 
     // 面起始角必须与设备实测值一致（聚合 CSV 与目录布局共用同一算法）。
     const auto &starts = calibration.startingAngles();
-    check("start_face0", std::fabs(starts[0] - 356.984f) < 0.05f, std::to_string(starts[0]));
-    check("start_face1", std::fabs(starts[1] - 87.3658f) < 0.05f, std::to_string(starts[1]));
+    check("start_face0", std::fabs(starts[0] - 357.0f) < 0.05f, std::to_string(starts[0]));
+    check("start_face1", std::fabs(starts[1] - 87.4336f) < 0.05f, std::to_string(starts[1]));
 
     // 固定一条回波：line=32、ft=1000、slot=400、peak=800、face=0。
     // mirrorAngle 取 scale=238、realAngle=0，即恰好落在该面起点。
     const int line = 32;
-    const std::uint32_t ft = 1000;
+    const std::uint32_t ft = 60000;
     const std::uint16_t slot = 400;
     const std::uint16_t peak = 800;
     const std::uint32_t mirrorAngle = (238u << 12);
 
-    algo_lidar::PointData raw{};
-    algo_lidar::PointData calibrated{};
-    cloud_viewer::Cs96BetaCalibration::applyRaw(line, ft, slot, peak, 0, raw);
-    calibration.apply(line, ft, mirrorAngle, slot, peak, 0, calibrated);
+    auto decode = [&](const Options &options)
+    {
+        algo_lidar::PointData point{};
+        calibration.apply(line, ft, mirrorAngle, slot, peak, 0, options, point);
+        return point;
+    };
 
-    // 纯几何：r 只由光速决定，omega 只由 slot 决定，反射率就是峰值。
+    const Options allOff = Options::allOff();
+    Options lineOnly = allOff;
+    lineOnly.lineOmegaDelta = true;
+    Options spotOnly = allOff;
+    spotOnly.spotSlope = true;
+    const Options allOn{};
+
+    const algo_lidar::PointData off = decode(allOff);
+    const algo_lidar::PointData linePoint = decode(lineOnly);
+    const algo_lidar::PointData spotPoint = decode(spotOnly);
+    const algo_lidar::PointData on = decode(allOn);
+
+    // 距离：关闭 distanceCorrection 等价于 a=1、d=0。
     const float expectedR = kLightSpeed * static_cast<float>(ft >> 1);
-    const float expectedOmega = -60.0f + 120.0f * slot / 800.0f;
-    check("raw_r", std::fabs(raw.r - expectedR) < 1e-3f,
-          std::to_string(raw.r) + " vs " + std::to_string(expectedR));
-    check("raw_omega", std::fabs(raw.slot_ang - expectedOmega) < 1e-3f,
-          std::to_string(raw.slot_ang) + " vs " + std::to_string(expectedOmega));
-    check("raw_reflect", std::fabs(raw.reflect - static_cast<float>(peak)) < 1e-3f,
-          std::to_string(raw.reflect));
+    check("off_r", std::fabs(off.r - expectedR) < 1e-4f,
+          std::to_string(off.r) + " vs " + std::to_string(expectedR));
+    check("on_r_differs", std::fabs((on.r - off.r) - (-5.8716f)) < 1e-3f,
+          std::to_string(on.r) + " vs off " + std::to_string(off.r));
 
-    // 标定路径必须引入差异：距离含 d_delta 零点偏移，水平角走编码器表。
-    check("calibrated_r_differs", std::fabs(calibrated.r - raw.r) > 1e-3f,
-          std::to_string(calibrated.r) + " vs raw " + std::to_string(raw.r));
-    check("calibrated_omega_differs", std::fabs(calibrated.slot_ang - raw.slot_ang) > 1.0f,
-          std::to_string(calibrated.slot_ang) + " vs raw " + std::to_string(raw.slot_ang));
-    // 单面视场约束：标定后的水平角仍应落在 [-60, 60] 附近。
-    check("calibrated_omega_range",
-          calibrated.slot_ang >= -61.0f && calibrated.slot_ang <= 61.0f,
-          std::to_string(calibrated.slot_ang));
+    check("distance_on_off_valid", off.is_valid && on.is_valid, "both valid");
+    algo_lidar::PointData tooNear{};
+    calibration.apply(line, 1000, mirrorAngle, slot, peak, 0, allOn, tooNear);
+    check("negative_range_invalid", !tooNear.is_valid, std::to_string(tooNear.r));
+
+    // 水平角：关闭时仍走编码器链，只是不加 omega_delta 与旋转角修正。
+    check("off_omega_in_fov", off.slot_ang >= -61.0f && off.slot_ang <= 61.0f,
+          std::to_string(off.slot_ang));
+    // omega_delta 实测从 -0.002 线性降到 -1.279（96 线），单线量级约 1°。
+    check("line_delta_small", std::fabs(linePoint.slot_ang - off.slot_ang) < 2.0f &&
+                                  linePoint.slot_ang != off.slot_ang,
+          std::to_string(linePoint.slot_ang - off.slot_ang));
+    check("spot_delta_small", std::fabs(spotPoint.slot_ang - off.slot_ang) < 2.0f &&
+                                  std::fabs(spotPoint.slot_ang - off.slot_ang) > 1e-3f,
+          std::to_string(spotPoint.slot_ang - off.slot_ang));
+
+    // 叠加顺序：hc*2 + omega0 -> spot slope -> omega_delta。
+    const float expectedOnOmega = spotPoint.slot_ang + (linePoint.slot_ang - off.slot_ang);
+    check("omega_order", std::fabs(on.slot_ang - expectedOnOmega) < 1e-3f,
+          std::to_string(on.slot_ang) + " vs " + std::to_string(expectedOnOmega));
+
+    // 反射率：关闭 reflectivityMap 时走 get_intensity_by_peak，
+    //   reflect = (peak - 51) / (sat_peak_max - 51)，换算到 0~100。
+    const float expectedReflect =
+        100.0f * static_cast<float>(peak - kMinPeak) / static_cast<float>(kSatPeakMax - kMinPeak);
+    check("off_reflect", std::fabs(off.reflect - expectedReflect) < 1e-2f,
+          std::to_string(off.reflect) + " vs " + std::to_string(expectedReflect));
+    check("off_intensity", std::fabs(static_cast<int>(off.intensity) -
+                                     static_cast<int>(expectedReflect * 2.55f)) <= 1,
+          std::to_string(static_cast<int>(off.intensity)));
+    check("on_reflect_differs", std::fabs(on.reflect - off.reflect) > 1e-3f,
+          std::to_string(on.reflect) + " vs off " + std::to_string(off.reflect));
 
     const bool pass = failures == 0;
     std::printf("BETA_CALIB_TEST_%s failures=%d\n", pass ? "PASS" : "FAIL", failures);
