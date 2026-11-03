@@ -1,5 +1,8 @@
 #include "cloud_viewer/render/UiOverlay.h"
 
+#include <cstdlib>
+#include <iostream>
+
 #include <vtkActor2D.h>
 #include <vtkCellArray.h>
 #include <vtkCoordinate.h>
@@ -99,12 +102,22 @@ bool UiOverlay::handleClick(int displayX, int displayY, int windowWidth, int win
         if (nx >= button.x && nx <= button.x + button.width &&
             ny >= button.y && ny <= button.y + button.height)
         {
+            std::cout << "[ui] click \"" << button.label << "\" at (" << displayX << ","
+                      << displayY << ")" << std::endl;
             if (button.onClick)
             {
                 button.onClick();
             }
             return true;
         }
+    }
+
+    // 未命中按钮默认不打印，避免拖动/旋转时刷屏；排查点击偏移时设 CV_UI_DEBUG=1。
+    const char *debug = std::getenv("CV_UI_DEBUG");
+    if (debug != nullptr && debug[0] == '1')
+    {
+        std::cout << "[ui] click at (" << displayX << "," << displayY
+                  << ") missed all buttons" << std::endl;
     }
     return false;
 }

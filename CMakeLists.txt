@@ -81,9 +81,28 @@ target_link_libraries(cv_render PUBLIC cv_core viewer_deps)
 
 add_library(cv_stream STATIC
     src/cloud_viewer/stream/RadarStream.cpp
+    src/cloud_viewer/stream/UdpRadarStream.cpp
 )
 target_include_directories(cv_stream PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(cv_stream PUBLIC cv_core)
+# 只链接 RANGE 核心源文件，不引入算法工程的 main、离线标定器和全局构建选项。
+set(CLOUD_VIEWER_RANGE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../algo_solid_lidar" CACHE PATH "RANGE API 工程目录")
+find_path(CV_LZ4_INCLUDE lz4frame.h)
+find_library(CV_LZ4_LIBRARY NAMES lz4)
+if(NOT CV_LZ4_INCLUDE OR NOT CV_LZ4_LIBRARY)
+    message(FATAL_ERROR "在线 RANGE LZ4 解析需要 lz4frame.h 和 liblz4")
+endif()
+add_library(cv_range6532 STATIC
+    ${CLOUD_VIEWER_RANGE_ROOT}/src/range6532_pipeline.cpp
+    ${CLOUD_VIEWER_RANGE_ROOT}/src/range6532_protocol.cpp)
+target_include_directories(cv_range6532 PUBLIC ${CLOUD_VIEWER_RANGE_ROOT}/include)
+target_sources(cv_stream PRIVATE src/cloud_viewer/stream/RangeStreamDecoder.cpp
+    src/cloud_viewer/stream/RadarControl.cpp)
+target_include_directories(cv_stream PRIVATE ${CV_LZ4_INCLUDE})
+find_package(Threads REQUIRED)
+target_link_libraries(cv_stream PUBLIC cv_core cv_range6532 ${CV_LZ4_LIBRARY} Threads::Threads)
+if(WIN32)
+    target_link_libraries(cv_stream PUBLIC ws2_32)
+endif()
 
 foreach(_sdk_option ALPHA_SDK BETA_SDK FL6031_SDK FL6532_SDK)
     if(CLOUD_VIEWER_WITH_${_sdk_option})
@@ -97,6 +116,7 @@ endforeach()
 
 add_library(cv_preprocess STATIC
     src/cloud_viewer/preprocess/FramePreprocessor.cpp
+    src/cloud_viewer/preprocess/OnlineCalibration.cpp
 )
 target_include_directories(cv_preprocess PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(cv_preprocess PUBLIC cv_core)
@@ -106,7 +126,10 @@ target_link_libraries(cv_preprocess PUBLIC cv_core)
 # ------------------------------------------------------------------------------
 
 add_library(cv_platform STATIC
+    src/cloud_viewer/platform/AppSettings.cpp
     src/cloud_viewer/platform/FileDialog.cpp
+    src/cloud_viewer/platform/NetworkSetup.cpp
+    src/cloud_viewer/platform/RadarLauncher.cpp
 )
 target_include_directories(cv_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(cv_platform PUBLIC cv_core)
@@ -122,7 +145,7 @@ add_library(cv_app STATIC
     src/cloud_viewer/app/ViewerApp.cpp
 )
 target_include_directories(cv_app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(cv_app PUBLIC cv_render cv_io cv_platform cv_core viewer_deps)
+target_link_libraries(cv_app PUBLIC cv_render cv_io cv_platform cv_core cv_stream cv_preprocess viewer_deps)
 
 # ------------------------------------------------------------------------------
 # cloud_viewer：Lite 主程序

@@ -2,9 +2,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <sstream>
+#include <thread>
 
 #include <vtkAxesActor.h>
 #include <vtkCallbackCommand.h>
@@ -20,7 +23,11 @@
 #include <vtkWindowToImageFilter.h>
 
 #include "cloud_viewer/io/Loaders.h"
+#include "cloud_viewer/preprocess/OnlineCalibration.h"
 #include "cloud_viewer/platform/FileDialog.h"
+#include "cloud_viewer/platform/AppSettings.h"
+#include "cloud_viewer/platform/NetworkSetup.h"
+#include "cloud_viewer/platform/RadarLauncher.h"
 
 namespace cloud_viewer
 {
@@ -70,6 +77,25 @@ std::string formatFloat(float value, int precision = 3)
     stream.precision(precision);
     stream << value;
     return stream.str();
+}
+
+std::uint64_t nowMs()
+{
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+}
+
+/// 统一按钮动作日志，便于在控制台还原“点了什么、做了什么、结果如何”。
+void logUi(const std::string &action, const std::string &detail, bool ok = true)
+{
+    std::cout << "[ui] " << action << (ok ? " OK" : " FAILED");
+    if (!detail.empty())
+    {
+        std::cout << " | " << detail;
+    }
+    std::cout << std::endl;
 }
 
 } // namespace
@@ -137,9 +163,25 @@ void ViewerApp::setupInteraction()
                   {
                       renderer_.resetCamera();
                       renderer_.render();
+                      logUi("Reset", "相机已重置到当前点云包络");
                   });
     ui_.addButton("Hide", 0.643, kButtonY, 0.070, kButtonHeight,
                   [this] { toggleCurrentVisibility(); });
+
+    connectButtonIndex_ = ui_.size();
+    ui_.addButton("Connect Radar", 0.720, kButtonY, 0.130, kButtonHeight,
+                  [this] { toggleRadarConnection(); });
+    modeButtonIndex_ = ui_.size();
+    ui_.addButton("Mode: Cloud", 0.010, 0.863, 0.18, kButtonHeight,
+                  [this] { switchRadarMode(); });
+    roiButtonIndex_ = ui_.size();
+    ui_.addButton("ROI: 0", 0.200, 0.863, 0.13, kButtonHeight,
+                  [this] { switchRadarRoi(); });
+    ui_.addButton("Select Calib", 0.340, 0.863, 0.19, kButtonHeight,
+                  [this] { loadLiveCalibration(); });
+    calibrationButtonIndex_ = ui_.size();
+    ui_.addButton("App Cal: OFF", 0.540, 0.863, 0.28, kButtonHeight,
+                  [this] { toggleLiveCalibration(); });
 }
 
 bool ViewerApp::handleUiClick(int displayX, int displayY)
@@ -178,8 +220,12 @@ void ViewerApp::importFiles(const std::vector<std::filesystem::path> &paths)
 {
     if (paths.empty())
     {
+        logUi("Import", "没有可导入的文件", false);
         return;
     }
+
+    logUi("Import", "加载 " + std::to_string(paths.size()) + " 个文件，首个: " +
+                        paths.front().filename().string());
 
     clearScene();
 
@@ -192,6 +238,7 @@ void ViewerApp::importFiles(const std::vector<std::filesystem::path> &paths)
 
     if (!loadFiles(list))
     {
+        logUi("Import", "文件解析/索引失败", false);
         updateHud();
         renderer_.render();
         return;
@@ -200,6 +247,11 @@ void ViewerApp::importFiles(const std::vector<std::filesystem::path> &paths)
     if (loadFrame(0, 0))
     {
         renderer_.resetCamera();
+        logUi("Import", "成功加载 " + std::to_string(files_.size()) + " 个文件，显示首个文件第 0 帧");
+    }
+    else
+    {
+        logUi("Import", "索引建立成功，但首帧解码失败", false);
     }
     updateHud();
     renderer_.render();
@@ -207,24 +259,31 @@ void ViewerApp::importFiles(const std::vector<std::filesystem::path> &paths)
 
 void ViewerApp::openFilesDialog()
 {
+    logUi("Open Files", "打开原生文件选择对话框");
     if (!FileDialogService::available())
     {
-        std::cerr << "[cloud_viewer] 未找到原生文件对话框后端（Linux 需要 zenity 或 kdialog）。\n";
+        logUi("Open Files", "未找到原生对话框后端（Linux 需要 zenity 或 kdialog）", false);
         return;
     }
 
     const auto files = FileDialogService::openFiles();
-    if (!files.empty())
+    if (files.empty())
     {
-        importFiles(files);
+        logUi("Open Files", "用户取消或未选择文件", false);
+        return;
     }
+
+    logUi("Open Files", "已选择 " + std::to_string(files.size()) + " 个文件");
+    importFiles(files);
 }
 
 void ViewerApp::openDirectoryDialog()
 {
+    logUi("Open Folder", "打开目录选择对话框");
     const auto directory = FileDialogService::chooseDirectory();
     if (!directory)
     {
+        logUi("Open Folder", "用户取消目录选择", false);
         return;
     }
 
@@ -248,9 +307,10 @@ void ViewerApp::openDirectoryDialog()
 
     if (files.empty())
     {
-        std::cerr << "[cloud_viewer] 目录中没有 csv/txt/pcd 文件: " << directory->string() << "\n";
+        logUi("Open Folder", "目录中没有 csv/txt/pcd 文件: " + directory->string(), false);
         return;
     }
+    logUi("Open Folder", directory->string() + " 下找到 " + std::to_string(files.size()) + " 个文件");
     importFiles(files);
 }
 
@@ -258,6 +318,7 @@ void ViewerApp::toggleCurrentVisibility()
 {
     if (currentCloudId_ == 0)
     {
+        logUi("Hide", "当前没有可隐藏的点云", false);
         return;
     }
     if (const SceneObject *object = scene_.find(currentCloudId_))
@@ -265,9 +326,454 @@ void ViewerApp::toggleCurrentVisibility()
         const bool visible = !object->visible;
         scene_.setVisible(currentCloudId_, visible);
         renderer_.setVisible(currentCloudId_, visible);
+        logUi("Hide", "cloudId=" + std::to_string(currentCloudId_) +
+                          " visible=" + (visible ? "true" : "false"));
         updateHud();
         renderer_.render();
     }
+    else
+    {
+        logUi("Hide", "场景树中找不到 cloudId=" + std::to_string(currentCloudId_), false);
+    }
+}
+
+ViewerApp::~ViewerApp()
+{
+    // 接收回调引用本对象，必须在 mutex、pending frame 等成员析构前退出线程。
+    if (radar_) radar_->stop();
+}
+
+void ViewerApp::connectRadar()
+{
+    // 重试时必须先释放旧 socket，否则 Error 状态下 radar_ 仍 running，
+    // 直接 return 会导致点击 Retry 毫无反应。
+    if (radar_)
+    {
+        radar_->stop();
+        radar_.reset();
+    }
+
+    // 雷达向本机 .100 单播；该地址通常是临时添加的，电脑重启后会丢失，
+    // 导致 viewer 收不到任何包而一直停在 Waiting。连接前先检测并自动补齐。
+    const char *envIface = std::getenv("CV_RADAR_IFACE");
+    const std::string iface = (envIface != nullptr && envIface[0] != '\0') ? envIface : "enp4s0";
+    const char *envCidr = std::getenv("CV_RADAR_CIDR");
+    const std::string cidr = (envCidr != nullptr && envCidr[0] != '\0') ? envCidr : "192.168.137.100/24";
+    const char *envLocalIp = std::getenv("CV_RADAR_LOCAL_IP");
+    const std::string localIp = (envLocalIp != nullptr && envLocalIp[0] != '\0') ? envLocalIp : "192.168.137.100";
+
+    const NetworkSetupResult network = ensureLocalAddress(iface, cidr, localIp);
+    if (!network.configured)
+    {
+        std::cerr << "[cloud_viewer] " << network.message << "\n";
+        radarState_ = RadarState::Error;
+        {
+            std::lock_guard<std::mutex> lock(radarMessageMutex_);
+            radarMessage_ = network.message;
+        }
+        updateHud();
+        renderer_.render();
+        return;
+    }
+    if (!network.hasAddress)
+    {
+        std::cout << "[cloud_viewer] " << network.message << "\n";
+    }
+
+    radar_ = std::make_unique<UdpRadarStream>();
+    UdpRadarConfig config; // 192.168.137.200:6001 -> 本地 UDP 6002
+    config.mode = liveMode_;
+    config.roi = liveRoi_;
+
+    // 允许通过环境变量覆盖，便于真机换 IP 与本地回环测试。
+    try
+    {
+        if (const char *ip = std::getenv("CV_RADAR_IP"))
+        {
+            config.radarIp = ip;
+        }
+        if (const char *port = std::getenv("CV_RADAR_PORT"))
+        {
+            const int value=std::stoi(port);
+            if(value<1 || value>65535) throw std::out_of_range("CV_RADAR_PORT");
+            config.radarPort=static_cast<std::uint16_t>(value);
+        }
+        if (const char *local = std::getenv("CV_LOCAL_PORT"))
+        {
+            const int value=std::stoi(local);
+            if(value<1 || value>65535) throw std::out_of_range("CV_LOCAL_PORT");
+            config.localPort=static_cast<std::uint16_t>(value);
+        }
+    }
+    catch (...)
+    {
+        // 非法环境变量保持默认值。
+    }
+
+    std::string error;
+
+    auto sink = [this, config](algo_lidar::PointMatrix &&matrix, std::uint64_t timestampUs, int roi)
+    {
+        FrameMetadata metadata;
+        metadata.model = roi < 0 ? RadarModel::Generic : RadarModel::Fl6532;
+        metadata.roiId = roi;
+        metadata.frameNumber = timestampUs;
+        metadata.timestampUnit = config.mode == RadarOutputMode::Range ? "raw" : "us";
+        metadata.algorithmId = config.mode == RadarOutputMode::Range ? "range6532_raw" : "device_cloud";
+        metadata.calibrationState = config.mode == RadarOutputMode::Range ? "raw_range" : "device_unknown";
+
+        auto frame = makeFrame(std::move(matrix), metadata);
+        std::lock_guard<std::mutex> lock(radarMutex_);
+        pendingRadarFrame_ = frame;
+    };
+
+    if (!radar_->open(config, sink, error))
+    {
+        std::cerr << "[cloud_viewer] 雷达连接失败: " << error << "\n";
+        radar_.reset();
+        radarConnected_ = false;
+        radarState_ = RadarState::Error;
+        std::lock_guard<std::mutex> lock(radarMessageMutex_);
+        radarMessage_ = "UDP 监听失败: " + error;
+    }
+    else
+    {
+        radarConnected_ = true;
+        radarState_ = RadarState::Waiting;
+        radarWaitStartMs_ = nowMs();
+        autoStartAttempted_ = false;
+        {
+            std::lock_guard<std::mutex> lock(radarMessageMutex_);
+            radarMessage_.clear();
+        }
+        logUi("Connect Radar", "已监听 UDP " + std::to_string(config.localPort) +
+                                   "，等待 " + config.radarIp + ":" + std::to_string(config.radarPort));
+    }
+
+    if (radarState_ == RadarState::Error)
+    {
+        radarState_ = RadarState::Error;
+    }
+
+    updateHud();
+    renderer_.render();
+}
+
+void ViewerApp::disconnectRadar()
+{
+    if (radar_)
+    {
+        radar_->stop();
+        radar_.reset();
+    }
+    radarConnected_ = false;
+    radarState_ = RadarState::Disconnected;
+    autoStartAttempted_ = false;
+    lastRawLiveFrame_.reset();
+    {
+        std::lock_guard<std::mutex> lock(radarMutex_);
+        pendingRadarFrame_.reset();
+    }
+    updateHud();
+    renderer_.render();
+}
+
+void ViewerApp::toggleRadarConnection()
+{
+    const auto stateName = [](RadarState value) -> const char *
+    {
+        switch (value)
+        {
+        case RadarState::Disconnected:
+            return "Disconnected";
+        case RadarState::Waiting:
+            return "Waiting";
+        case RadarState::Live:
+            return "Live";
+        case RadarState::Error:
+            return "Error";
+        }
+        return "Unknown";
+    };
+
+    if (modeFuture_.valid())
+    {
+        logUi("Connect Radar", "模式切换进行中，忽略本次点击", false);
+        return;
+    }
+
+    const auto state = radarState_.load();
+    if (state == RadarState::Waiting || state == RadarState::Live)
+    {
+        logUi("Disconnect", std::string("state=") + stateName(state));
+        disconnectRadar();
+    }
+    else
+    {
+        logUi("Connect Radar", std::string("state=") + stateName(state));
+        connectRadar();
+    }
+}
+
+void ViewerApp::switchRadarMode()
+{
+    if (modeFuture_.valid())
+    {
+        logUi("Mode", "上一次模式切换尚未完成，忽略点击", false);
+        return;
+    }
+    UdpRadarConfig config;
+    if (radar_) config = radar_->config();
+    else if (const char* ip = std::getenv("CV_RADAR_IP")) config.radarIp = ip;
+    const RadarOutputMode previousMode = liveMode_;
+    requestedMode_ = liveMode_ == RadarOutputMode::Cloud ? RadarOutputMode::Range : RadarOutputMode::Cloud;
+    disconnectRadar();
+    std::uint16_t port = 6508;
+    try { if (const char* p = std::getenv("CV_CONTROL_PORT")) {
+        const int value=std::stoi(p);
+        if(value<1 || value>65535) throw std::out_of_range("CV_CONTROL_PORT");
+        port=static_cast<std::uint16_t>(value);
+    } }
+    catch (...)
+    {
+        controlState_ = "Invalid CV_CONTROL_PORT";
+        logUi("Mode", "CV_CONTROL_PORT 非法，模式切换中止", false);
+        updateHud();
+        return;
+    }
+    logUi("Mode", std::string(previousMode == RadarOutputMode::Cloud ? "Cloud" : "Range") +
+                      " -> " + (requestedMode_ == RadarOutputMode::Cloud ? "Cloud" : "Range") +
+                      " (control port " + std::to_string(port) + ")");
+    controlState_ = "Switching device mode...";
+    const auto mode = requestedMode_;
+    modeFuture_ = std::async(std::launch::async, [config,port,mode] {
+        return setRadarOutputMode(config.radarIp,port,mode);
+    });
+    updateHud(); renderer_.render();
+}
+
+void ViewerApp::switchRadarRoi()
+{
+    if (modeFuture_.valid())
+    {
+        logUi("ROI", "模式切换进行中，忽略点击", false);
+        return;
+    }
+    const bool connected = radarConnected_;
+    const int previousRoi = liveRoi_;
+    disconnectRadar();
+    liveRoi_ = liveRoi_ ? 0 : 1;
+    logUi("ROI", "ROI " + std::to_string(previousRoi) + " -> " + std::to_string(liveRoi_) +
+                     (connected ? "，重新连接" : "，当前未连接"));
+    if (connected) connectRadar();
+    updateHud(); renderer_.render();
+}
+
+void ViewerApp::loadLiveCalibration()
+{
+    logUi("Select Calib", "打开标定表选择对话框");
+    const auto files = FileDialogService::openFiles();
+    if (files.empty())
+    {
+        logUi("Select Calib", "用户取消或未选择文件", false);
+        return;
+    }
+
+    // 选择一次即复制到软件目录，后续启动不依赖原始路径。
+    std::string copyError;
+    const auto stored = importCalibrationFile(files.front(), copyError);
+    if (stored.empty())
+    {
+        logUi("Select Calib", "复制标定表失败: " + copyError, false);
+        return;
+    }
+
+    algo_lidar::Range6532LegacyCalibrationBin table;
+    if (!algo_lidar::loadRange6532LegacyCalibrationBin(stored.string(), table))
+    {
+        controlState_ = "Calibration table parse failed; previous table retained";
+        logUi("Select Calib", "解析失败，保留旧表: " + stored.string(), false);
+    }
+    else
+    {
+        liveCalibrationTable_ = std::move(table);
+        liveCalibrationPath_ = stored.string();
+        calibrationReady_ = true;
+        controlState_ = "Calibration table: " + stored.filename().string();
+
+        // 只记住文件，不改变开关状态；开关由 App Cal 按钮独立控制。
+        ViewerSettings settings;
+        settings.calibrationFile = stored.filename().string();
+        settings.calibrationEnabled = liveCalibration_ != 0;
+        std::string saveError;
+        if (!saveViewerSettings(settings, saveError))
+        {
+            logUi("Select Calib", "记忆写入失败: " + saveError, false);
+        }
+        logUi("Select Calib", "已复制并加载 " + stored.string());
+    }
+    updateHud(); renderer_.render();
+}
+
+void ViewerApp::toggleLiveCalibration()
+{
+    if (liveMode_ != RadarOutputMode::Range)
+    {
+        controlState_ = "Cloud = device output; use RANGE for raw/calibrated comparison";
+        logUi("App Cal", "当前为 Cloud 模式，设备已输出点云，无需本地校正", false);
+        updateHud(); renderer_.render();
+        return;
+    }
+    if (!calibrationReady_)
+    {
+        controlState_ = "Select calibration table first";
+        logUi("App Cal", "尚未选择标定表，请先点 Select Calib", false);
+        updateHud(); renderer_.render();
+        return;
+    }
+
+    liveCalibration_ = liveCalibration_ ? 0 : 1;
+    controlState_ = liveCalibration_ ? "App calibration ON" : "App calibration OFF";
+
+    // 记住开关状态，下次启动随标定表一起恢复。
+    ViewerSettings settings;
+    settings.calibrationFile = std::filesystem::path(liveCalibrationPath_).filename().string();
+    settings.calibrationEnabled = liveCalibration_ != 0;
+    std::string saveError;
+    if (!saveViewerSettings(settings, saveError))
+    {
+        logUi("App Cal", "记忆写入失败: " + saveError, false);
+    }
+
+    if (lastRawLiveFrame_)
+    {
+        std::lock_guard<std::mutex> lock(radarMutex_);
+        // 切换始终从保存的原始帧重算，不在校正后的点云上累加。
+        if (!pendingRadarFrame_) pendingRadarFrame_ = lastRawLiveFrame_;
+    }
+
+    logUi("App Cal", liveCalibration_ ? "已启用本地标定（TableB）" : "已取消本地标定");
+    updateHud(); renderer_.render();
+}
+
+FrameHandle ViewerApp::preprocessLiveFrame(const FrameHandle& raw)
+{
+    if (!liveCalibration_ || !calibrationReady_ || raw->metadata.calibrationState != "raw_range")
+    {
+        return raw;
+    }
+    // 默认 TableB；保留 CV_CALIB_MODE=tail3ln 作为算法对比入口。
+    const char *mode = std::getenv("CV_CALIB_MODE");
+    const bool useTail3 = mode != nullptr && std::string(mode) == "tail3ln";
+    return calibrateOnlineRange(raw, liveCalibrationTable_,
+                                useTail3 ? OnlineCalibrationMode::Tail3LnFixed
+                                         : OnlineCalibrationMode::TableB);
+}
+
+void ViewerApp::applyIncomingFrame()
+{
+    // TCP 控制等待在后台完成，UI 不阻塞；只有收到成功 ACK 后才切换本地解析器。
+    if (modeFuture_.valid() && modeFuture_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        const auto error = modeFuture_.get();
+        if (error.empty()) {
+            liveMode_ = requestedMode_;
+            controlState_ = "Mode ACK OK; waiting for matching complete frame";
+            logUi("Mode", "设备已确认模式切换，重新监听 UDP");
+            connectRadar();
+        } else {
+            controlState_ = "Mode switch failed: " + error;
+            logUi("Mode", "设备模式切换失败: " + error, false);
+        }
+        updateHud(); renderer_.render();
+    }
+    FrameHandle frame;
+    {
+        std::lock_guard<std::mutex> lock(radarMutex_);
+        frame = std::move(pendingRadarFrame_);
+        pendingRadarFrame_.reset();
+    }
+    if (!frame)
+    {
+        // 等待阶段：2.5s 无包则尝试通过 SSH 启动雷达驱动；12s 仍无包判为失败。
+        if (radarState_.load() == RadarState::Waiting)
+        {
+            const std::uint64_t now = nowMs();
+            const RadarStreamStats stats = radar_ ? radar_->stats() : RadarStreamStats{};
+            if (stats.packets == 0 && now - radarWaitStartMs_ > 2500 &&
+                !autoStartAttempted_.exchange(true))
+            {
+                if (RadarLauncher::configured())
+                {
+                    std::string message;
+                    RadarLauncher::start(message); // 同步约 3s，仅在无数据时执行一次
+                    std::cout << "[cloud_viewer] " << message << "\n";
+                    std::lock_guard<std::mutex> lock(radarMessageMutex_);
+                    radarMessage_ = message;
+                    radarWaitStartMs_ = nowMs();
+                }
+                else
+                {
+                    std::lock_guard<std::mutex> lock(radarMessageMutex_);
+                    radarMessage_ = "未配置 CV_RADAR_SSH_PASS，请手动运行 tools/connect_radar.sh";
+                }
+            }
+
+            if (stats.packets == 0 && now - radarWaitStartMs_ > 12000)
+            {
+                radarState_ = RadarState::Error;
+                std::lock_guard<std::mutex> lock(radarMessageMutex_);
+                if (radarMessage_.empty())
+                {
+                    radarMessage_ =
+                        "未收到点云：先确认本机有 192.168.137.100 地址"
+                        "（sudo ip addr add 192.168.137.100/24 dev enp4s0），"
+                        "并确认雷达 soc_example 在运行";
+                }
+            }
+        }
+        updateHud();
+        return;
+    }
+
+    const RadarState previousRadarState = radarState_.exchange(RadarState::Live);
+    if (previousRadarState != RadarState::Live)
+    {
+        std::ostringstream detail;
+        detail << "收到首帧，帧号 " << frame->metadata.frameNumber
+               << "，显示点 " << frame->metadata.totalSamples
+               << "，有效 " << frame->metadata.validSamples;
+        logUi("Radar Live", detail.str());
+    }
+    lastRawLiveFrame_ = frame;
+    frame = preprocessLiveFrame(frame);
+    // 必须在清空 currentCloudId_ 之前判断，否则每帧都会误判为首帧并 resetCamera，
+    // 导致相机随点云包络反复重算（表现为视角螺旋/抖动）。
+    const bool firstLiveFrame = (currentCloudId_ == 0);
+
+    if (currentCloudId_ != 0)
+    {
+        renderer_.remove(currentCloudId_);
+        scene_.remove(currentCloudId_);
+        currentCloudId_ = 0;
+    }
+
+    currentFrameHandle_ = frame;
+    currentRenderable_ = CloudRenderBridge::prepare(frame);
+
+    SceneObject object;
+    object.name = "LIVE";
+    object.kind = SceneObjectKind::Cloud;
+    object.frame = frame;
+    object.renderable = currentRenderable_;
+    currentCloudId_ = scene_.add(0, std::move(object));
+
+    applyColor();
+    if (firstLiveFrame)
+    {
+        renderer_.resetCamera();
+    }
+    updateHud();
+    renderer_.render();
 }
 
 bool ViewerApp::loadFiles(const std::vector<std::string> &files)
@@ -460,6 +966,7 @@ void ViewerApp::nextColorSource()
 
     if (!currentFrameHandle_)
     {
+        logUi("Color", "尚未加载点云，无法切换着色", false);
         return;
     }
 
@@ -473,6 +980,7 @@ void ViewerApp::nextColorSource()
         }
     }
 
+    const ColorSource previous = colorSource_;
     for (std::size_t step = 1; step <= order.size(); ++step)
     {
         const ColorSource candidate = order[(start + step) % order.size()];
@@ -481,29 +989,54 @@ void ViewerApp::nextColorSource()
         {
             colorSource_ = candidate;
             applyColor();
+            std::ostringstream detail;
+            detail << colorSourceName(previous) << " -> " << colorSourceName(candidate);
+            if (lastRange_.valid)
+            {
+                detail << ", range=[" << formatFloat(lastRange_.minValue) << ", "
+                       << formatFloat(lastRange_.maxValue) << "]";
+            }
+            else
+            {
+                detail << ", 无有效标量值";
+            }
+            logUi("Color", detail.str());
             return;
         }
     }
+
+    logUi("Color", "当前点云没有任何可用属性，保持原着色", false);
 }
 
 void ViewerApp::stepFrame(int delta)
 {
-    if (files_.empty() || frozen_)
+    const char *action = delta < 0 ? "Prev" : "Next";
+    if (frozen_)
     {
+        logUi(action, "播放已冻结（Space 解冻后再翻帧）", false);
+        return;
+    }
+    if (files_.empty())
+    {
+        logUi(action, "尚未加载任何文件", false);
         return;
     }
     LoadedFile &file = files_[currentFile_];
     if (file.index.frames.empty())
     {
+        logUi(action, "当前文件没有可用帧: " + file.path.filename().string(), false);
         return;
     }
 
     const int count = static_cast<int>(file.index.frames.size());
-    int next = static_cast<int>(currentFrame_) + delta;
+    const int previous = static_cast<int>(currentFrame_);
+    int next = previous + delta;
     next = (next % count + count) % count;
 
     loadFrame(currentFile_, static_cast<std::size_t>(next));
     renderer_.render();
+    logUi(action, file.path.filename().string() + " 帧 " + std::to_string(previous) +
+                     " -> " + std::to_string(next) + " / " + std::to_string(count));
 }
 
 void ViewerApp::handleKey(const std::string &key)
@@ -576,6 +1109,8 @@ void ViewerApp::selectAt(int displayX, int displayY)
 
     if (!renderer_.pick(displayX, displayY, objectId, pointId, world))
     {
+        logUi("Pick", "(" + std::to_string(displayX) + "," + std::to_string(displayY) +
+                          ") 未命中任何点云", false);
         return;
     }
 
@@ -650,7 +1185,7 @@ void ViewerApp::updateHud()
     }
 
     std::ostringstream text;
-    if (files_.empty())
+    if (files_.empty() && !radarConnected_)
     {
         text << "No point cloud loaded\n";
         text << "Click \"Open Files\" or \"Open Folder\" to import CSV / TXT / PCD\n";
@@ -658,7 +1193,11 @@ void ViewerApp::updateHud()
     }
     else
     {
-        if (currentFile_ < files_.size())
+        if (files_.empty())
+        {
+            text << "LIVE radar stream\n";
+        }
+        else if (currentFile_ < files_.size())
         {
             const LoadedFile &file = files_[currentFile_];
             text << "File: " << file.path.filename().string()
@@ -685,16 +1224,72 @@ void ViewerApp::updateHud()
              << (frozen_ ? "unfreeze" : "freeze")
              << "\nShift+LMB pick point";
     }
+
+    const RadarState radarState = radarState_.load();
+    if (radarState != RadarState::Disconnected)
+    {
+        const RadarStreamStats stats = radar_ ? radar_->stats() : RadarStreamStats{};
+        const char *stateText = radarState == RadarState::Waiting ? "waiting for data"
+                                : radarState == RadarState::Live  ? "LIVE"
+                                                                  : "ERROR";
+        text << "\nRadar[" << stateText << "]: "
+             << (radar_ ? radar_->config().radarIp : std::string("-"))
+             << ":" << (radar_ ? radar_->config().radarPort : 0)
+             << "  pkts=" << stats.packets
+             << "  frames=" << stats.frames
+             << "  fps=" << formatFloat(static_cast<float>(stats.framesPerSecond), 1);
+        if (radarState != RadarState::Live)
+        {
+            std::lock_guard<std::mutex> lock(radarMessageMutex_);
+            if (!radarMessage_.empty())
+            {
+                text << "\n" << radarMessage_;
+            }
+        }
+    }
+
+    text << "\nOnline selected: " << (liveMode_ == RadarOutputMode::Range ? "Range" : "Cloud")
+         << " ROI" << unsigned(liveRoi_) << "\n" << controlState_;
+    if (currentFrameHandle_ && radarConnected_)
+        text << "\nObserved: " << currentFrameHandle_->metadata.algorithmId
+             << "  calibration=" << currentFrameHandle_->metadata.calibrationState;
+    if (radar_) {
+        const auto stats = radar_->stats();
+        text << " invalid=" << stats.invalidPackets;
+        if (!stats.lastError.empty()) text << "\n" << stats.lastError;
+    }
+    ui_.setLabel(modeButtonIndex_, liveMode_ == RadarOutputMode::Range ? "Mode: Range" : "Mode: Cloud");
+    ui_.setLabel(roiButtonIndex_, std::string("ROI: ")+std::to_string(liveRoi_));
+    const char* cal = liveMode_ == RadarOutputMode::Cloud ? "App Cal: N/A (device Cloud)" :
+        !liveCalibration_ ? "App Cal: OFF" : "App Cal: ON";
+    ui_.setLabel(calibrationButtonIndex_,cal);
     hudActor_->SetInput(text.str().c_str());
 
     if (colorButtonIndex_ < ui_.size())
     {
         ui_.setLabel(colorButtonIndex_, std::string("Color: ") + colorSourceName(colorSource_));
     }
+    if (connectButtonIndex_ < ui_.size())
+    {
+        const char *label = "Connect Radar";
+        if (radarState == RadarState::Waiting)
+        {
+            label = "Waiting...";
+        }
+        else if (radarState == RadarState::Live)
+        {
+            label = "Disconnect";
+        }
+        else if (radarState == RadarState::Error)
+        {
+            label = "Retry";
+        }
+        ui_.setLabel(connectButtonIndex_, label);
+    }
 }
 
 int ViewerApp::run(const std::vector<std::string> &files, double fps,
-                   const std::string &screenshotPath)
+                   const std::string &screenshotPath, bool autoConnectRadar)
 {
     if (!renderer_.initialize(1280, 800))
     {
@@ -703,17 +1298,61 @@ int ViewerApp::run(const std::vector<std::string> &files, double fps,
 
     setupInteraction();
 
+    if (const char* mode=std::getenv("CV_STREAM_MODE"))
+        if (std::string(mode)=="range") liveMode_=RadarOutputMode::Range;
+
+    // 恢复上次选择的标定表与开关状态（文件已复制到软件目录 calib/）。
+    {
+        const ViewerSettings saved = loadViewerSettings();
+        if (!saved.calibrationFile.empty())
+        {
+            const auto path = calibrationDirectory() / saved.calibrationFile;
+            if (algo_lidar::loadRange6532LegacyCalibrationBin(path.string(), liveCalibrationTable_))
+            {
+                calibrationReady_ = true;
+                liveCalibrationPath_ = path.string();
+                liveCalibration_ = saved.calibrationEnabled ? 1 : 0;
+                logUi("Calib", "恢复上次标定表 " + saved.calibrationFile +
+                                   (saved.calibrationEnabled ? "（开关 ON）" : "（开关 OFF）"));
+            }
+            else
+            {
+                logUi("Calib", "上次标定表读取失败: " + path.string(), false);
+            }
+        }
+    }
+
+    // 命令行/环境变量仍可覆盖：同样复制到软件目录并写入记忆。
+    if (const char* path=std::getenv("CV_CALIB_BIN")) {
+        std::string copyError;
+        const auto stored = importCalibrationFile(path, copyError);
+        const auto loadPath = stored.empty() ? std::filesystem::path(path) : stored;
+        calibrationReady_=algo_lidar::loadRange6532LegacyCalibrationBin(loadPath.string(),liveCalibrationTable_);
+        if (calibrationReady_) {
+            liveCalibrationPath_=loadPath.string();
+            ViewerSettings settings;
+            settings.calibrationFile = loadPath.filename().string();
+            settings.calibrationEnabled = liveCalibration_ != 0;
+            std::string saveError;
+            saveViewerSettings(settings, saveError);
+        }
+    }
+    if (autoConnectRadar)
+    {
+        connectRadar();
+    }
+
     // 允许空场景启动：用户通过顶部按钮导入文件。
     if (!files.empty())
     {
-        if (!loadFiles(files))
+        std::vector<std::filesystem::path> initialPaths;
+        initialPaths.reserve(files.size());
+        for (const auto &file : files)
         {
-            std::cerr << "[cloud_viewer] 初始文件加载失败，可点击 Open Files 重新选择。\n";
+            initialPaths.emplace_back(file);
         }
-        else if (loadFrame(0, 0))
-        {
-            renderer_.resetCamera();
-        }
+        // 与 Open Files 共用同一路径，保证启动加载与按钮点击的日志一致。
+        importFiles(initialPaths);
     }
 
     auto *interactor = renderer_.interactor();
@@ -744,11 +1383,46 @@ int ViewerApp::run(const std::vector<std::string> &files, double fps,
         interactor->CreateRepeatingTimer(1000.0 / fps);
     }
 
+    // 在线帧消费：接收线程只投递最新帧，主线程每 33 ms 渲染一次。
+    auto radarTimer = vtkSmartPointer<vtkCallbackCommand>::New();
+    radarTimer->SetCallback([](vtkObject *, unsigned long, void *clientData, void *)
+                            {
+                                auto *app = static_cast<ViewerApp *>(clientData);
+                                if (app)
+                                {
+                                    app->applyIncomingFrame();
+                                }
+                            });
+    radarTimer->SetClientData(this);
+    interactor->AddObserver(vtkCommand::TimerEvent, radarTimer);
+    interactor->CreateRepeatingTimer(33);
+
     updateHud();
     renderer_.render();
 
     if (!screenshotPath.empty())
     {
+        if (autoConnectRadar)
+        {
+            // 轮询直到收到首帧或超时：期间会触发“无数据自动 SSH 拉起驱动”。
+            int waitMs = 2000;
+            if (const char *value = std::getenv("CV_SCREENSHOT_WAIT_MS"))
+            {
+                const int parsed = std::atoi(value);
+                if (parsed > 0) waitMs = parsed;
+            }
+            const auto deadline = std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(waitMs);
+            while (std::chrono::steady_clock::now() < deadline)
+            {
+                applyIncomingFrame();
+                if (radarState_.load() == RadarState::Live) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+            applyIncomingFrame();
+            updateHud();
+        }
+
         renderer_.window()->SetOffScreenRendering(1);
         renderer_.render();
 

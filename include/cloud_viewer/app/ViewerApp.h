@@ -3,8 +3,13 @@
  */
 #pragma once
 
+#include <atomic>
+#include <cstdint>
 #include <filesystem>
+#include <future>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -17,6 +22,7 @@
 #include "cloud_viewer/render/PclVtkRenderer.h"
 #include "cloud_viewer/render/UiOverlay.h"
 #include "cloud_viewer/scene/SceneGraph.h"
+#include "cloud_viewer/stream/UdpRadarStream.h"
 
 class vtkTextActor;
 
@@ -34,10 +40,20 @@ struct LoadedFile
 class ViewerApp
 {
 public:
+    enum class RadarState
+    {
+        Disconnected = 0,
+        Waiting, // 已监听，尚未收到包
+        Live,    // 已收到帧
+        Error    // 超时或启动失败
+    };
+
+    ~ViewerApp();
+
     /// fps > 0 时启用 mock 定时推帧（模拟在线数据源）；fps = 0 为纯离线交互。
     /// screenshotPath 非空时渲染一帧并保存 PNG，随后退出（用于无头验收）。
     int run(const std::vector<std::string> &files, double fps = 0.0,
-            const std::string &screenshotPath = "");
+            const std::string &screenshotPath = "", bool autoConnectRadar = false);
 
     /// Shift + 左键触发：拾取并显示原始点信息。
     void selectAt(int displayX, int displayY);
@@ -52,11 +68,24 @@ public:
     void importFiles(const std::filesystem::path &path);
     void importFiles(const std::vector<std::filesystem::path> &paths);
 
+    /// 在线雷达连接开关。
+    void toggleRadarConnection();
+
+    /// 主线程消费接收线程投递的最新在线帧。
+    void applyIncomingFrame();
+
 private:
     void openFilesDialog();
     void openDirectoryDialog();
     void clearScene();
     void toggleCurrentVisibility();
+    void connectRadar();
+    void disconnectRadar();
+    void switchRadarMode();
+    void switchRadarRoi();
+    void toggleLiveCalibration();
+    void loadLiveCalibration();
+    FrameHandle preprocessLiveFrame(const FrameHandle& raw);
 
     bool loadFiles(const std::vector<std::string> &files);
     bool loadFrame(std::size_t fileIndex, std::size_t frameIndex);
@@ -89,6 +118,31 @@ private:
 
     UiOverlay ui_;
     std::size_t colorButtonIndex_ = 0;
+    std::size_t connectButtonIndex_ = 0;
+
+    std::unique_ptr<UdpRadarStream> radar_;
+    std::mutex radarMutex_;
+    FrameHandle pendingRadarFrame_;
+    bool radarConnected_ = false;
+
+    std::atomic<RadarState> radarState_{RadarState::Disconnected};
+    std::atomic<bool> autoStartAttempted_{false};
+    std::uint64_t radarWaitStartMs_ = 0;
+    mutable std::mutex radarMessageMutex_;
+    std::string radarMessage_;
+    RadarOutputMode liveMode_ = RadarOutputMode::Cloud;
+    std::uint8_t liveRoi_ = 0;
+    std::future<std::string> modeFuture_;
+    RadarOutputMode requestedMode_ = RadarOutputMode::Cloud;
+    std::string controlState_ = "Device calibration: unknown (Cloud passthrough)";
+    int liveCalibration_ = 0; // 0=关闭，1=启用（TableB；Range only）。
+    bool calibrationReady_ = false;
+    algo_lidar::Range6532LegacyCalibrationBin liveCalibrationTable_;
+    std::string liveCalibrationPath_;
+    FrameHandle lastRawLiveFrame_;
+    std::size_t modeButtonIndex_ = 0;
+    std::size_t roiButtonIndex_ = 0;
+    std::size_t calibrationButtonIndex_ = 0;
 
     vtkSmartPointer<vtkTextActor> hudActor_;
     vtkSmartPointer<vtkTextActor> infoActor_;

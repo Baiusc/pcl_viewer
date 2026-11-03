@@ -171,9 +171,20 @@ void PclVtkRenderer::setBackground(double r, double g, double b)
 
 void PclVtkRenderer::resetCamera()
 {
-    if (renderer_)
+    if (!renderer_)
     {
-        renderer_->ResetCamera();
+        return;
+    }
+
+    renderer_->ResetCamera();
+    renderer_->ResetCameraClippingRange();
+
+    // 默认给一个斜视角，避免平面/曲面点云被看成一条线。
+    if (auto *camera = renderer_->GetActiveCamera())
+    {
+        camera->Azimuth(35.0);
+        camera->Elevation(20.0);
+        camera->OrthogonalizeViewUp();
         renderer_->ResetCameraClippingRange();
     }
 }

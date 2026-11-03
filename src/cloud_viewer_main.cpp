@@ -226,8 +226,9 @@ int main(int argc, char **argv)
             }
         }
 
+        const bool udp = (source == "udp");
         const bool mock = (source == "mock_replay" || source == "mock_synthetic");
-        if (source != "offline" &&
+        if (!udp && source != "offline" &&
             !cloud_viewer::RadarBackendFactory::instance().isAvailable(source))
         {
             const auto *backend = cloud_viewer::RadarBackendFactory::instance().find(source);
@@ -239,7 +240,7 @@ int main(int argc, char **argv)
             std::cerr << "，编译期未安装对应 SDK，返回 BackendUnavailable\n";
             return 13;
         }
-        if (files.empty() && first != "--screenshot")
+        if (files.empty() && first != "--screenshot" && !udp)
         {
             std::cerr << "[cloud_viewer] " << first << " 需要至少一个文件。\n";
             printUsage();
@@ -247,7 +248,7 @@ int main(int argc, char **argv)
         }
 
         cloud_viewer::ViewerApp app;
-        return app.run(files, mock ? (fps > 0.0 ? fps : 20.0) : 0.0, screenshotPath);
+        return app.run(files, mock ? (fps > 0.0 ? fps : 20.0) : 0.0, screenshotPath, udp);
     }
     if (first == "--inspect")
     {
