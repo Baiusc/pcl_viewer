@@ -80,6 +80,9 @@ target_link_libraries(cv_render PUBLIC cv_core viewer_deps)
 # ------------------------------------------------------------------------------
 
 add_library(cv_stream STATIC
+    src/cloud_viewer/preprocess/Cs96BetaCalibration.cpp
+    src/cloud_viewer/stream/BetaUdpStream.cpp
+    src/cloud_viewer/stream/DeviceDiscovery.cpp
     src/cloud_viewer/stream/RadarStream.cpp
     src/cloud_viewer/stream/UdpRadarStream.cpp
 )

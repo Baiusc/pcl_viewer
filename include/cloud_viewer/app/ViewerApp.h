@@ -22,6 +22,8 @@
 #include "cloud_viewer/render/PclVtkRenderer.h"
 #include "cloud_viewer/render/UiOverlay.h"
 #include "cloud_viewer/scene/SceneGraph.h"
+#include "cloud_viewer/stream/BetaUdpStream.h"
+#include "cloud_viewer/stream/DeviceDiscovery.h"
 #include "cloud_viewer/stream/UdpRadarStream.h"
 
 class vtkTextActor;
@@ -143,6 +145,31 @@ private:
     std::size_t modeButtonIndex_ = 0;
     std::size_t roiButtonIndex_ = 0;
     std::size_t calibrationButtonIndex_ = 0;
+    std::size_t searchButtonIndex_ = 0;
+    std::size_t firstDeviceButtonIndex_ = 0;
+    std::size_t faceButtonIndex_ = 0;
+    std::uint8_t betaFaceMask_ = 0x0F;
+
+    // 局域网设备发现（监听 55000 广播）与选中的设备。
+    std::unique_ptr<DeviceDiscovery> discovery_;
+    std::vector<DiscoveredDevice> discoveredDevices_;
+    std::string radarIpOverride_;
+
+    // CS96 Beta 转镜雷达直收（真实点云，1266B/包）。
+    std::unique_ptr<BetaUdpStream> betaStream_;
+    std::shared_ptr<Cs96BetaCalibration> betaCalibration_;
+    int betaWorkMode_ = 2;         // 0=直方图 1=原始点云 2=真实点云
+    int requestedBetaMode_ = 2;
+    bool betaModeSwitch_ = false;  // modeFuture_ 的结果用于 Beta 模式切换
+
+    void searchDevices();
+    void rebuildDeviceButtons();
+    void connectDiscoveredDevice(std::size_t index);
+    void connectBeta(const std::string &ip);
+    void switchBetaMode();
+    void cycleBetaFace();
+    static bool applyBetaWorkMode(const std::string &ip, int mode, std::string &message);
+    static std::string betaSshPassword();
 
     vtkSmartPointer<vtkTextActor> hudActor_;
     vtkSmartPointer<vtkTextActor> infoActor_;

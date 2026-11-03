@@ -135,4 +135,27 @@ void UiOverlay::setLabel(std::size_t index, const std::string &label)
     }
 }
 
+void UiOverlay::removeButtonsFrom(std::size_t index)
+{
+    if (index >= buttons_.size())
+    {
+        return;
+    }
+    for (auto it = buttons_.begin() + static_cast<std::ptrdiff_t>(index); it != buttons_.end(); ++it)
+    {
+        if (renderer_ != nullptr)
+        {
+            if (it->background)
+            {
+                renderer_->RemoveActor2D(it->background);
+            }
+            if (it->text)
+            {
+                renderer_->RemoveActor2D(it->text);
+            }
+        }
+    }
+    buttons_.erase(buttons_.begin() + static_cast<std::ptrdiff_t>(index), buttons_.end());
+}
+
 } // namespace cloud_viewer

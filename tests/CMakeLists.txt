@@ -12,6 +12,14 @@ add_executable(cv_test_color test_color.cpp)
 target_link_libraries(cv_test_color PRIVATE cv_render cv_core)
 add_test(NAME color_mapping COMMAND cv_test_color)
 
+add_executable(cv_test_beta_stream test_beta_stream.cpp)
+target_link_libraries(cv_test_beta_stream PRIVATE cv_stream cv_core)
+add_test(NAME beta_packet_parse COMMAND cv_test_beta_stream)
+
+add_executable(cv_test_discovery test_device_discovery.cpp)
+target_link_libraries(cv_test_discovery PRIVATE cv_stream cv_core)
+add_test(NAME device_broadcast_parse COMMAND cv_test_discovery)
+
 add_executable(cv_test_ui_overlay test_ui_overlay.cpp)
 target_link_libraries(cv_test_ui_overlay PRIVATE cv_render cv_core viewer_deps)
 add_test(NAME ui_button_hit_log COMMAND cv_test_ui_overlay)

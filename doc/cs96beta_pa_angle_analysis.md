@@ -1,0 +1,295 @@
+# CS96 Beta：PA 值、FPGA 旋转角与水平角的关系分析
+
+> 仅分析与结论，不含代码改动。依据 `lidar_sdk/you_see_arm`（分支 `feat/cs96-beta-spot-slope`）
+> 与 `10.42.0.218` 设备实测日志、`data/param/cs96beta_calib_data` 标定文件。
+
+---
+
+## 1. 三个量的定义
+
+| 名称 | 来源 | 位宽/单位 | 说明 |
+|---|---|---|---|
+| **FPGA 旋转角** `mirror_angle` | 原始点云 slot 头 `word0` | 20 bit | FPGA 直出的转镜编码值，`mirror_angle = (word0 >> 12) & 0xFFFFF` |
+| **PA 值** | 由 `mirror_angle` 拆出 | `scale` 8 bit + `real_angle` 12 bit | `scale = (mirror_angle >> 12) & 0xFF`，`real_angle = mirror_angle & 0xFFF` |
+| **水平角** `omega` | 由 PA 值 + 标定表算出 | 度 / 弧度 | 最终用于 `x = r·cosθ·cosω` 等 |
+
+关键点：**`mirror_angle` 和 PA 是同一个量的两种视图**，不是两个独立信号。
+
+```
+mirror_angle (20 bit)
+├── bits 19..12  → scale        （0~239，一圈 240 个计数）
+└── bits 11..0   → real_angle   （0~4095，计数内细分）
+```
+
+- 一圈 = 240 个 `scale`，每 `scale` = **1.5°**。
+- 每 `real_angle` 步进 = `0.0009°`（`0.0009 × 4096 ≈ 3.686°`，与 1.5° 的对应关系由固件约定）。
+- PA 角（编码器绝对角）：
+
+```
+pa_angle = encoder_angle[scale] + 0.0009 × real_angle
+```
+
+`encoder_angle` 来自 `ys_encoder_angle.csv`（`scale,angle`，241 行，0~360°），
+是**整圈绝对角度表**，不是 `spot_slope_map.csv`。
+
+---
+
+## 2. 水平角的完整计算链
+
+设备端 `ys_algo_horizontal_corners.c` 的顺序：
+
+```c
+// (1) 取该面的起始角
+starting_angle = g_staring_angle[face];
+
+// (2) slot 0 是帧同步点，直接给 omega0；其余用 PA 角
+if (slot_number != 0) {
+    angle = encoder_angle[scale] + 0.0009 * real_angle;
+    hc = angle - starting_angle;
+    // 归一化到 ±180
+} else {
+    hc = omega0;                 // -60
+}
+
+// (3) 转镜反射的 1:2 关系 + 全局零点
+hc = hc * 2 + omega0;            // omega0 = -60
+
+// (4) spot slope 修正（Beta 分支）
+hc = get_beta_spot_slope(hc, face);
+
+return hc;                       // 度
+```
+
+坐标换算（`ys_decode_common.c`，CS96_BETA 分支）：
+
+```
+omega = hc（弧度） + 逐线水平角偏移 omega_delta[pixel]
+x = r · cosθ · cosω
+y = -r · cosθ · sinω      // Beta 的 Y 轴取反
+z = r · sinθ
+```
+
+因此三个量的因果关系是：
+
+```
+mirror_angle ──拆位──> scale, real_angle ──查表──> pa_angle
+                                                     │
+                                                     ├─ 减该面起始角 → hc
+                                                     ├─ ×2 − 60      → 面内水平角
+                                                     └─ + face×90    → 全局水平角
+```
+
+`face` 是"这一帧属于哪个转镜面"，它决定两件事：
+
+1. 用哪个 `starting_angle[face]`；
+2. 加多少 `face × 90°` 的面间偏移。
+
+**`face` 判错，水平角就整体错 90°/180°/270°，表现就是画面旋转。**
+
+---
+
+## 3. PA 如何判定面
+
+设备端 `beta_get_pa_frame_index()` 的逻辑：
+
+```
+pa_angle = encoder_angle[scale] + 0.0009 × real_angle   // 归一化到 0~360
+for face in 0..3:
+    delta = pa_angle - starting_angle[face]              // 归一化到 ±180
+    if -tolerance·deg <= delta <= (range + tolerance)·deg:
+        记录匹配面
+唯一匹配 → 返回该面；匹配 0 个或多个 → 返回 -1
+```
+
+常量（`ys_decode_cs96_beta.c`）：
+
+| 常量 | 值 | 含义 |
+|---|---|---|
+| `CS96_BETA_PA_COUNTS_PER_REVOLUTION` | 240 | 一圈 240 个计数 |
+| `CS96_BETA_PA_RANGE_COUNTS` | 40 | 每面 40 个计数 = **60°** |
+| `CS96_BETA_PA_TOLERANCE_COUNTS` | 5 | 前后各 5 计数容差 = 7.5° |
+| `CS96_BETA_FACE_COUNT` | 4 | 4 面 |
+
+每面的判定窗口：
+
+```
+[ start − 5计数, start + 45计数 ]  ≈ [ start − 7.5°, start + 67.5° ]
+```
+
+面起始间隔是 **60 计数（90°）**，而判定窗口 50 计数（75°），
+相邻面之间留约 10 计数（15°）的“空档”，避免边界抖动误判。
+
+实测每帧覆盖的 `scale` 范围（设备日志）：
+
+```
+frame_id=1  scale=[58~97]     // 40 个计数
+frame_id=2  scale=[118~157]
+frame_id=3  scale=[178~217]
+frame_id=0  scale=[0~240]     // 统计跨整圈，实际是 238~240 + 0~37
+```
+
+相邻面 `scale` 起点相差 60，正好对应 90°，与 `face×90` 一致。
+
+---
+
+## 4. 为什么原始点云用 PA，而真实点云用帧 ID
+
+### 4.1 原始点云：FPGA 帧号不可靠
+
+设备日志（每 5 秒一条）：
+
+```
+[CS96_Beta] PA 纠正面号: fpga_frame_id=231 raw_face=3 pa_face=0
+[CS96_Beta] 最近 32768 个 SLOT 的 PA/frame ID 校验: 纠正=32727, PA无法判定=0
+```
+
+- `raw_face = fpga_frame_id % 4` 与真实面 `pa_face` 不一致；
+- **纠正率 32727 / 32768 ≈ 99.9%**，即原始点云里的 `frame_id` 几乎一直是错的。
+
+原因：原始点云是 FPGA 直出，`frame_id` 来自 FPGA 内部计数，与转镜实际面号存在系统性错位。
+
+因此原始点云模式必须：
+
+```
+face = PA 区间判定（唯一匹配）
+若 PA 无法唯一判定 → 才回退 frame_id % 4
+```
+
+### 4.2 真实点云：帧号可用
+
+真实点云（`work_mode=2`）由设备端算好 xyz 后输出，其包头 `frame_index`
+实测按 `0,1,2,3,0,1,2,3…` 递增且与面一致（用户确认，画面稳定无旋转）。
+
+因此真实点云可以：
+
+```
+face = frame_index % 4
+```
+
+——但注意：**真实点云模式下 PC 端不需要重新算角度**，设备已经输出 xyz，
+`face` 只用于“面选择”这类展示功能。
+
+---
+
+## 5. 当前 PC 端实现的偏差
+
+| 位置 | 现状 | 问题 |
+|---|---|---|
+| `BetaUdpStream::parseCartesian` | `face = slot / 200` | 真实点云每帧 800 slot 属于同一边，按 slot 切 4 段是错的 |
+| `BetaUdpStream::parseOrigin` | `face = faceByScale(mirrorAngle)` | `faceByScale` 用固定 scale 段（8/68/128/188），把一帧切成 4 段，语义错误 |
+| `Cs96BetaCalibration::apply` | 用 `startingAngle_[face*60]` 近似 | 与设备实测 `start` 有 1~3° 偏差 |
+| `Faces` 按钮 | 按 slot 过滤 | 与“1 面 = 1 帧”语义冲突，用户实际看到的是把每帧切碎 |
+
+另外：`faceByScale()` 的 scale 分段（8/68/128/188）来自**发光刻度**，
+与 PA 判定用的 `starting_angle` 起点（约 58/118/178/238）**不是同一套基准**，
+两者相差约 50 个计数（75°）。混用会直接导致面号与角度错位。
+
+---
+
+## 6. 实测起始角与仓库公式的矛盾（需以设备为准）
+
+仓库公式：
+
+```c
+starting_angle[i] =
+    (angle_face[i] * 256 + side_angular_offset[i]) / 256 * 360 / 240;
+```
+
+代入 `ys_calibration.ini`：
+
+```
+angle_face = {2232, 17592, 32952, 48312}
+side_offset = {15, 63, 60, 0}
+```
+
+计算得：
+
+```
+face0: (2232×256+15)/256 × 1.5 = 3348.09 → mod 360 = 108.09°
+face1: (17592×256+63)/256 × 1.5 = 26388.4 → mod 360 = 108.37°
+```
+
+**4 个面算出来几乎相同**，与设备日志明显不符。
+
+设备日志实测：
+
+```
+face0 start = 357.00
+face1 start = 87.43
+face2 start = 177.54
+face3 start = 267.03
+```
+
+两者相差 90°，且 face0 = 357（≈ −3°）。
+
+**可能原因**（按可能性排序）：
+
+1. 设备实际固件的 `PA_COUNTS_PER_REVOLUTION` 不是 240，
+   反推约 **2250**（`2232 × 360/2250 ≈ 357.1`），但该值对 face1 又不成立，
+   说明 `angle_face` 数组与 ini 的 `angle_face_1..4` 顺序可能不一致。
+2. `angle_face` 在设备 ini 中与仓库默认 ini 不同（设备上 `/etc/ys_calibration.ini` 未逐项比对）。
+3. 设备固件版本早于当前 `feat/cs96-beta-spot-slope` 分支。
+
+**结论**：PC 端不要用仓库公式硬算，应以**设备日志 `[FACE] … start=` 的实测值**为准，
+或从设备读取实际生效的 `starting_angle`。
+
+---
+
+## 7. 对 PC 端实现的分析结论（不含代码）
+
+### 7.1 原始点云（work_mode=1）
+
+```
+对每个包：
+  mirror_angle = (word0 >> 12) & 0xFFFFF
+  scale = (mirror_angle >> 12) & 0xFF
+  real_angle = mirror_angle & 0xFFF
+  pa_angle = encoder_angle[scale] + 0.0009 × real_angle      // 0~360
+
+  face = 唯一命中的面 i，满足
+         (pa_angle - start[i] ∈ [−7.5°, +67.5°])
+         无匹配或多重匹配 → 回退 frame_id % 4
+
+  hc = pa_angle - start[face]                                 // ±180 归一化
+  omega_deg = hc × 2 − 60 + face × 90 + omega_delta[pixel]
+  r = 0.000299792458 × (ft >> 1) × a[pixel] + d_delta[pixel] × 0.01
+
+  x = r·cosθ·cosω
+  y = −r·cosθ·sinω
+  z = r·sinθ
+```
+
+要点：
+
+- **一帧 800 slot 应落在同一个面**（同一段 40 个 scale 内），
+  所以面号应在**帧级**确定，而不是逐 slot 抖动。
+- 正确做法：对一帧内所有 slot 求 PA 面号的众数/一致性校验，
+  整帧统一用一个 `face`。
+- 4 帧（face 0→1→2→3）才拼成 360°。
+
+### 7.2 真实点云（work_mode=2）
+
+```
+face = frame_index % 4
+```
+
+- 设备已算好 xyz，`face` 只用于面选择/着色分组；
+- 不要用 PA 重算角度，也不要用 slot 分面。
+
+### 7.3 面选择
+
+- 语义：**按帧（面）过滤**，不是按 slot；
+- 由于一帧只有一面，要同时显示多面必须**累积 4 面帧**再合成
+  （列数 4×800，或按选中面紧凑排列）；
+- 只显示单面时，画面应是一段约 60°~118° 的扇区，且**不随帧跳变**。
+
+---
+
+## 8. 一句话总结
+
+- **PA = `mirror_angle` 拆位后查整圈编码器表得到的绝对角度**；
+- **PA 面号 = PA 角落在哪个面的 60° 区间**，原始点云专用（因为 FPGA 帧号 99.9% 错位）；
+- **水平角 = (PA 角 − 该面起始角) × 2 − 60 + face×90 + 逐线偏移**；
+- 真实点云已由设备算好 xyz，面号直接用 `frame_index % 4`；
+- 当前 PC 端“按 slot 分面”和“用固定 scale 段分面”都是错的，
+  这是原始点云旋转异常与面选择语义混乱的共同根因。

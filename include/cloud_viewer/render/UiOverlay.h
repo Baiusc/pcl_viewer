@@ -46,6 +46,9 @@ public:
 
     void setLabel(std::size_t index, const std::string &label);
 
+    /// 移除 [index, end) 的按钮（用于刷新动态设备列表）。
+    void removeButtonsFrom(std::size_t index);
+
     std::size_t size() const { return buttons_.size(); }
 
 private:

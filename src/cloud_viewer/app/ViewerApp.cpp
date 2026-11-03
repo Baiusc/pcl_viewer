@@ -4,7 +4,9 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -85,6 +87,45 @@ std::uint64_t nowMs()
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count());
+}
+
+std::string shellQuote(const std::string &text)
+{
+    std::string out = "'";
+    for (char ch : text)
+    {
+        if (ch == '\'')
+        {
+            out += "'\\''";
+        }
+        else
+        {
+            out.push_back(ch);
+        }
+    }
+    out += "'";
+    return out;
+}
+
+std::string faceMaskLabel(std::uint8_t mask)
+{
+    if ((mask & 0x0F) == 0x0F)
+    {
+        return "All";
+    }
+    std::string text;
+    for (int index = 0; index < 4; ++index)
+    {
+        if ((mask & (1u << index)) != 0)
+        {
+            if (!text.empty())
+            {
+                text += "+";
+            }
+            text += "F" + std::to_string(index + 1);
+        }
+    }
+    return text.empty() ? "All" : text;
 }
 
 /// 统一按钮动作日志，便于在控制台还原“点了什么、做了什么、结果如何”。
@@ -171,6 +212,9 @@ void ViewerApp::setupInteraction()
     connectButtonIndex_ = ui_.size();
     ui_.addButton("Connect Radar", 0.720, kButtonY, 0.130, kButtonHeight,
                   [this] { toggleRadarConnection(); });
+    searchButtonIndex_ = ui_.size();
+    ui_.addButton("Search Device", 0.858, kButtonY, 0.136, kButtonHeight,
+                  [this] { searchDevices(); });
     modeButtonIndex_ = ui_.size();
     ui_.addButton("Mode: Cloud", 0.010, 0.863, 0.18, kButtonHeight,
                   [this] { switchRadarMode(); });
@@ -180,8 +224,14 @@ void ViewerApp::setupInteraction()
     ui_.addButton("Select Calib", 0.340, 0.863, 0.19, kButtonHeight,
                   [this] { loadLiveCalibration(); });
     calibrationButtonIndex_ = ui_.size();
-    ui_.addButton("App Cal: OFF", 0.540, 0.863, 0.28, kButtonHeight,
+    ui_.addButton("App Cal: OFF", 0.540, 0.863, 0.26, kButtonHeight,
                   [this] { toggleLiveCalibration(); });
+    faceButtonIndex_ = ui_.size();
+    ui_.addButton("Faces: All", 0.808, 0.863, 0.185, kButtonHeight,
+                  [this] { cycleBetaFace(); });
+
+    // 动态设备按钮从该索引开始，刷新时只移除这一段，避免误删固定按钮。
+    firstDeviceButtonIndex_ = ui_.size();
 }
 
 bool ViewerApp::handleUiClick(int displayX, int displayY)
@@ -340,7 +390,220 @@ void ViewerApp::toggleCurrentVisibility()
 ViewerApp::~ViewerApp()
 {
     // 接收回调引用本对象，必须在 mutex、pending frame 等成员析构前退出线程。
+    if (discovery_) discovery_->stop();
+    if (betaStream_) betaStream_->stop();
     if (radar_) radar_->stop();
+}
+
+void ViewerApp::connectBeta(const std::string &ip)
+{
+    // 用广播中的 work_mode 初始化当前模式，避免 HUD 与实际包格式不一致。
+    betaWorkMode_ = 2;
+    for (const auto &device : discoveredDevices_)
+    {
+        if (device.ip == ip)
+        {
+            betaWorkMode_ = device.workMode;
+        }
+    }
+
+    if (radar_)
+    {
+        radar_->stop();
+        radar_.reset();
+    }
+    if (betaStream_)
+    {
+        betaStream_->stop();
+        betaStream_.reset();
+    }
+
+    betaStream_ = std::make_unique<BetaUdpStream>();
+    BetaUdpStream::Config config;
+    config.radarIp = ip;
+    if (const char *port = std::getenv("CV_BETA_PORT"))
+    {
+        const int value = std::atoi(port);
+        if (value > 0 && value < 65536)
+        {
+            config.localPort = static_cast<std::uint16_t>(value);
+        }
+    }
+
+    auto sink = [this](algo_lidar::PointMatrix &&matrix, std::uint64_t frameNumber)
+    {
+        const int detected = betaStream_ ? betaStream_->stats().detectedMode : 2;
+        FrameMetadata metadata;
+        // 原始合成为 96x3200，真实点云为 96x800，直方图为 96x512。
+        metadata.rows = static_cast<int>(matrix.size());
+        metadata.cols = matrix.empty() ? 0 : static_cast<int>(matrix.front().size());
+        metadata.model = RadarModel::BetaRotating;
+        metadata.roiId = 0;
+        metadata.frameNumber = frameNumber;
+        metadata.timestampUnit = "frame";
+        metadata.algorithmId = detected == 1 ? "cs96_beta_origin"
+                              : detected == 0 ? "cs96_beta_histogram"
+                                              : "cs96_beta_cartesian";
+        metadata.calibrationState = detected == 2 ? "device_xyz" : "device_raw";
+
+        auto frame = makeFrame(std::move(matrix), metadata);
+        std::lock_guard<std::mutex> lock(radarMutex_);
+        pendingRadarFrame_ = frame;
+    };
+
+    // 原始点云标定表（距离 / 水平角 / 俯仰角 / 反射率）。
+    if (!betaCalibration_)
+    {
+        betaCalibration_ = std::make_shared<Cs96BetaCalibration>();
+        std::filesystem::path directory = "data/param/cs96beta_calib_data";
+        if (const char *override = std::getenv("CV_BETA_CALIB_DIR"))
+        {
+            directory = override;
+        }
+        std::string calibrationError;
+        if (betaCalibration_->load(directory, calibrationError))
+        {
+            const auto &starts = betaCalibration_->startingAngles();
+            std::ostringstream detail;
+            detail << "CS96 Beta 标定已加载: " << directory.string()
+                   << " start=" << starts[0] << "," << starts[1] << "," << starts[2] << "," << starts[3];
+            logUi("Calib", detail.str());
+        }
+        else
+        {
+            logUi("Calib", "CS96 Beta 标定加载失败: " + calibrationError, false);
+            betaCalibration_.reset();
+        }
+    }
+    // 自动化验证：CV_BETA_FACE=1..4 只显示单面；CV_BETA_FACE=ALL 显示全部。
+    if (const char *faceEnv = std::getenv("CV_BETA_FACE"))
+    {
+        const std::string value(faceEnv);
+        if (value == "ALL" || value == "all")
+        {
+            betaFaceMask_ = 0x0F;
+        }
+        else
+        {
+            const int number = std::atoi(faceEnv);
+            if (number >= 1 && number <= 4)
+            {
+                betaFaceMask_ = static_cast<std::uint8_t>(1u << (number - 1));
+            }
+        }
+    }
+
+    betaStream_->setCalibration(betaCalibration_);
+    betaStream_->setFaceMask(betaFaceMask_);
+
+    std::string error;
+    if (!betaStream_->open(config, sink, error))
+    {
+        logUi("Connect Device", "CS96 Beta 监听失败: " + error, false);
+        radarState_ = RadarState::Error;
+        std::lock_guard<std::mutex> lock(radarMessageMutex_);
+        radarMessage_ = "CS96 Beta 监听失败: " + error;
+        updateHud();
+        renderer_.render();
+        return;
+    }
+
+    radarConnected_ = true;
+    radarState_ = RadarState::Waiting;
+    radarWaitStartMs_ = nowMs();
+    autoStartAttempted_ = true; // Beta 为被动接收，不做 SSH 拉起
+    {
+        std::lock_guard<std::mutex> lock(radarMessageMutex_);
+        radarMessage_.clear();
+    }
+    logUi("Connect Device", "CS96 Beta 监听 UDP " + std::to_string(config.localPort) +
+                               "，等待 " + ip + " 推流");
+    updateHud();
+    renderer_.render();
+}
+
+void ViewerApp::searchDevices()
+{
+    logUi("Search Device", "监听 UDP 55000 广播，最多 2.2 秒");
+    if (!discovery_)
+    {
+        discovery_ = std::make_unique<DeviceDiscovery>();
+    }
+    discovery_->start(55000);
+
+    // 雷达广播周期约 1 秒，取两个周期以覆盖丢包。
+    std::this_thread::sleep_for(std::chrono::milliseconds(2200));
+    discoveredDevices_ = discovery_->snapshot();
+    discovery_->stop();
+
+    if (discoveredDevices_.empty())
+    {
+        logUi("Search Device",
+              "未发现设备：确认雷达已上电、与本机同网段且允许 UDP 55000 广播", false);
+    }
+    else
+    {
+        std::ostringstream detail;
+        for (const auto &device : discoveredDevices_)
+        {
+            detail << "[" << device.model << " " << device.ip << " " << device.serialNumber << "] ";
+        }
+        logUi("Search Device", "发现 " + std::to_string(discoveredDevices_.size()) +
+                                   " 台: " + detail.str());
+    }
+
+    rebuildDeviceButtons();
+    updateHud();
+    renderer_.render();
+}
+
+void ViewerApp::rebuildDeviceButtons()
+{
+    // 旧设备按钮从 firstDeviceButtonIndex_ 起，刷新时整体移除后重建。
+    ui_.removeButtonsFrom(firstDeviceButtonIndex_);
+    firstDeviceButtonIndex_ = ui_.size();
+
+    constexpr std::size_t kMaxDeviceButtons = 4;
+    const std::size_t count = std::min(discoveredDevices_.size(), kMaxDeviceButtons);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        const DiscoveredDevice &device = discoveredDevices_[i];
+        std::string label = device.model + " " + device.ip;
+        if (device.lineCount > 0)
+        {
+            label += " " + std::to_string(device.lineCount) + "x" +
+                     std::to_string(device.slotsPerFrame);
+        }
+        ui_.addButton(label, 0.010 + 0.245 * static_cast<double>(i), 0.800, 0.235, 0.052,
+                      [this, i] { connectDiscoveredDevice(i); });
+    }
+
+    if (discoveredDevices_.size() > kMaxDeviceButtons)
+    {
+        logUi("Search Device", "设备过多，仅显示前 " +
+                                   std::to_string(kMaxDeviceButtons) + " 台", false);
+    }
+}
+
+void ViewerApp::connectDiscoveredDevice(std::size_t index)
+{
+    if (index >= discoveredDevices_.size())
+    {
+        logUi("Connect Device", "设备索引失效，请重新搜索", false);
+        return;
+    }
+
+    const DiscoveredDevice device = discoveredDevices_[index];
+    logUi("Connect Device", device.model + " " + device.ip + " serial=" + device.serialNumber);
+
+    if (device.model == "CS96 Beta" || device.model == "CS96")
+    {
+        connectBeta(device.ip);
+        return;
+    }
+
+    radarIpOverride_ = device.ip;
+    connectRadar();
 }
 
 void ViewerApp::connectRadar()
@@ -410,6 +673,12 @@ void ViewerApp::connectRadar()
         // 非法环境变量保持默认值。
     }
 
+    // 搜索结果中选中的设备优先于环境变量与默认 IP。
+    if (!radarIpOverride_.empty())
+    {
+        config.radarIp = radarIpOverride_;
+    }
+
     std::string error;
 
     auto sink = [this, config](algo_lidar::PointMatrix &&matrix, std::uint64_t timestampUs, int roi)
@@ -461,6 +730,11 @@ void ViewerApp::connectRadar()
 
 void ViewerApp::disconnectRadar()
 {
+    if (betaStream_)
+    {
+        betaStream_->stop();
+        betaStream_.reset();
+    }
     if (radar_)
     {
         radar_->stop();
@@ -515,8 +789,173 @@ void ViewerApp::toggleRadarConnection()
     }
 }
 
+std::string ViewerApp::betaSshPassword()
+{
+    if (const char *value = std::getenv("CV_BETA_SSH_PASS"))
+    {
+        if (value[0] != '\0')
+        {
+            return value;
+        }
+    }
+
+    const char *home = std::getenv("HOME");
+    if (home == nullptr || home[0] == '\0')
+    {
+        return {};
+    }
+
+    std::ifstream input(std::string(home) + "/.config/cloud_viewer/beta_ssh.conf");
+    std::string line;
+    while (std::getline(input, line))
+    {
+        const auto equal = line.find('=');
+        if (equal == std::string::npos)
+        {
+            continue;
+        }
+        if (line.substr(0, equal) == "BETA_SSH_PASS")
+        {
+            return line.substr(equal + 1);
+        }
+    }
+    return {};
+}
+
+bool ViewerApp::applyBetaWorkMode(const std::string &ip, int mode, std::string &message)
+{
+    const std::string password = betaSshPassword();
+    if (password.empty())
+    {
+        message = "未配置 Beta SSH 密码（CV_BETA_SSH_PASS 或 ~/.config/cloud_viewer/beta_ssh.conf）";
+        return false;
+    }
+
+    // 通过脚本文件传给设备执行，避免多层引号转义问题。
+    const std::string scriptPath = "/tmp/cv_beta_mode.sh";
+    {
+        std::ofstream script(scriptPath, std::ios::trunc);
+        if (!script.is_open())
+        {
+            message = "无法创建本地切换脚本";
+            return false;
+        }
+        // 后台进程放进子 shell 并脱离会话，避免 SSH 等待其 stdout 而挂住。
+        script << "#!/bin/sh\n"
+               << "sed -i 's/^work_mode.*/work_mode                      = \"" << mode
+               << "\" ;工作模式/' /etc/ys_conf.ini\n"
+               << "kill -9 $(ps | grep you_see | grep -v grep | awk '{print $1}') 2>/dev/null\n"
+               << "sleep 1\n"
+               << "setsid sh -c 'cd /root && exec ./you_see >>/tmp/you_stdout.log 2>&1' "
+                  "</dev/null >/dev/null 2>&1 &\n"
+               << "sleep 2\n"
+               << "echo SWITCH_OK\n"
+               << "exit 0\n";
+    }
+
+    const std::string command =
+        "timeout 25 sshpass -p " + shellQuote(password) +
+        " ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=6 "
+        "-o ServerAliveInterval=3 -o ServerAliveCountMax=2 " +
+        "root@" + ip + " sh -s < " + scriptPath + " 2>&1";
+
+    FILE *pipe = popen(command.c_str(), "r");
+    if (pipe == nullptr)
+    {
+        message = "无法执行 SSH 命令";
+        std::remove(scriptPath.c_str());
+        return false;
+    }
+
+    std::string output;
+    char buffer[512];
+    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr)
+    {
+        output += buffer;
+    }
+    const int rc = pclose(pipe);
+    std::remove(scriptPath.c_str());
+
+    // 设备端 setsid 启动后 SSH 可能因 fd 未关闭而超时，以脚本回显为准。
+    (void)rc;
+    if (output.find("SWITCH_OK") != std::string::npos)
+    {
+        message = output;
+        return true;
+    }
+    message = "SSH 切换失败: " + output.substr(0, 200);
+    return false;
+}
+
+void ViewerApp::cycleBetaFace()
+{
+    if (!betaStream_)
+    {
+        logUi("Faces", "当前不是 CS96 Beta，面选择无效", false);
+        return;
+    }
+
+    // 常用组合循环：All -> F1 -> F3 -> F1+F3 -> F2 -> F4 -> F2+F4 -> All
+    static const std::uint8_t kCycle[] = {0x0F, 0x01, 0x04, 0x05, 0x02, 0x08, 0x0A};
+    constexpr std::size_t kCount = sizeof(kCycle) / sizeof(kCycle[0]);
+
+    std::size_t index = 0;
+    for (std::size_t i = 0; i < kCount; ++i)
+    {
+        if (kCycle[i] == betaFaceMask_)
+        {
+            index = i;
+            break;
+        }
+    }
+    betaFaceMask_ = kCycle[(index + 1) % kCount];
+    betaStream_->setFaceMask(betaFaceMask_);
+
+    logUi("Faces", "显示面帧 " + faceMaskLabel(betaFaceMask_));
+    updateHud();
+    renderer_.render();
+}
+
+void ViewerApp::switchBetaMode()
+{
+    if (modeFuture_.valid())
+    {
+        logUi("Mode", "上一次模式切换尚未完成，忽略点击", false);
+        return;
+    }
+
+    const int next = (betaWorkMode_ == 2) ? 1 : (betaWorkMode_ == 1 ? 0 : 2);
+    const std::string ip = betaStream_ ? betaStream_->config().radarIp : std::string{};
+    if (ip.empty())
+    {
+        logUi("Mode", "尚未连接 CS96 Beta，无法切换", false);
+        return;
+    }
+
+    requestedBetaMode_ = next;
+    betaModeSwitch_ = true;
+    controlState_ = "Switching Beta work mode...";
+    logUi("Mode", "CS96 Beta: " + std::to_string(betaWorkMode_) + " -> " +
+                      std::to_string(next) + "（SSH 改配置并重启设备）");
+
+    modeFuture_ = std::async(std::launch::async, [ip, next] {
+        std::string message;
+        const bool ok = applyBetaWorkMode(ip, next, message);
+        return ok ? std::string{} : message;
+    });
+
+    updateHud();
+    renderer_.render();
+}
+
 void ViewerApp::switchRadarMode()
 {
+    if (betaStream_)
+    {
+        switchBetaMode();
+        return;
+    }
+
     if (modeFuture_.valid())
     {
         logUi("Mode", "上一次模式切换尚未完成，忽略点击", false);
@@ -675,7 +1114,17 @@ void ViewerApp::applyIncomingFrame()
     // TCP 控制等待在后台完成，UI 不阻塞；只有收到成功 ACK 后才切换本地解析器。
     if (modeFuture_.valid() && modeFuture_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         const auto error = modeFuture_.get();
-        if (error.empty()) {
+        if (betaModeSwitch_) {
+            betaModeSwitch_ = false;
+            if (error.empty()) {
+                betaWorkMode_ = requestedBetaMode_;
+                controlState_ = "Beta work mode switched";
+                logUi("Mode", "CS96 Beta 已切换到 work_mode=" + std::to_string(betaWorkMode_));
+            } else {
+                controlState_ = "Beta mode switch failed: " + error;
+                logUi("Mode", "CS96 Beta 切换失败: " + error, false);
+            }
+        } else if (error.empty()) {
             liveMode_ = requestedMode_;
             controlState_ = "Mode ACK OK; waiting for matching complete frame";
             logUi("Mode", "设备已确认模式切换，重新监听 UDP");
@@ -724,10 +1173,12 @@ void ViewerApp::applyIncomingFrame()
                 std::lock_guard<std::mutex> lock(radarMessageMutex_);
                 if (radarMessage_.empty())
                 {
-                    radarMessage_ =
-                        "未收到点云：先确认本机有 192.168.137.100 地址"
-                        "（sudo ip addr add 192.168.137.100/24 dev enp4s0），"
-                        "并确认雷达 soc_example 在运行";
+                    radarMessage_ = betaStream_
+                        ? "未收到 CS96 Beta 点云：确认设备 work_mode=2（真实点云）"
+                          "且 /etc/ys_conf.ini 的 center_ip 指向本机、center_data_port 为 50007"
+                        : "未收到点云：先确认本机有 192.168.137.100 地址"
+                          "（sudo ip addr add 192.168.137.100/24 dev enp4s0），"
+                          "并确认雷达 soc_example 在运行";
                 }
             }
         }
@@ -736,6 +1187,14 @@ void ViewerApp::applyIncomingFrame()
     }
 
     const RadarState previousRadarState = radarState_.exchange(RadarState::Live);
+    if (betaStream_)
+    {
+        const int detected = betaStream_->stats().detectedMode;
+        if (detected >= 0)
+        {
+            betaWorkMode_ = detected;
+        }
+    }
     if (previousRadarState != RadarState::Live)
     {
         std::ostringstream detail;
@@ -1228,16 +1687,27 @@ void ViewerApp::updateHud()
     const RadarState radarState = radarState_.load();
     if (radarState != RadarState::Disconnected)
     {
-        const RadarStreamStats stats = radar_ ? radar_->stats() : RadarStreamStats{};
         const char *stateText = radarState == RadarState::Waiting ? "waiting for data"
                                 : radarState == RadarState::Live  ? "LIVE"
                                                                   : "ERROR";
-        text << "\nRadar[" << stateText << "]: "
-             << (radar_ ? radar_->config().radarIp : std::string("-"))
-             << ":" << (radar_ ? radar_->config().radarPort : 0)
-             << "  pkts=" << stats.packets
-             << "  frames=" << stats.frames
-             << "  fps=" << formatFloat(static_cast<float>(stats.framesPerSecond), 1);
+        if (betaStream_)
+        {
+            const auto stats = betaStream_->stats();
+            text << "\nRadar[" << stateText << "]: " << betaStream_->config().radarIp
+                 << ":" << betaStream_->config().localPort
+                 << " (CS96 Beta)  pkts=" << stats.packets
+                 << "  frames=" << stats.frames;
+        }
+        else
+        {
+            const RadarStreamStats stats = radar_ ? radar_->stats() : RadarStreamStats{};
+            text << "\nRadar[" << stateText << "]: "
+                 << (radar_ ? radar_->config().radarIp : std::string("-"))
+                 << ":" << (radar_ ? radar_->config().radarPort : 0)
+                 << "  pkts=" << stats.packets
+                 << "  frames=" << stats.frames
+                 << "  fps=" << formatFloat(static_cast<float>(stats.framesPerSecond), 1);
+        }
         if (radarState != RadarState::Live)
         {
             std::lock_guard<std::mutex> lock(radarMessageMutex_);
@@ -1257,8 +1727,26 @@ void ViewerApp::updateHud()
         const auto stats = radar_->stats();
         text << " invalid=" << stats.invalidPackets;
         if (!stats.lastError.empty()) text << "\n" << stats.lastError;
+    } else if (betaStream_) {
+        const auto stats = betaStream_->stats();
+        text << " pkts=" << stats.packets << " frames=" << stats.frames
+             << " dropSlots=" << stats.droppedSlots;
     }
-    ui_.setLabel(modeButtonIndex_, liveMode_ == RadarOutputMode::Range ? "Mode: Range" : "Mode: Cloud");
+    if (betaStream_)
+    {
+        const char *betaModeName = betaWorkMode_ == 2 ? "Real"
+                                   : betaWorkMode_ == 1 ? "Origin"
+                                                        : "Hist";
+        ui_.setLabel(modeButtonIndex_, std::string("Mode: ") + betaModeName);
+    }
+    if (faceButtonIndex_ < ui_.size())
+    {
+        ui_.setLabel(faceButtonIndex_, "Faces: " + faceMaskLabel(betaFaceMask_));
+    }
+    else
+    {
+        ui_.setLabel(modeButtonIndex_, liveMode_ == RadarOutputMode::Range ? "Mode: Range" : "Mode: Cloud");
+    }
     ui_.setLabel(roiButtonIndex_, std::string("ROI: ")+std::to_string(liveRoi_));
     const char* cal = liveMode_ == RadarOutputMode::Cloud ? "App Cal: N/A (device Cloud)" :
         !liveCalibration_ ? "App Cal: OFF" : "App Cal: ON";
@@ -1337,7 +1825,37 @@ int ViewerApp::run(const std::vector<std::string> &files, double fps,
             saveViewerSettings(settings, saveError);
         }
     }
-    if (autoConnectRadar)
+    // 便于自动化验证：设置后启动即执行一次设备搜索。
+    if (std::getenv("CV_AUTO_SEARCH") != nullptr)
+    {
+        searchDevices();
+    }
+
+    if (const char *betaIp = std::getenv("CV_BETA_IP"))
+    {
+        connectBeta(betaIp);
+        // 自动化验证：启动时直接把设备工作模式设为指定值。
+        if (const char *setMode = std::getenv("CV_BETA_SET_MODE"))
+        {
+            const int mode = std::atoi(setMode);
+            if (mode >= 0 && mode <= 2)
+            {
+                std::string message;
+                const bool ok = applyBetaWorkMode(betaIp, mode, message);
+                logUi("Mode", ok ? "已设置 work_mode=" + std::to_string(mode)
+                                 : "设置失败: " + message, ok);
+                if (ok)
+                {
+                    betaWorkMode_ = mode;
+                }
+            }
+        }
+        if (std::getenv("CV_BETA_MODE_CYCLE") != nullptr)
+        {
+            switchBetaMode();
+        }
+    }
+    else if (autoConnectRadar)
     {
         connectRadar();
     }
@@ -1402,7 +1920,7 @@ int ViewerApp::run(const std::vector<std::string> &files, double fps,
 
     if (!screenshotPath.empty())
     {
-        if (autoConnectRadar)
+        if (autoConnectRadar || std::getenv("CV_BETA_IP") != nullptr)
         {
             // 轮询直到收到首帧或超时：期间会触发“无数据自动 SSH 拉起驱动”。
             int waitMs = 2000;
