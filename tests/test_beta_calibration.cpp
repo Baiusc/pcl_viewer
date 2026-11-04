@@ -144,6 +144,20 @@ int main()
     check("omega_order", std::fabs(on.slot_ang - expectedOnOmega) < 1e-3f,
           std::to_string(on.slot_ang) + " vs " + std::to_string(expectedOnOmega));
 
+    // 坐标约定：x+ 雷达正前、y+ 雷达自身右侧、z+ 向上。
+    // omega 随 slot 由 -60° 增到 +60°，故 y = +r·cosθ·sinω 让 slot0 落在左侧，
+    // 与"左侧目标先扫到"一致。设备内部 y+ 向左，真实点云在 BetaUdpStream 侧取反。
+    const float thetaRad = off.theta * (3.14159265358979323846f / 180.0f);
+    const float horizontal = off.r * std::cos(thetaRad);
+    const float axisTol = 1e-4f * (1.0f + std::fabs(horizontal));
+    check("axis_x_front", std::fabs(off.x - horizontal * std::cos(off.omega_rad)) < axisTol,
+          std::to_string(off.x));
+    check("axis_y_right", std::fabs(off.y - horizontal * std::sin(off.omega_rad)) < axisTol,
+          std::to_string(off.y));
+    check("axis_z_up",
+          std::fabs(off.z - off.r * std::sin(thetaRad)) < 1e-4f * (1.0f + std::fabs(off.r)),
+          std::to_string(off.z));
+
     // 反射率：关闭 reflectivityMap 时走 get_intensity_by_peak，
     //   reflect = (peak - 51) / (sat_peak_max - 51)，换算到 0~100。
     const float expectedReflect =

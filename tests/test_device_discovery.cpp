@@ -50,6 +50,21 @@ int main()
         return 3;
     }
 
+    // /proc/net/arp 解析：只保留 flags=0x2 且有真实 MAC 的条目。
+    const std::string arpText =
+        "IP address       HW type     Flags       HW address            Mask     Device\n"
+        "10.42.0.222      0x1         0x2         98:03:8a:7f:32:90     *        eth0\n"
+        "10.42.0.218      0x1         0x0         00:00:00:00:00:00     *        eth0\n"
+        "10.42.0.229      0x1         0x2         88:ae:dd:a1:45:f1     *        eth0\n"
+        "broken line without enough fields\n";
+    const auto arpRows = cloud_viewer::DeviceDiscovery::parseArpTable(arpText);
+    if (arpRows.size() != 2 || arpRows[0].first != "10.42.0.222" ||
+        arpRows[0].second != "98:03:8a:7f:32:90" || arpRows[1].first != "10.42.0.229")
+    {
+        std::cerr << "DISCOVERY_TEST_FAIL arp rows=" << arpRows.size() << "\n";
+        return 4;
+    }
+
     std::cout << "DISCOVERY_TEST_PASS " << device.model << " " << device.serialNumber
               << " " << device.lineCount << "x" << device.slotsPerFrame << std::endl;
     return 0;

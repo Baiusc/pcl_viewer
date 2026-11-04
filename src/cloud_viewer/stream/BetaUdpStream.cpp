@@ -110,8 +110,11 @@ bool parseCartesian(const std::uint8_t *data, ParsedPacket &packet)
         const std::uint8_t albedo = raw[12];
 
         algo_lidar::PointData &point = packet.points[line];
+        // 设备端 xyz 的坐标系是 x+ 前 / y+ 左（ys_decode_common.c 对 Y 取反）。
+        // viewer 统一为 x+ 前 / y+ 右，这里把 Y 翻回正方向，
+        // 与原始点云保持一致：slot0 在左（y<0）、slot799 在右（y>0）。
         point.x = x;
-        point.y = y;
+        point.y = -y;
         point.z = z;
         point.r = std::sqrt(x * x + y * y + z * z);
         point.theta = static_cast<float>((line - 47) * (20.0 / kLines) - 2.5);
@@ -164,6 +167,7 @@ void applyFallbackNoTable(int line, std::uint32_t ft, std::uint16_t slot, std::u
     if (point.is_valid)
     {
         const float horizontal = r * std::cos(theta);
+        // 统一约定：x+ 前、y+ 右；slot0 在左（y<0），与 Cs96BetaCalibration 一致。
         point.x = horizontal * std::cos(omega);
         point.y = horizontal * std::sin(omega);
         point.z = r * std::sin(theta);

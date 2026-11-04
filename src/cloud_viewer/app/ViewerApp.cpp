@@ -261,6 +261,9 @@ void ViewerApp::setupInteraction()
                   [this] { cycleBetaFace(); });
     ui_.addButton("Connect Beta IP", 0.010, 0.735, 0.220, kButtonHeight,
                   [this] { connectBetaManual(); });
+    startBetaButtonIndex_ = ui_.size();
+    ui_.addButton("Start you_see", 0.240, 0.735, 0.200, kButtonHeight,
+                  [this] { startBetaProcess(); });
 
     // 动态设备按钮从该索引开始，刷新时只移除这一段，避免误删固定按钮。
     firstDeviceButtonIndex_ = ui_.size();
@@ -552,6 +555,159 @@ static bool runBetaSsh(const std::string &ip, const std::string &password,
     return run.rc == 0;
 }
 
+/// 极简 HTTP POST（不依赖 curl），用于调用设备自带 CGI。
+static bool httpPost(const std::string &ip, std::uint16_t port, const std::string &path,
+                     const std::string &body, int timeoutMs, std::string &response)
+{
+#ifndef _WIN32
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0)
+    {
+        return false;
+    }
+    timeval timeout{};
+    timeout.tv_sec = timeoutMs / 1000;
+    timeout.tv_usec = (timeoutMs % 1000) * 1000;
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(port);
+    if (::inet_pton(AF_INET, ip.c_str(), &address.sin_addr) != 1 ||
+        ::connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0)
+    {
+        ::close(fd);
+        return false;
+    }
+
+    std::ostringstream request;
+    request << "POST " << path << " HTTP/1.1\r\n"
+            << "Host: " << ip << "\r\n"
+            << "Content-Type: application/x-www-form-urlencoded\r\n"
+            << "Content-Length: " << body.size() << "\r\n"
+            << "Connection: close\r\n\r\n"
+            << body;
+    const std::string text = request.str();
+
+    std::size_t sent = 0;
+    while (sent < text.size())
+    {
+        const ssize_t chunk = ::send(fd, text.data() + sent, text.size() - sent, 0);
+        if (chunk <= 0)
+        {
+            ::close(fd);
+            return false;
+        }
+        sent += static_cast<std::size_t>(chunk);
+    }
+
+    response.clear();
+    char buffer[512];
+    while (response.size() < 8192)
+    {
+        const ssize_t received = ::recv(fd, buffer, sizeof(buffer), 0);
+        if (received <= 0)
+        {
+            break;
+        }
+        response.append(buffer, static_cast<std::size_t>(received));
+    }
+    ::close(fd);
+    return !response.empty();
+#else
+    (void)ip;
+    (void)port;
+    (void)path;
+    (void)body;
+    (void)timeoutMs;
+    (void)response;
+    return false;
+#endif
+}
+
+/// 确保设备 SSH 可用；不通时通过设备自带 set_ssh.cgi 打开。
+///
+/// 设备的 /www 由 lighttpd 提供，/cgi-bin/set_ssh.cgi 接受 POST "enable=true"，
+/// 内部执行 S50sshd start。这是 SSH 关闭后唯一可用的远程恢复通道。
+static bool ensureSshReady(const std::string &ip, std::string &message)
+{
+    if (DeviceDiscovery::tcpPortOpen(ip, 22, 600))
+    {
+        message = "SSH 已就绪（" + ip + "）";
+        return true;
+    }
+
+    std::string response;
+    if (!httpPost(ip, 80, "/cgi-bin/set_ssh.cgi", "enable=true", 3000, response))
+    {
+        message = "SSH 未开放，且 " + ip +
+                  " 的 web 接口（80）不可达；请稍后再试，或重新上电/现场处理";
+        return false;
+    }
+    if (response.find("\"code\": 0") == std::string::npos &&
+        response.find("\"code\":0") == std::string::npos)
+    {
+        message = "请求开启 SSH 失败，设备返回: " + response.substr(0, 120);
+        return false;
+    }
+
+    // CGI 只负责拉起 sshd，真正监听 22 还需要一点时间。
+    for (int attempt = 0; attempt < 20; ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (DeviceDiscovery::tcpPortOpen(ip, 22, 400))
+        {
+            message = "SSH 未开放，已通过设备 web 接口开启（" + ip + "）";
+            return true;
+        }
+    }
+    message = "已请求开启 SSH，但 22 端口在 10 秒内仍不可用";
+    return false;
+}
+
+/// 在设备上检查并启动 you_see。只启动进程，不修改任何配置。
+static bool startBetaProcessOn(const std::string &ip, const std::string &password,
+                               const std::string &knownHosts, std::string &message)
+{
+    const std::string script = R"SH(set -eu
+if pidof you_see >/dev/null; then
+  echo ALREADY_RUNNING=$(pidof you_see)
+  exit 0
+fi
+log=/var/log/ys.log
+before=0
+if [ -f "$log" ]; then before=$(wc -l < "$log"); fi
+setsid sh -c 'cd /root && exec ./you_see >>/tmp/you_stdout.log 2>&1' </dev/null >/dev/null 2>&1 &
+sleep 4
+pid=$(pidof you_see || true)
+if [ -z "$pid" ]; then
+  echo START_FAILED
+  if [ -f "$log" ]; then
+    tail -n +$((before + 1)) "$log" 2>/dev/null | grep -E "不匹配|load config fail|FATAL" | head -n 2 || true
+  fi
+  exit 1
+fi
+echo STARTED=$pid
+)SH";
+
+    std::string output;
+    runBetaSsh(ip, password, knownHosts, script, "", output);
+
+    if (output.find("ALREADY_RUNNING=") != std::string::npos)
+    {
+        message = "设备端 you_see 已在运行（" + ip + "）";
+        return true;
+    }
+    if (output.find("STARTED=") != std::string::npos)
+    {
+        message = "已启动设备端 you_see（" + ip + "）";
+        return true;
+    }
+    message = "启动 you_see 失败: " + betaSshFailureReason(output);
+    return false;
+}
+
 // 修改前验证 host key；只在目标 IP 确实变化时重启指定雷达进程。
 static bool prepareBetaTarget(const std::string &ip, std::uint16_t dataPort,
                               const std::string &password, std::string &message,
@@ -646,6 +802,7 @@ echo CENTER_UPDATED="$old:$old_port"-"$expected:$expected_port"
 
 void ViewerApp::connectBeta(const std::string &ip)
 {
+    lastDeviceIp_ = ip;
     // 用广播中的 work_mode 初始化当前模式，避免 HUD 与实际包格式不一致。
     betaWorkMode_ = 2;
     // 换设备或重连后重新探测固件支持的模式。
@@ -868,21 +1025,57 @@ void ViewerApp::connectBetaManual()
 
 void ViewerApp::searchDevices()
 {
-    logUi("Search Device", "开始监听 UDP 55000 广播，等待 2200ms (覆盖约两个广播周期)...");
-    if (!discovery_)
+    // CV_FORCE_SCAN=1 跳过广播直接扫网段，便于排障与验证主动发现。
+    const bool forceScan = std::getenv("CV_FORCE_SCAN") != nullptr;
+    if (forceScan)
     {
-        discovery_ = std::make_unique<DeviceDiscovery>();
+        logUi("Search Device", "CV_FORCE_SCAN：跳过广播，直接扫描本机网段");
+        discoveredDevices_.clear();
     }
-    discovery_->start(55000);
+    else
+    {
+        logUi("Search Device", "开始监听 UDP 55000 广播，等待 2200ms (覆盖约两个广播周期)...");
+        if (!discovery_)
+        {
+            discovery_ = std::make_unique<DeviceDiscovery>();
+        }
+        discovery_->start(55000);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(2200));
-    discoveredDevices_ = discovery_->snapshot();
-    discovery_->stop();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2200));
+        discoveredDevices_ = discovery_->snapshot();
+        discovery_->stop();
+    }
 
     if (discoveredDevices_.empty())
     {
-        logUi("Search Device",
-              "未发现设备：确认雷达已上电、与本机同网段且允许 UDP 55000 广播", false);
+        // 广播由设备端 you_see 发出，进程没跑就完全搜不到；而 ARP 由内核应答，
+        // 只要设备网络栈起来了就能被看见。因此扫描本机网段作为兜底。
+        logUi("Search Device", "未收到广播，改扫本机网段（ARP + MAC 前缀）");
+        const char *configuredPrefix = std::getenv("CV_RADAR_MAC_PREFIX");
+        const std::string macPrefix =
+            (configuredPrefix != nullptr) ? std::string(configuredPrefix) : std::string("98:03:8a");
+        std::string scanNote;
+        const auto scanned = DeviceDiscovery::scanSubnet(macPrefix, scanNote);
+        logUi("Scan Device", scanNote, !scanned.empty());
+
+        if (!scanned.empty())
+        {
+            discoveredDevices_ = scanned;
+            std::ostringstream detail;
+            for (const auto &device : scanned)
+            {
+                detail << "[" << device.ip << " mac=" << device.mac
+                       << (device.sshReady ? " ssh" : " no-ssh") << "] ";
+            }
+            logUi("Scan Device", "扫描到 " + std::to_string(scanned.size()) + " 台候选: " +
+                                     detail.str());
+        }
+        else
+        {
+            logUi("Search Device",
+                  "未发现设备：广播无响应，网段内也没有匹配 MAC 前缀的雷达"
+                  "（可设 CV_RADAR_MAC_PREFIX= 列出全部邻居）", false);
+        }
     }
     else
     {
@@ -908,6 +1101,67 @@ void ViewerApp::searchDevices()
     renderer_.render();
 }
 
+void ViewerApp::startBetaProcess()
+{
+    // 目标优先级：最近操作的设备 > 当前连接的设备 > 搜索结果第一台。
+    std::string ip = lastDeviceIp_;
+    if (ip.empty() && betaStream_)
+    {
+        ip = betaStream_->config().radarIp;
+    }
+    if (ip.empty() && !discoveredDevices_.empty())
+    {
+        ip = discoveredDevices_.front().ip;
+    }
+    if (ip.empty())
+    {
+        logUi("Start you_see", "请先 Search 或连接一台设备", false);
+        return;
+    }
+
+    const std::string password = betaSshPassword();
+    if (password.empty())
+    {
+        logUi("Start you_see",
+              "未配置 Beta SSH 密码（CV_BETA_SSH_PASS 或 ~/.config/cloud_viewer/beta_ssh.conf）",
+              false);
+        return;
+    }
+    const std::string knownHosts = betaKnownHostsPath();
+    if (knownHosts.empty() || !std::filesystem::exists(knownHosts))
+    {
+        logUi("Start you_see", "缺少已确认的 SSH 主机密钥文件: " + knownHosts, false);
+        return;
+    }
+
+    // 先确认 SSH 可用；关闭时用设备自带 web 接口打开，再执行启动。
+    logUi("Start you_see", "检查 " + ip + " 的 SSH 服务");
+    updateHud();
+    renderer_.render();
+
+    std::string sshMessage;
+    if (!ensureSshReady(ip, sshMessage))
+    {
+        logUi("Start you_see", sshMessage, false);
+        updateHud();
+        renderer_.render();
+        return;
+    }
+    logUi("Start you_see", sshMessage);
+
+    std::string message;
+    const bool ok = startBetaProcessOn(ip, password, knownHosts, message);
+    lastDeviceIp_ = ip;
+    logUi("Start you_see", message, ok);
+    // 只有本次真正拉起进程时才提示等待；已在运行时不必再等。
+    if (ok && message.find("已启动") != std::string::npos)
+    {
+        logUi("Start you_see", "稍等约 3 秒再点 Search，设备开始广播后即可连接");
+    }
+    updateHud();
+    renderer_.render();
+}
+
 void ViewerApp::rebuildDeviceButtons()
 {
     // 旧设备按钮从 firstDeviceButtonIndex_ 起，刷新时整体移除后重建。
@@ -919,11 +1173,20 @@ void ViewerApp::rebuildDeviceButtons()
     for (std::size_t i = 0; i < count; ++i)
     {
         const DiscoveredDevice &device = discoveredDevices_[i];
-        std::string label = device.model + " " + device.ip;
-        if (device.lineCount > 0)
+        std::string label;
+        if (device.fromScan)
         {
-            label += " " + std::to_string(device.lineCount) + "x" +
-                     std::to_string(device.slotsPerFrame);
+            // 无广播元数据，只能显示 IP 与服务可达性。
+            label = device.ip + (device.sshReady ? " [scan+ssh]" : " [scan/no-ssh]");
+        }
+        else
+        {
+            label = device.model + " " + device.ip;
+            if (device.lineCount > 0)
+            {
+                label += " " + std::to_string(device.lineCount) + "x" +
+                         std::to_string(device.slotsPerFrame);
+            }
         }
         ui_.addButton(label, 0.010 + 0.245 * static_cast<double>(i), 0.800, 0.235, 0.052,
                       [this, i] { connectDiscoveredDevice(i); });
@@ -945,7 +1208,28 @@ void ViewerApp::connectDiscoveredDevice(std::size_t index)
     }
 
     const DiscoveredDevice device = discoveredDevices_[index];
-    logUi("Connect Device", device.model + " " + device.ip + " serial=" + device.serialNumber);
+    lastDeviceIp_ = device.ip;
+    logUi("Connect Device", device.model + " " + device.ip +
+                                (device.serialNumber.empty()
+                                     ? std::string{}
+                                     : " serial=" + device.serialNumber));
+
+    if (device.fromScan)
+    {
+        // 扫描发现的设备没有广播元数据；22 不通时先尝试用 web 接口打开 SSH。
+        if (!device.sshReady)
+        {
+            std::string sshMessage;
+            if (!ensureSshReady(device.ip, sshMessage))
+            {
+                logUi("Connect Device", sshMessage, false);
+                return;
+            }
+            logUi("Connect Device", sshMessage);
+        }
+        connectBeta(device.ip);
+        return;
+    }
 
     if (device.model == "CS96 Beta" || device.model == "CS96")
     {
@@ -2246,6 +2530,13 @@ int ViewerApp::run(const std::vector<std::string> &files, double fps,
     if (std::getenv("CV_AUTO_SEARCH") != nullptr)
     {
         searchDevices();
+    }
+
+    // 自动化验证：直接对指定 IP 执行一次"启动 you_see"。
+    if (const char *startIp = std::getenv("CV_START_BETA_IP"))
+    {
+        lastDeviceIp_ = startIp;
+        startBetaProcess();
     }
 
     if (const char *betaIp = std::getenv("CV_BETA_IP"))

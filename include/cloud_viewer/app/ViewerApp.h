@@ -146,6 +146,7 @@ private:
     std::size_t roiButtonIndex_ = 0;
     std::size_t calibrationButtonIndex_ = 0;
     std::size_t searchButtonIndex_ = 0;
+    std::size_t startBetaButtonIndex_ = 0;
     std::size_t firstDeviceButtonIndex_ = 0;
     std::size_t faceButtonIndex_ = 0;
     std::uint8_t betaFaceMask_ = 0x0F;
@@ -154,6 +155,8 @@ private:
     std::unique_ptr<DeviceDiscovery> discovery_;
     std::vector<DiscoveredDevice> discoveredDevices_;
     std::string radarIpOverride_;
+    /// 最近一次操作的目标设备（连接或点 Start you_see 时更新）。
+    std::string lastDeviceIp_;
 
     // CS96 Beta 转镜雷达直收（真实点云，1266B/包）。
     std::unique_ptr<BetaUdpStream> betaStream_;
@@ -175,6 +178,8 @@ private:
     void connectDiscoveredDevice(std::size_t index);
     void connectBeta(const std::string &ip);
     void connectBetaManual();
+    /// 通过 SSH 检查并在需要时启动设备端 you_see。
+    void startBetaProcess();
     void switchBetaMode();
     void cycleBetaFace();
     static bool applyBetaWorkMode(const std::string &ip, int mode, std::string &message);

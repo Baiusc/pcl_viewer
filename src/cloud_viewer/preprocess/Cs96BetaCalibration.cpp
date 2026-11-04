@@ -136,6 +136,7 @@ bool Cs96BetaCalibration::load(const std::filesystem::path &path, std::string &e
     else
     {
         // 单文件聚合表（tools/pack_cs96beta_calibration.py 生成）。
+        // 失败时 error 内是可直接定位的原因，由调用方 logUi 打印到控制台。
         if (!parseUnifiedCsv(path, error)) return false;
     }
 
@@ -387,8 +388,10 @@ bool Cs96BetaCalibration::parseUnifiedCsv(const std::filesystem::path &path, std
     std::vector<float> angles(241, std::numeric_limits<float>::quiet_NaN());
     bool headerSkipped = false;
     std::string line;
+    std::size_t lineNo = 0;
     while (std::getline(input, line))
     {
+        ++lineNo;
         if (!line.empty() && line.back() == '\r')
         {
             line.pop_back();
@@ -480,7 +483,8 @@ bool Cs96BetaCalibration::parseUnifiedCsv(const std::filesystem::path &path, std
             const int scale = std::atoi(indexText.c_str());
             if (scale < 0 || scale > 240 || std::isfinite(angles[scale]))
             {
-                error = "编码器角度表含越界或重复 scale: " + indexText;
+                error = "编码器角度表第 " + std::to_string(lineNo) + " 行 scale 越界或重复: " +
+                        indexText;
                 return false;
             }
             angles[scale] = std::strtof(value0.c_str(), nullptr);
@@ -514,7 +518,27 @@ bool Cs96BetaCalibration::parseUnifiedCsv(const std::filesystem::path &path, std
 
     if (std::any_of(angles.begin(), angles.end(), [](float a) { return !std::isfinite(a); }))
     {
-        error = "编码器角度表必须包含 scale 0~240: " + path.string();
+        // 列出缺失的 scale，避免只报“缺表”却不知道缺在哪一段。
+        std::ostringstream missing;
+        int missingCount = 0;
+        for (std::size_t i = 0; i < angles.size(); ++i)
+        {
+            if (std::isfinite(angles[i]))
+            {
+                continue;
+            }
+            ++missingCount;
+            if (missingCount <= 8)
+            {
+                missing << (missingCount > 1 ? "," : "") << i;
+            }
+        }
+        if (missingCount > 8)
+        {
+            missing << ",...";
+        }
+        error = "编码器角度表缺少 " + std::to_string(missingCount) + " 个 scale（" + missing.str() +
+                "），必须覆盖 0~240: " + path.string();
         return false;
     }
     encoderAngle_ = std::move(angles);
@@ -797,6 +821,10 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     point.theta = theta_[index];
     point.omega_rad = omega;
     point.slot_ang = omegaDeg;
+    // 坐标约定统一为：x+ 雷达正前方、y+ 雷达自身右侧、z+ 向上。
+    // omega 随 slot 从 -60° 增到 +60°（encoder_angle 表递增 + omega0=-60），
+    // 因此 y = +r·cosθ·sinω 使 slot0 落在 y<0（左侧）、slot799 落在 y>0（右侧），
+    // 与实测"左侧目标先扫到"一致；设备端内部是 y+ 左，故真实点云在那侧取反。
     point.x = r * std::cos(theta) * std::cos(omega);
     point.y = r * std::cos(theta) * std::sin(omega);
     point.z = r * std::sin(theta);
