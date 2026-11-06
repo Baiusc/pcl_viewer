@@ -76,6 +76,14 @@ public:
     /// 主线程消费接收线程投递的最新在线帧。
     void applyIncomingFrame();
 
+    /// 鼠标交互期间补推一帧，避免拖动/移动时在线点云停止刷新。
+    void pumpLiveFrame();
+
+    /// VTK 交互事件回调：拖动/缩放期间暂停点云重建，松手后补一帧。
+    void setInteracting(bool value);
+    /// RenderWindow 每次 Render 完成时计数，用于 HUD 帧率显示。
+    void onRenderTick();
+
 private:
     void openFilesDialog();
     void openDirectoryDialog();
@@ -87,6 +95,14 @@ private:
     void switchRadarRoi();
     void toggleLiveCalibration();
     void loadLiveCalibration();
+    /// 按当前型号加载对应格式的标定表（6532 用 bin，CS96 Beta 用聚合 CSV）。
+    void loadBetaCalibration();
+    /// 连接成功后确立型号，并据此调整与设备型号相关的按钮显隐。
+    void setActiveRadarModel(RadarModel model);
+    void updateModelDependentUi();
+    /// 切换单个面（0..3）的显示开关。
+    void toggleBetaFace(int index);
+    void updateFaceButtons();
     FrameHandle preprocessLiveFrame(const FrameHandle& raw);
 
     bool loadFiles(const std::vector<std::string> &files);
@@ -97,6 +113,15 @@ private:
     void updateHud();
     void updateInfoPanel(const std::string &text);
     void setupInteraction();
+
+    /// 交互（拖动/缩放）期间暂停点云重建。
+    /// VTK 相机操作本身要连续重绘，再叠加每秒 20 次全量点云更新会明显掉帧；
+    /// 松手后补一帧即可。HUD 的帧率数字可直观看到这个差异。
+    bool interacting_ = false;
+    /// 渲染帧率统计：按 RenderWindow 每次 Render 完成计数，每 0.5s 刷新一次。
+    std::uint64_t renderTicks_ = 0;
+    double displayFps_ = 0.0;
+    std::chrono::steady_clock::time_point fpsStamp_ = std::chrono::steady_clock::now();
 
     SceneGraph scene_;
     PclVtkRenderer renderer_;
@@ -148,8 +173,12 @@ private:
     std::size_t searchButtonIndex_ = 0;
     std::size_t startBetaButtonIndex_ = 0;
     std::size_t firstDeviceButtonIndex_ = 0;
-    std::size_t faceButtonIndex_ = 0;
+    std::size_t faceButtonIndices_[4] = {0, 0, 0, 0};
+    std::size_t faceAllButtonIndex_ = 0;
     std::uint8_t betaFaceMask_ = 0x0F;
+
+    /// 当前连接的雷达型号：决定按钮显隐与标定表格式。连接成功时确立。
+    RadarModel activeModel_ = RadarModel::Unknown;
 
     // 局域网设备发现（监听 55000 广播）与选中的设备。
     std::unique_ptr<DeviceDiscovery> discovery_;
@@ -157,6 +186,10 @@ private:
     std::string radarIpOverride_;
     /// 最近一次操作的目标设备（连接或点 Start you_see 时更新）。
     std::string lastDeviceIp_;
+    /// 记录并持久化目标设备，供下次搜索与 Connect 复用。
+    void rememberDevice(const std::string &ip);
+    /// 最近一次成功连接的 FL6532 地址，作为下次搜索的探测候选。
+    std::string lastFl6532Ip_;
 
     // CS96 Beta 转镜雷达直收（真实点云，1266B/包）。
     std::unique_ptr<BetaUdpStream> betaStream_;
@@ -181,7 +214,6 @@ private:
     /// 通过 SSH 检查并在需要时启动设备端 you_see。
     void startBetaProcess();
     void switchBetaMode();
-    void cycleBetaFace();
     static bool applyBetaWorkMode(const std::string &ip, int mode, std::string &message);
     static std::string betaSshPassword();
 

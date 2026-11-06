@@ -24,6 +24,8 @@ const char *radarModelName(RadarModel model)
         return "alpha_rotating";
     case RadarModel::BetaRotating:
         return "beta_rotating";
+    case RadarModel::GammaRotating:
+        return "gamma_rotating";
     case RadarModel::Fl6031:
         return "fl6031";
     case RadarModel::Fl6532:
@@ -112,8 +114,16 @@ const char *colorSourceDisplayName(ColorSource source)
     }
 }
 
-void rebuildDerivedFields(CloudFrame &frame)
+void rebuildDerivedFields(CloudFrame &frame, std::optional<ColorSource> only)
 {
+    // 给了 only 时只生成该颜色源：在线点云每帧 30 万点时，
+    // 13 个标量场全部填充要 400 万次写入 + 15MB 分配，是掉帧的主要原因之一。
+    const bool all = !only.has_value();
+    const auto want = [all, only](ColorSource source)
+    {
+        return all || *only == source;
+    };
+
     frame.availability.sources.clear();
 
     const std::size_t rows = frame.points.size();
@@ -153,19 +163,19 @@ void rebuildDerivedFields(CloudFrame &frame)
     ScalarField validField;
     ScalarField timestampField;
 
-    rangeField.resize(total);
-    xField.resize(total);
-    yField.resize(total);
-    zField.resize(total);
-    intensityField.resize(total);
-    reflectField.resize(total);
-    peakField.resize(total);
-    thetaField.resize(total);
-    slotAngleField.resize(total);
-    echoIndexField.resize(total);
-    tailField.resize(total);
-    validField.resize(total);
-    timestampField.resize(total);
+    if (want(ColorSource::Range)) rangeField.resize(total);
+    if (want(ColorSource::X)) xField.resize(total);
+    if (want(ColorSource::Y)) yField.resize(total);
+    if (want(ColorSource::Z)) zField.resize(total);
+    if (want(ColorSource::Intensity)) intensityField.resize(total);
+    if (want(ColorSource::Reflectivity)) reflectField.resize(total);
+    if (want(ColorSource::Peak)) peakField.resize(total);
+    if (want(ColorSource::Theta)) thetaField.resize(total);
+    if (want(ColorSource::SlotAngle)) slotAngleField.resize(total);
+    if (want(ColorSource::EchoIndex)) echoIndexField.resize(total);
+    if (want(ColorSource::IsTailPoint)) tailField.resize(total);
+    if (want(ColorSource::IsValid)) validField.resize(total);
+    if (want(ColorSource::Timestamp)) timestampField.resize(total);
 
     std::size_t validCount = 0;
     bool hasTimestamp = false;
@@ -183,45 +193,84 @@ void rebuildDerivedFields(CloudFrame &frame)
                 ++validCount;
             }
 
-            rangeField.values[idx] = point.r;
-            rangeField.valid[idx] = valid ? 1u : 0u;
-
-            xField.values[idx] = point.x;
-            xField.valid[idx] = (valid && isFiniteCoordinate(point.x)) ? 1u : 0u;
-            yField.values[idx] = point.y;
-            yField.valid[idx] = (valid && isFiniteCoordinate(point.y)) ? 1u : 0u;
-            zField.values[idx] = point.z;
-            zField.valid[idx] = (valid && isFiniteCoordinate(point.z)) ? 1u : 0u;
-
-            intensityField.values[idx] = static_cast<float>(point.intensity);
-            intensityField.valid[idx] = valid ? 1u : 0u;
-
-            reflectField.values[idx] = point.reflect;
-            reflectField.valid[idx] = valid ? 1u : 0u;
-
-            peakField.values[idx] = static_cast<float>(point.peak);
-            peakField.valid[idx] = valid ? 1u : 0u;
-
-            thetaField.values[idx] = point.theta;
-            thetaField.valid[idx] = valid ? 1u : 0u;
-
-            slotAngleField.values[idx] = point.slot_ang;
-            slotAngleField.valid[idx] = valid ? 1u : 0u;
-
-            echoIndexField.values[idx] = static_cast<float>(point.select_idx);
-            echoIndexField.valid[idx] = valid ? 1u : 0u;
-
-            tailField.values[idx] = point.is_tail_pt ? 1.0f : 0.0f;
-            tailField.valid[idx] = valid ? 1u : 0u;
-
-            validField.values[idx] = valid ? 1.0f : 0.0f;
-            validField.valid[idx] = 1u;
-
-            timestampField.values[idx] = static_cast<float>(point.timestamp);
-            timestampField.valid[idx] = valid ? 1u : 0u;
-            if (point.timestamp != 0)
+            if (want(ColorSource::Range))
             {
-                hasTimestamp = true;
+                rangeField.values[idx] = point.r;
+                rangeField.valid[idx] = valid ? 1u : 0u;
+            }
+
+            if (want(ColorSource::X))
+            {
+                xField.values[idx] = point.x;
+                xField.valid[idx] = (valid && isFiniteCoordinate(point.x)) ? 1u : 0u;
+            }
+            if (want(ColorSource::Y))
+            {
+                yField.values[idx] = point.y;
+                yField.valid[idx] = (valid && isFiniteCoordinate(point.y)) ? 1u : 0u;
+            }
+            if (want(ColorSource::Z))
+            {
+                zField.values[idx] = point.z;
+                zField.valid[idx] = (valid && isFiniteCoordinate(point.z)) ? 1u : 0u;
+            }
+
+            if (want(ColorSource::Intensity))
+            {
+                intensityField.values[idx] = static_cast<float>(point.intensity);
+                intensityField.valid[idx] = valid ? 1u : 0u;
+            }
+
+            if (want(ColorSource::Reflectivity))
+            {
+                reflectField.values[idx] = point.reflect;
+                reflectField.valid[idx] = valid ? 1u : 0u;
+            }
+
+            if (want(ColorSource::Peak))
+            {
+                peakField.values[idx] = static_cast<float>(point.peak);
+                peakField.valid[idx] = valid ? 1u : 0u;
+            }
+
+            if (want(ColorSource::Theta))
+            {
+                thetaField.values[idx] = point.theta;
+                thetaField.valid[idx] = valid ? 1u : 0u;
+            }
+
+            if (want(ColorSource::SlotAngle))
+            {
+                slotAngleField.values[idx] = point.slot_ang;
+                slotAngleField.valid[idx] = valid ? 1u : 0u;
+            }
+
+            if (want(ColorSource::EchoIndex))
+            {
+                echoIndexField.values[idx] = static_cast<float>(point.select_idx);
+                echoIndexField.valid[idx] = valid ? 1u : 0u;
+            }
+
+            if (want(ColorSource::IsTailPoint))
+            {
+                tailField.values[idx] = point.is_tail_pt ? 1.0f : 0.0f;
+                tailField.valid[idx] = valid ? 1u : 0u;
+            }
+
+            if (want(ColorSource::IsValid))
+            {
+                validField.values[idx] = valid ? 1.0f : 0.0f;
+                validField.valid[idx] = 1u;
+            }
+
+            if (want(ColorSource::Timestamp))
+            {
+                timestampField.values[idx] = static_cast<float>(point.timestamp);
+                timestampField.valid[idx] = valid ? 1u : 0u;
+                if (point.timestamp != 0)
+                {
+                    hasTimestamp = true;
+                }
             }
         }
     }
@@ -229,18 +278,24 @@ void rebuildDerivedFields(CloudFrame &frame)
     frame.metadata.validSamples = validCount;
     frame.metadata.invalidSamples = total - validCount;
 
-    frame.scalarFields[ColorSource::Range] = std::move(rangeField);
-    frame.scalarFields[ColorSource::X] = std::move(xField);
-    frame.scalarFields[ColorSource::Y] = std::move(yField);
-    frame.scalarFields[ColorSource::Z] = std::move(zField);
-    frame.scalarFields[ColorSource::Intensity] = std::move(intensityField);
-    frame.scalarFields[ColorSource::Reflectivity] = std::move(reflectField);
-    frame.scalarFields[ColorSource::Peak] = std::move(peakField);
-    frame.scalarFields[ColorSource::Theta] = std::move(thetaField);
-    frame.scalarFields[ColorSource::SlotAngle] = std::move(slotAngleField);
-    frame.scalarFields[ColorSource::EchoIndex] = std::move(echoIndexField);
-    frame.scalarFields[ColorSource::IsTailPoint] = std::move(tailField);
-    frame.scalarFields[ColorSource::IsValid] = std::move(validField);
+    if (want(ColorSource::Range)) frame.scalarFields[ColorSource::Range] = std::move(rangeField);
+    if (want(ColorSource::X)) frame.scalarFields[ColorSource::X] = std::move(xField);
+    if (want(ColorSource::Y)) frame.scalarFields[ColorSource::Y] = std::move(yField);
+    if (want(ColorSource::Z)) frame.scalarFields[ColorSource::Z] = std::move(zField);
+    if (want(ColorSource::Intensity))
+        frame.scalarFields[ColorSource::Intensity] = std::move(intensityField);
+    if (want(ColorSource::Reflectivity))
+        frame.scalarFields[ColorSource::Reflectivity] = std::move(reflectField);
+    if (want(ColorSource::Peak)) frame.scalarFields[ColorSource::Peak] = std::move(peakField);
+    if (want(ColorSource::Theta)) frame.scalarFields[ColorSource::Theta] = std::move(thetaField);
+    if (want(ColorSource::SlotAngle))
+        frame.scalarFields[ColorSource::SlotAngle] = std::move(slotAngleField);
+    if (want(ColorSource::EchoIndex))
+        frame.scalarFields[ColorSource::EchoIndex] = std::move(echoIndexField);
+    if (want(ColorSource::IsTailPoint))
+        frame.scalarFields[ColorSource::IsTailPoint] = std::move(tailField);
+    if (want(ColorSource::IsValid))
+        frame.scalarFields[ColorSource::IsValid] = std::move(validField);
 
     // 时间戳为 0 视为缺失：只有存在非零样本时才把该字段标记为可用。
     if (hasTimestamp)
@@ -260,14 +315,15 @@ void rebuildDerivedFields(CloudFrame &frame)
 
 std::shared_ptr<CloudFrame> makeFrame(algo_lidar::PointMatrix points,
                                       FrameMetadata metadata,
-                                      FrameId id)
+                                      FrameId id,
+                                      std::optional<ColorSource> only)
 {
     auto frame = std::make_shared<CloudFrame>();
     frame->id = id;
     frame->revision = 1;
     frame->points = std::move(points);
     frame->metadata = std::move(metadata);
-    rebuildDerivedFields(*frame);
+    rebuildDerivedFields(*frame, only);
     return frame;
 }
 

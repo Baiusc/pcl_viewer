@@ -118,7 +118,8 @@ namespace algo_lidar
                 if (roi != 0 || row < 0 || row >= 128 || col < 0 || col >= 192)
                     continue;
                 table.intensity_reference[row][col] = std::stof(fields[intensity_col]);
-                table.distance_correction_m[row][col] = std::stof(fields[correction_col]);
+                // 来源是 6532 的标定 bin/CSV，单位 cm，与字段名一致。
+                table.distance_correction_cm[row][col] = std::stof(fields[correction_col]);
                 if (!table.supported[row][col])
                     ++loaded;
                 table.supported[row][col] = true;
@@ -149,7 +150,8 @@ namespace algo_lidar
 
                 const auto pixel = point.pixel_idx;
                 const auto slot = point.slot_idx;
-                float correction_m = table.distance_correction_m[pixel][slot];
+                // 表里是 cm，point.r 是米，必须先换算再加。
+                float correction_m = table.distance_correction_cm[pixel][slot] / 100.0f;
 
                 // table_a 是本像素的强度参考值；使用选中回波的 conv_intensity 消除像素响应差异。
                 float echo_intensity = static_cast<float>(point.peak);

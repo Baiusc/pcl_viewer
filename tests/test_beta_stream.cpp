@@ -117,6 +117,46 @@ int main()
         return 3;
     }
 
+    // 120×800（SL100）：包长 18 + 120×13 = 1578B，点数应为 120。
+    std::vector<std::uint8_t> packet120(cloud_viewer::BetaUdpStream::cartesianPacketSize(120), 0);
+    std::memcpy(packet120.data() + 10, &frameIndex, 2);
+    std::memcpy(packet120.data() + 12, &totalSlots, 2);
+    std::memcpy(packet120.data() + 14, &slot, 2);
+    for (int i = 0; i < 120; ++i)
+    {
+        std::uint8_t *raw = packet120.data() + 18 + i * 13;
+        const float x = 10.0f;
+        const float y = 4.0f;
+        const float z = 1.0f;
+        std::memcpy(raw, &x, 4);
+        std::memcpy(raw + 4, &y, 4);
+        std::memcpy(raw + 8, &z, 4);
+        raw[12] = 77;
+    }
+
+    algo_lidar::PointData points120[120];
+    int count120 = 0;
+    if (!cloud_viewer::BetaUdpStream::parsePacket(packet120.data(), packet120.size(), 120, 800,
+                                                  outFrame, outSlot, points120, count120))
+    {
+        std::cerr << "BETA_TEST_FAIL 120x800 parse returned false\n";
+        return 5;
+    }
+    if (count120 != 120 || std::fabs(points120[0].y + 4.0f) > 1e-5f ||
+        points120[0].intensity != 77)
+    {
+        std::cerr << "BETA_TEST_FAIL 120 count=" << count120 << " y=" << points120[0].y
+                  << " intensity=" << static_cast<int>(points120[0].intensity) << "\n";
+        return 6;
+    }
+    // 96 线的包用 120 线规格解析，必须因包长不符被拒绝。
+    if (cloud_viewer::BetaUdpStream::parsePacket(packet.data(), packet.size(), 120, 800,
+                                                 outFrame, outSlot, points120, count120))
+    {
+        std::cerr << "BETA_TEST_FAIL 96-line packet accepted as 120 lines\n";
+        return 7;
+    }
+
 #ifndef _WIN32
     if (!testSourceFilter(packet))
     {

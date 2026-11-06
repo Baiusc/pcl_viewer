@@ -84,18 +84,34 @@ int main()
         }
     };
 
-    // 面起始角必须与设备实测值一致（聚合 CSV 与目录布局共用同一算法）。
+    // 面起始角来自标定表（angle_face + side_angular_offset），具体数值随标定版本变化，
+    // 这里只校验结构关系：4 面依次相差 90°，避免每次换表都要改断言。
     const auto &starts = calibration.startingAngles();
-    check("start_face0", std::fabs(starts[0] - 357.0f) < 0.05f, std::to_string(starts[0]));
-    check("start_face1", std::fabs(starts[1] - 87.4336f) < 0.05f, std::to_string(starts[1]));
+    const auto wrapDelta = [](float delta)
+    {
+        while (delta > 180.0f) delta -= 360.0f;
+        while (delta < -180.0f) delta += 360.0f;
+        return delta;
+    };
+    check("start_face0_finite", std::isfinite(starts[0]), std::to_string(starts[0]));
+    for (int face = 1; face < 4; ++face)
+    {
+        const float expected = 90.0f * static_cast<float>(face);
+        const float actual = wrapDelta(starts[face] - starts[0]);
+        // 180°/270° 会被折到 ±180 内，比较时对差值再折一次。
+        check((std::string("start_spacing_") + std::to_string(face)).c_str(),
+              std::fabs(wrapDelta(actual - expected)) < 2.0f,
+              std::to_string(actual) + " vs " + std::to_string(expected));
+    }
 
-    // 固定一条回波：line=32、ft=1000、slot=400、peak=800、face=0。
-    // mirrorAngle 取 scale=238、realAngle=0，即恰好落在该面起点。
+    // 固定一条回波：line=32、ft=60000、slot=400、peak=800、face=0。
+    // mirrorAngle 取 scale=30、realAngle=0：落在第 0 面区间内（面内约 11.8°），
+    // 换标定表时只需确认该 scale 仍属于 face 0。
     const int line = 32;
     const std::uint32_t ft = 60000;
     const std::uint16_t slot = 400;
     const std::uint16_t peak = 800;
-    const std::uint32_t mirrorAngle = (238u << 12);
+    const std::uint32_t mirrorAngle = (30u << 12);
 
     auto decode = [&](const Options &options)
     {
@@ -120,7 +136,8 @@ int main()
     const float expectedR = kLightSpeed * static_cast<float>(ft >> 1);
     check("off_r", std::fabs(off.r - expectedR) < 1e-4f,
           std::to_string(off.r) + " vs " + std::to_string(expectedR));
-    check("on_r_differs", std::fabs((on.r - off.r) - (-5.8716f)) < 1e-3f,
+    // 转镜雷达的 [zero_distance_offset] 单位是米，不加任何换算（line=32 的标定值）。
+    check("on_r_differs", std::fabs((on.r - off.r) - (-5.8525f)) < 1e-3f,
           std::to_string(on.r) + " vs off " + std::to_string(off.r));
 
     check("distance_on_off_valid", off.is_valid && on.is_valid, "both valid");

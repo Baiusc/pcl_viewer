@@ -86,6 +86,15 @@ public:
     bool loaded() const { return loaded_; }
     const std::filesystem::path &directory() const { return directory_; }
 
+    /// 标定表记录的规格：垂直线数 / 每帧 slot 数。
+    /// 96×800（IMX459）与 120×800（SL100）的标定表不能混用，连接时需比对。
+    int lineCount() const { return linesV_; }
+    int slotCount() const { return linesH_; }
+
+    /// 俯仰中心线 u（SPAD 中心线）：供无法套用整张标定的兜底解算使用。
+    /// Gamma（120 线）的 u 仍是 47，不能按 (lines-1)/2 推导。
+    int thetaCenterLine() const { return u_; }
+
     /// 由原始点云的一回波计算笛卡尔坐标与反射率。
     /// face 由独立的 PA 判面层传入，每面相差 90°；本类不负责判面。
     /// 结构参数（编码器表、面起始角、omega0、theta、sat_peak_max）始终生效，
@@ -128,6 +137,10 @@ private:
     float omega0_ = -60.0f;
     /// ys_calibration.ini 的 sat_peak_max，反射率峰值归一化的上限。
     std::uint16_t satPeakMax_ = 1612;
+    /// ys_calibration.ini 的 sat_peak_min，低于该峰值判为无效回波（设备端同规则）。
+    std::uint16_t satPeakMin_ = 0;
+    /// ys_calibration.ini 的 dist_max（米）：有效点的距离上限，不要再硬编码 200。
+    float distMax_ = 200.0f;
     float thetaMin_ = -10.0f;
     float thetaMax_ = 10.0f;
     float thetaTilt_ = -2.5f;

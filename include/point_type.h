@@ -77,10 +77,12 @@ namespace algo_lidar
     using PointMatrix = std::vector<std::vector<PointData>>;
 
     // 6532 老版 ROI0 逐像素标定表（128 行 x 192 列）。
+    // 单位约定：**固态雷达（6532/6031）的标定表与初始点云都是厘米**，
+    // 而转镜雷达（Alpha/Beta/Gamma）是米。这里保持 cm，使用时再换算成米。
     struct Range6532Roi0PixelCalibration
     {
         std::array<std::array<float, 192>, 128> intensity_reference{};
-        std::array<std::array<float, 192>, 128> distance_correction_m{};
+        std::array<std::array<float, 192>, 128> distance_correction_cm{};
         std::array<std::array<bool, 192>, 128> supported{};
     };
 

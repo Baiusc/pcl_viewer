@@ -17,6 +17,9 @@ struct ViewerSettings
 {
     std::string calibrationFile;          ///< 文件名，位于 calibrationDirectory()
     bool calibrationEnabled = false;      ///< 标定开关是否启用
+    /// 上次连接的设备地址；下次搜索会单独确认它是否在线，
+    /// 以便在设备端 you_see 未运行（无广播）时仍能找回自己的设备。
+    std::string lastDeviceIp;
 };
 
 /// 可执行文件所在目录。

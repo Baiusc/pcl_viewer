@@ -28,6 +28,7 @@ struct UiButton
     double height = 0.0;
     std::string label;
     std::function<void()> onClick;
+    bool visible = true;
 
     vtkSmartPointer<vtkActor2D> background;
     vtkSmartPointer<vtkTextActor> text;
@@ -45,6 +46,9 @@ public:
     bool handleClick(int displayX, int displayY, int windowWidth, int windowHeight);
 
     void setLabel(std::size_t index, const std::string &label);
+
+    /// 控制按钮显示；隐藏后既不绘制也不参与命中检测。
+    void setVisible(std::size_t index, bool visible);
 
     /// 移除 [index, end) 的按钮（用于刷新动态设备列表）。
     void removeButtonsFrom(std::size_t index);

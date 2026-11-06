@@ -176,6 +176,10 @@ ViewerSettings loadViewerSettings()
         {
             settings.calibrationEnabled = (value == "1" || value == "true" || value == "ON");
         }
+        else if (key == "LAST_DEVICE_IP")
+        {
+            settings.lastDeviceIp = value;
+        }
     }
     return settings;
 }
@@ -191,6 +195,10 @@ bool saveViewerSettings(const ViewerSettings &settings, std::string &error)
     }
     output << "CALIBRATION_FILE=" << settings.calibrationFile << "\n";
     output << "CALIBRATION_ENABLED=" << (settings.calibrationEnabled ? 1 : 0) << "\n";
+    if (!settings.lastDeviceIp.empty())
+    {
+        output << "LAST_DEVICE_IP=" << settings.lastDeviceIp << "\n";
+    }
     return true;
 }
 

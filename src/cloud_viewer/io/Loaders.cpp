@@ -1,6 +1,7 @@
 #include "cloud_viewer/io/Loaders.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -20,6 +21,14 @@ namespace
 
 constexpr std::size_t kCsvHeaderScanLines = 200;
 constexpr std::size_t kNotFound = std::numeric_limits<std::size_t>::max();
+
+/// 帧 id 必须在整个进程内唯一：帧缓存用 id 做 key（ViewerApp::cache_）。
+/// 多个文件都写死 id=1 会让缓存永远命中第一个文件——表现为"日志切了、画面没变"。
+FrameId nextFrameId()
+{
+    static std::atomic<FrameId> counter{1};
+    return counter.fetch_add(1, std::memory_order_relaxed);
+}
 
 std::string trim(const std::string &text)
 {
@@ -929,28 +938,60 @@ ProbeResult RotatingTxtLoader::probe(const std::filesystem::path &path) const
     }
     const auto head = readHead(path, kCsvHeaderScanLines);
     bool hasMirrorAngle = false;
+    bool hasStartOfSlot = false;
+    bool hasStartOfCol = false;
+    bool hasPixelNumber = false;
+    bool hasColsRows = false;
     for (const auto &line : head)
     {
-        if (contains(line, "start of col") || (contains(line, "cols:") && contains(line, "rows:")))
-        {
-            return result; // 固态格式优先
-        }
         if (contains(line, "rotate mirror angle"))
         {
             hasMirrorAngle = true;
         }
-    }
-    for (const auto &line : head)
-    {
-        if (contains(line, "start of slot") ||
-            (contains(line, "start of") && hasMirrorAngle))
+        if (contains(line, "start of slot"))
         {
-            result.loader = LoaderId::RotatingTxt;
-            result.model = RadarModel::Generic;
-            result.formatName = "转镜雷达 TXT";
-            result.reason = "检测到 start of slot 与 rotate mirror angle 数据块";
-            return result;
+            hasStartOfSlot = true;
         }
+        if (contains(line, "start of col"))
+        {
+            hasStartOfCol = true;
+        }
+        if (contains(line, "pixel_number"))
+        {
+            hasPixelNumber = true;
+        }
+        if (contains(line, "cols:") && contains(line, "rows:"))
+        {
+            hasColsRows = true;
+        }
+    }
+
+    // cs96_raw_save 导出的转镜原始点云也写成 "start of col"，但数据行以
+    // "pixel_number:" 开头、水平角写成 "rotate mirror angle:"。这种文件属于转镜，
+    // 若让给 SolidTxtLoader（只认 "row:" 前缀）会解析出空矩阵——表现为
+    // "加载成功但一个点都不显示"。
+    if (hasStartOfCol && hasPixelNumber)
+    {
+        result.loader = LoaderId::RotatingTxt;
+        result.model = RadarModel::Generic;
+        result.formatName = "转镜雷达 TXT（原始点云导出）";
+        result.reason = "检测到 start of col + pixel_number + rotate mirror angle";
+        return result;
+    }
+
+    // 其余带 cols/rows 或 start of col 的走固态。
+    if (hasColsRows || hasStartOfCol)
+    {
+        return result;
+    }
+
+    if (hasStartOfSlot || hasMirrorAngle)
+    {
+        result.loader = LoaderId::RotatingTxt;
+        result.model = RadarModel::Generic;
+        result.formatName = "转镜雷达 TXT";
+        result.reason = "检测到 start of slot 与 rotate mirror angle 数据块";
+        return result;
     }
     return result;
 }
@@ -991,7 +1032,7 @@ bool RotatingTxtLoader::buildIndex(const std::filesystem::path &path,
     index.invalidSamples = index.dataLines - valid;
 
     FrameDescriptor descriptor;
-    descriptor.id = 1;
+    descriptor.id = nextFrameId();
     descriptor.sourcePath = path;
     descriptor.frameNumber = 0;
     index.frames.push_back(descriptor);
@@ -1031,6 +1072,7 @@ ProbeResult SolidTxtLoader::probe(const std::filesystem::path &path) const
     const auto head = readHead(path, kCsvHeaderScanLines);
     bool hasColsRows = false;
     bool hasStartOfCol = false;
+    bool hasPixelNumber = false;
     for (const auto &line : head)
     {
         if (contains(line, "cols:") && contains(line, "rows:"))
@@ -1041,6 +1083,16 @@ ProbeResult SolidTxtLoader::probe(const std::filesystem::path &path) const
         {
             hasStartOfCol = true;
         }
+        if (contains(line, "pixel_number"))
+        {
+            hasPixelNumber = true;
+        }
+    }
+    // "pixel_number" 是转镜原始点云导出的行前缀，固态格式用 "row:"。
+    // 遇到它直接放弃，避免把转镜数据按固态几何解算。
+    if (hasPixelNumber)
+    {
+        return result;
     }
     if (hasColsRows || hasStartOfCol)
     {
@@ -1087,7 +1139,7 @@ bool SolidTxtLoader::buildIndex(const std::filesystem::path &path,
     index.invalidSamples = index.dataLines - valid;
 
     FrameDescriptor descriptor;
-    descriptor.id = 1;
+    descriptor.id = nextFrameId();
     descriptor.sourcePath = path;
     descriptor.frameNumber = 0;
     index.frames.push_back(descriptor);
@@ -1229,7 +1281,7 @@ bool FrameCsv6532Loader::buildIndex(const std::filesystem::path &path,
     index.dataLines = dataLines;
     index.badLines = badLines;
 
-    FrameId id = 1;
+    // 帧 id 由 nextFrameId() 统一分配，避免跨文件重复导致帧缓存串味。
     for (const auto &entry : stats)
     {
         index.rows = std::max(index.rows, entry.second.maxRow + 1);
@@ -1238,7 +1290,7 @@ bool FrameCsv6532Loader::buildIndex(const std::filesystem::path &path,
         index.invalidSamples += entry.second.invalid;
 
         FrameDescriptor descriptor;
-        descriptor.id = id++;
+        descriptor.id = nextFrameId();
         descriptor.sourcePath = path;
         descriptor.frameNumber = entry.first;
         descriptor.roiId = entry.second.roi;
@@ -1466,7 +1518,7 @@ bool FrameCsv6031Loader::buildIndex(const std::filesystem::path &path,
     index.invalidSamples = index.dataLines - index.validSamples;
 
     FrameDescriptor descriptor;
-    descriptor.id = 1;
+    descriptor.id = nextFrameId();
     descriptor.sourcePath = path;
     descriptor.frameNumber = 0;
     descriptor.algorithmId = algorithm;
@@ -1539,7 +1591,7 @@ bool PcdLoader::buildIndex(const std::filesystem::path &path,
     index.dataLines = header.points;
 
     FrameDescriptor descriptor;
-    descriptor.id = 1;
+    descriptor.id = nextFrameId();
     descriptor.sourcePath = path;
     descriptor.frameNumber = 0;
     index.frames.push_back(descriptor);
@@ -1584,8 +1636,11 @@ LoaderRegistry::LoaderRegistry()
     loaders_.push_back(std::make_shared<PcdLoader>());
     loaders_.push_back(std::make_shared<FrameCsv6031Loader>());
     loaders_.push_back(std::make_shared<FrameCsv6532Loader>());
-    loaders_.push_back(std::make_shared<SolidTxtLoader>());
+    // RotatingTxt 必须排在 SolidTxt 之前：cs96_raw_save 导出的转镜原始点云也用
+    // "start of col" 分块，若让 SolidTxtLoader 先试，它只认 "row:" 前缀，
+    // 会把整个文件解析成空矩阵（加载成功但 0 个点）。
     loaders_.push_back(std::make_shared<RotatingTxtLoader>());
+    loaders_.push_back(std::make_shared<SolidTxtLoader>());
 }
 
 void LoaderRegistry::registerLoader(const std::shared_ptr<IPointCloudLoader> &loader)

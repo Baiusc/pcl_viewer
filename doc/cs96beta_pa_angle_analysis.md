@@ -22,7 +22,7 @@ mirror_angle (20 bit)
 ```
 
 - 一圈 = 240 个 `scale`，每 `scale` = **1.5°**。
-- 每 `real_angle` 步进 = `0.0009°`（`0.0009 × 4096 ≈ 3.686°`，与 1.5° 的对应关系由固件约定）。
+- 每 `real_angle` 步进 = `0.0009°`（`0.0009 × 1700 ≈ 1.53°`，20261104与fpga讨论后确认是此关系）。
 - PA 角（编码器绝对角）：
 
 ```
@@ -31,6 +31,21 @@ pa_angle = encoder_angle[scale] + 0.0009 × real_angle
 
 `encoder_angle` 来自 `ys_encoder_angle.csv`（`scale,angle`，241 行，0~360°），
 是**整圈绝对角度表**，不是 `spot_slope_map.csv`。
+
+### 1.1 `scale` / 240 计数从哪来（芯片层依据）
+
+同类 dToF SPAD-SoC（如 SL100，见 [sl100_chip_notes.md](./sl100_chip_notes.md)）内置
+**MEU（Motor encoder unit）**，直接接收电机编码器的单相 PWM，并把 tick 打进数据包头
+（`meu_speed` / `meu_position_tick_id` / `meu_position_tick_distance`）。
+
+由此可得两条结论：
+
+1. **一圈 240 个 `scale` 就是编码器 240 个计数**，不是软件约定值；
+2. `encoder_angle[scale]` 是**装配后实测的角度表**，天然不等间距，
+   所以 slot→角度必须查表，用 `scale × 1.5°` 线性公式会引入系统偏差。
+
+> 注意型号差异：当前 CS96 Beta（96 线）是 IMX459，120 线型号才是 SL100。
+> 两者 MEU/编码器思路相同，但 bin 数、PIXEL 数、包长不同，标定表不可混用。
 
 ---
 

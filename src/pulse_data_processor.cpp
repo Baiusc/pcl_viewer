@@ -42,10 +42,8 @@ namespace algo_lidar
 	void readPulseData(const std::string &filename, PointMatrix &mat)
 	{
 		const double LIGHT_SPEED = 299792458e-9; // 单位：m/ns
-		const int PIXEL_NUM = 96;
-		const int SLOT_NUM = 800;
-
-		mat.resize(PIXEL_NUM, std::vector<PointData>(SLOT_NUM));
+		int PIXEL_NUM = 96;
+		int SLOT_NUM = 800;
 
 		std::ifstream infile(filename);
 		if (!infile.is_open())
@@ -55,6 +53,68 @@ namespace algo_lidar
 		}
 
 		std::string line;
+
+		// 先读头部：CS96 原始点云导出会写 "cols: 800  rows: 96"（cols = slot 数，rows = 像素数）。
+		// 不读头部就只能按 96×800 硬算，120 线文件会整片错位。
+		while (std::getline(infile, line))
+		{
+			if (line.find("cols:") != std::string::npos)
+			{
+				auto tokens = splitString(line, ' ');
+				for (size_t i = 0; i + 1 < tokens.size(); ++i)
+				{
+					if (tokens[i] == "cols:")
+						SLOT_NUM = std::stoi(tokens[i + 1]);
+					if (tokens[i] == "rows:")
+						PIXEL_NUM = std::stoi(tokens[i + 1]);
+				}
+				break;
+			}
+			if (line.find("start of") != std::string::npos)
+			{
+				break;
+			}
+		}
+		// 第一遍：收集每列的水平角（原始编码器计数）。
+		// 第 0 列常见 raw=0 的脏值（导出时 scale 越界就取表首项），
+		// 用第 1、2 列的增量补回去，否则点云会多出一条 0° 方向的假竖线。
+		std::vector<int> colRaw(static_cast<std::size_t>(SLOT_NUM), -1);
+		infile.clear();
+		infile.seekg(0, std::ios::beg);
+		{
+			int current = -1;
+			while (std::getline(infile, line))
+			{
+				if (line.find("start of") != std::string::npos)
+				{
+					auto f1 = line.find('[');
+					auto f2 = line.find(']');
+					current = (f1 != std::string::npos && f2 != std::string::npos)
+								  ? std::stoi(line.substr(f1 + 1, f2 - f1 - 1))
+								  : -1;
+					continue;
+				}
+				if (line.find("rotate mirror angle") != std::string::npos)
+				{
+					const auto colon = line.find(':');
+					const int raw = (colon == std::string::npos) ? 0 : std::stoi(line.substr(colon + 1));
+					if (current >= 0 && current < SLOT_NUM)
+					{
+						colRaw[static_cast<std::size_t>(current)] = raw;
+					}
+				}
+			}
+		}
+		if (SLOT_NUM > 2 && colRaw[0] == 0 && colRaw[1] > 0)
+		{
+			const int step = colRaw[2] - colRaw[1]; // 相邻列增量，实测多为 12~13
+			colRaw[0] = colRaw[1] - (step > 0 ? step : 13);
+		}
+
+		infile.clear();
+		infile.seekg(0, std::ios::beg);
+
+		mat.assign(PIXEL_NUM, std::vector<PointData>(SLOT_NUM));
 		int slot_index = 0, last_slot_dics = 0, pixel_cnt = 0;
 		float slot_ang = 0.0;
 		bool bDataBegin = false;
@@ -68,6 +128,26 @@ namespace algo_lidar
 				slot_index = std::stoi(line.substr(f1 + 1, f2 - f1 - 1));
 				bDataBegin = false;
 				pixel_cnt = 0;
+				continue;
+			}
+
+			// CS96 原始点云导出：绝对编码器角度，单位 1/61440 圈（不是 1/65536 圈）。
+			// 必须放在下面的 delta 累加分支之前，否则绝对值会被当成增量一路累加跑飞。
+			if (line.find("rotate mirror angle") != std::string::npos)
+			{
+				const int raw = (slot_index >= 0 && slot_index < SLOT_NUM)
+									? colRaw[static_cast<std::size_t>(slot_index)]
+									: -1;
+				// 转镜的水平角是编码器机械角的 2 倍（镜面反射把转角放大一倍）。
+				// 漏掉这个 ×2，120° 的视场会缩成 60°。
+				float deg = (raw < 0) ? 0.0f : static_cast<float>(raw) / 61440.0f * 360.0f * 2.0f;
+				deg = std::fmod(deg, 360.0f);
+				if (deg < 0.0f)
+				{
+					deg += 360.0f;
+				}
+				slot_ang = deg;
+				bDataBegin = true;
 				continue;
 			}
 
@@ -108,19 +188,33 @@ namespace algo_lidar
 
 			if (bDataBegin)
 			{
-				pixel_cnt++;
-				if (pixel_cnt > PIXEL_NUM || slot_index >= SLOT_NUM)
+				auto tokens = splitString(line, ' ');
+				std::size_t off = 0;
+				int row_idx = pixel_cnt;
+				// 兼容两种数据行：
+				//   裸 9 数字：      tof w pk  tof w pk  tof w pk
+				//   cs96_raw_save：  pixel_number: <行号> tof w pk ...
+				if (!tokens.empty() && tokens.front().compare(0, 12, "pixel_number") == 0)
+				{
+					if (tokens.size() < 11)
+						continue;
+					off = 2;
+					row_idx = std::stoi(tokens[1]);
+				}
+				else if (tokens.size() < 9)
 				{
 					continue;
 				}
 
-				auto tokens = splitString(line, ' ');
-				if (tokens.size() < 9)
+				pixel_cnt++;
+				if (row_idx < 0 || row_idx >= PIXEL_NUM || slot_index < 0 || slot_index >= SLOT_NUM)
+				{
 					continue;
+				}
 
-				std::vector<double> peaks = {std::stod(tokens[2 + 2]), std::stod(tokens[5 + 2]), std::stod(tokens[8 + 2])};
-				std::vector<double> tofs = {std::stod(tokens[0 + 2]) / 1000, std::stod(tokens[3 + 2]) / 1000, std::stod(tokens[6 + 2]) / 1000};
-				std::vector<double> widths = {std::stod(tokens[1 + 2]) / 1000, std::stod(tokens[4 + 2]) / 1000, std::stod(tokens[7 + 2]) / 1000};
+				std::vector<double> peaks = {std::stod(tokens[off + 2]), std::stod(tokens[off + 5]), std::stod(tokens[off + 8])};
+				std::vector<double> tofs = {std::stod(tokens[off + 0]) / 1000, std::stod(tokens[off + 3]) / 1000, std::stod(tokens[off + 6]) / 1000};
+				std::vector<double> widths = {std::stod(tokens[off + 1]) / 1000, std::stod(tokens[off + 4]) / 1000, std::stod(tokens[off + 7]) / 1000};
 
 				uint8_t select_index = 255; // 初始值 255 
 				double max_peak = 1.0;
@@ -129,13 +223,13 @@ namespace algo_lidar
 				{
 					if (tofs[i] == 0.016)
 					{
-						mat[pixel_cnt - 1][slot_index].slot_ang = slot_ang; // 20250320 添加无效点的slot_ang
-						continue;											// 过滤无效数据
+						mat[row_idx][slot_index].slot_ang = slot_ang; // 20250320 添加无效点的slot_ang
+						continue;									  // 过滤无效数据
 					}
 					if (widths[i] == 0.016)
 					{
-						mat[pixel_cnt - 1][slot_index].slot_ang = slot_ang; // 20250320 添加无效点的slot_ang
-						continue;											// 过滤无效数据
+						mat[row_idx][slot_index].slot_ang = slot_ang; // 20250320 添加无效点的slot_ang
+						continue;									  // 过滤无效数据
 					}
 					if (peaks[i] > max_peak)
 					{
@@ -147,12 +241,12 @@ namespace algo_lidar
 
 				if (select_index == 255) // 若没有有效的回波数据，则标记为无效点 
 				{
-					mat[pixel_cnt - 1][slot_index].slot_ang = slot_ang; // 20250320 添加无效点的slot_ang
+					mat[row_idx][slot_index].slot_ang = slot_ang; // 20250320 添加无效点的slot_ang
 					continue;
 				}
 
 				int pixel_roi_start = 0; // 若原始点云是裁剪后的roi点云 则加上起始pixel号 默认为0
-				int pixel_idx = pixel_cnt - 1 + pixel_roi_start;
+				int pixel_idx = row_idx + pixel_roi_start;
 				int u = 47; // u: SPAD中心在y竖直方向上的偏移量（像素单位），默认 47
 
 				float r = tofs[select_index] * LIGHT_SPEED / 2.0;
@@ -160,7 +254,7 @@ namespace algo_lidar
 				float reflect = intensity / 255.0;
 				uint8_t intensity_uint8 = static_cast<uint8_t>(intensity);
 				// float theta = -pixel_idx / 96.0 * 20 + 10 - 2.5; // 20241213此日之前的旧版本
-				float theta = (pixel_idx - u) / 96.0 * 20 - 2.5; // 20241213 添加u 20250102 删除+10
+				float theta = (pixel_idx - u) / static_cast<float>(PIXEL_NUM) * 20 - 2.5; // 20241213 添加u 20250102 删除+10
 				float theta_rad = theta * M_PI / 180.0f;
 				float slot_ang_rad = slot_ang * M_PI / 180.0f;
 

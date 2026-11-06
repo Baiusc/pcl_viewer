@@ -39,6 +39,7 @@ struct DiscoveredDevice
     std::string mac;          ///< ARP 学到的 MAC，形如 "98:03:8a:7f:32:90"
     bool sshReady = false;    ///< TCP 22 可连接（能远程改配置/起进程）
     bool fromScan = false;    ///< true=网段扫描发现，没有广播元数据
+    bool fromProbe = false;   ///< true=按已知 IP 探测发现（FL6532 专用）
 };
 
 class DeviceDiscovery
@@ -77,6 +78,13 @@ public:
 
     /// 非阻塞 connect，判断目标 TCP 端口能否建立连接。
     static bool tcpPortOpen(const std::string &ip, std::uint16_t port, int timeoutMs);
+
+    /// FL6532 固态雷达不发送 55000 广播，只能按已知 IP 探测。
+    ///
+    /// 判据是 TCP 6508（控制口）可连接；CS96 Beta 不开放该端口，
+    /// 因此不会把 ARM 平台雷达误判成 6532。
+    static std::vector<DiscoveredDevice> probeFl6532(const std::vector<std::string> &candidates,
+                                                     std::string &note);
 
 private:
     struct Impl;

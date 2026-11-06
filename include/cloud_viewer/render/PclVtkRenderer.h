@@ -14,9 +14,16 @@
 #include "cloud_viewer/render/CloudRenderBridge.h"
 
 class vtkActor;
+class vtkCellArray;
+class vtkFloatArray;
+class vtkIdTypeArray;
+class vtkPoints;
+class vtkPolyData;
+class vtkPolyDataMapper;
 class vtkRenderer;
 class vtkRenderWindow;
 class vtkRenderWindowInteractor;
+class vtkUnsignedCharArray;
 
 namespace cloud_viewer
 {
@@ -25,6 +32,24 @@ struct RenderSettings
 {
     float pointSize = 2.0f;
     std::array<double, 3> background{{37.0 / 255.0, 37.0 / 255.0, 37.0 / 255.0}};
+};
+
+/// 一个实体的持久渲染槽位。
+/// 点云每秒更新 20 次，重建 vtkPoints/CellArray/Mapper 会让交互掉帧，
+/// 所以这里缓存整条管线，每帧只覆盖底层数组。
+struct ActorSlot
+{
+    vtkSmartPointer<vtkActor> actor;
+    vtkSmartPointer<vtkPolyDataMapper> mapper;
+    vtkSmartPointer<vtkPolyData> polyData;
+    vtkSmartPointer<vtkPoints> points;
+    vtkSmartPointer<vtkFloatArray> coords;   // xyz 3 分量，直接写指针
+    vtkSmartPointer<vtkCellArray> verts;     // 每点一个 vertex cell
+    vtkSmartPointer<vtkIdTypeArray> vertOffsets;
+    vtkSmartPointer<vtkIdTypeArray> vertConn;
+    vtkSmartPointer<vtkUnsignedCharArray> colors;
+    vtkIdType capacity = 0;    // coords/colors/verts 已分配容量
+    bool visible = true;
 };
 
 class PclVtkRenderer
@@ -70,7 +95,7 @@ private:
     vtkSmartPointer<vtkRenderWindow> window_;
     vtkSmartPointer<vtkRenderWindowInteractor> interactor_;
 
-    std::map<SceneObjectId, vtkSmartPointer<vtkActor>> actors_;
+    std::map<SceneObjectId, ActorSlot> actors_;
     std::map<vtkActor *, SceneObjectId> actorToObject_;
 
     vtkSmartPointer<vtkActor> highlightActor_;

@@ -145,11 +145,18 @@ bool Cs96BetaCalibration::load(const std::filesystem::path &path, std::string &e
 
 bool Cs96BetaCalibration::finalizeGeometry(std::string &error)
 {
-    if (linesV_ != 96 || linesH_ != 800)
+    // 96×800（IMX459）与 120×800（SL100）共用同一套解算，只拒绝明显非法的尺寸。
+    if (linesV_ <= 0 || linesV_ > 512 || linesH_ <= 0 || linesH_ > 16384)
     {
-        error = "CS96 Beta 标定尺寸必须为 96x800";
+        error = "标定尺寸非法: " + std::to_string(linesV_) + "x" + std::to_string(linesH_);
         return false;
     }
+
+    // 逐线数组按标定表声明的线数对齐（旧表 96，新表 120）。
+    omegaDelta_.resize(static_cast<std::size_t>(linesV_), 0.0f);
+    dDelta_.resize(static_cast<std::size_t>(linesV_), 0.0f);
+    aFactor_.resize(static_cast<std::size_t>(linesV_), 1.0f);
+    theta_.resize(static_cast<std::size_t>(linesV_), 0.0f);
 
     // 与设备端 PA 公式一致，不能用编码器表采样点代替面起始参数。
     for (int face = 0; face < kFaces; ++face)
@@ -235,6 +242,8 @@ bool Cs96BetaCalibration::parseIni(const std::filesystem::path &path, std::strin
             else if (key == "u") u_ = std::atoi(value.c_str());
             else if (key == "omega0") omega0_ = std::stof(value);
             else if (key == "sat_peak_max") satPeakMax_ = static_cast<std::uint16_t>(std::atoi(value.c_str()));
+            else if (key == "sat_peak_min") satPeakMin_ = static_cast<std::uint16_t>(std::atoi(value.c_str()));
+            else if (key == "dist_max") distMax_ = std::stof(value);
             else if (key == "theta_min") thetaMin_ = std::stof(value);
             else if (key == "theta_max") thetaMax_ = std::stof(value);
             else if (key == "theta_tilt") thetaTilt_ = std::stof(value);
@@ -245,7 +254,9 @@ bool Cs96BetaCalibration::parseIni(const std::filesystem::path &path, std::strin
         }
         else if (section == "zero_distance_offset" && index >= 0 && index < 96)
         {
-            dDelta_[index] = std::stof(value); // 单位 m
+            // 转镜雷达（Alpha/Beta/Gamma）的 d_delta 单位就是米，不要换算。
+            // 只有固态雷达（6532/6031）的距离标定表才是厘米。
+            dDelta_[index] = std::stof(value);
         }
         else if (section == "distance_factor" && index >= 0 && index < 96)
         {
@@ -266,9 +277,12 @@ bool Cs96BetaCalibration::parseIni(const std::filesystem::path &path, std::strin
         }
     }
 
+    // 传统目录布局（ini + 多 csv）仅用于旧的 96×800 标定包；
+    // 120×800 请使用 tools/pack_cs96beta_calibration.py 生成的聚合 CSV。
     if (linesV_ != 96 || linesH_ != 800)
     {
-        error = "CS96 Beta 标定尺寸必须为 96x800";
+        error = "目录布局标定仅支持 96x800，当前为 " + std::to_string(linesV_) + "x" +
+                std::to_string(linesH_) + "；请改用聚合 CSV";
         return false;
     }
     for (int face = 0; face < kFaces; ++face)
@@ -426,11 +440,25 @@ bool Cs96BetaCalibration::parseUnifiedCsv(const std::filesystem::path &path, std
 
         if (section == "parameter")
         {
-            if (key == "lines_v") linesV_ = std::atoi(value0.c_str());
+            if (key == "lines_v")
+            {
+                linesV_ = std::atoi(value0.c_str());
+                // 逐线表在 lines_v 之后才出现，先按声明线数扩容，避免 120 线的数据被丢弃。
+                if (linesV_ > 0 && linesV_ <= 512)
+                {
+                    const auto count = static_cast<std::size_t>(linesV_);
+                    omegaDelta_.resize(count, 0.0f);
+                    dDelta_.resize(count, 0.0f);
+                    aFactor_.resize(count, 1.0f);
+                    theta_.resize(count, 0.0f);
+                }
+            }
             else if (key == "lines_h") linesH_ = std::atoi(value0.c_str());
             else if (key == "u") u_ = std::atoi(value0.c_str());
             else if (key == "omega0") omega0_ = std::strtof(value0.c_str(), nullptr);
             else if (key == "sat_peak_max") satPeakMax_ = static_cast<std::uint16_t>(std::atoi(value0.c_str()));
+            else if (key == "sat_peak_min") satPeakMin_ = static_cast<std::uint16_t>(std::atoi(value0.c_str()));
+            else if (key == "dist_max") distMax_ = std::strtof(value0.c_str(), nullptr);
             else if (key == "theta_min") thetaMin_ = std::strtof(value0.c_str(), nullptr);
             else if (key == "theta_max") thetaMax_ = std::strtof(value0.c_str(), nullptr);
             else if (key == "theta_tilt") thetaTilt_ = std::strtof(value0.c_str(), nullptr);
@@ -453,6 +481,7 @@ bool Cs96BetaCalibration::parseUnifiedCsv(const std::filesystem::path &path, std
             else if (section == "zero_distance_offset" &&
                      index >= 0 && index < static_cast<int>(dDelta_.size()))
             {
+                // 与 ini 路径一致：转镜雷达的 d_delta 单位是米。
                 dDelta_[index] = value;
             }
             else if (section == "distance_factor" &&
@@ -847,7 +876,8 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     }
     point.reflect = reflectNorm * 100.0f;
     point.intensity = static_cast<std::uint8_t>(std::clamp(reflectNorm * 255.0f, 0.0f, 255.0f));
-    point.is_valid = r > 0.1f && r < 200.0f;
+    // 距离上限与峰值下限都来自标定表（dist_max / sat_peak_min），不要写死 200。
+    point.is_valid = r > 0.1f && r < distMax_ && peak >= satPeakMin_;
 }
 
 float Cs96BetaCalibration::spotSlopeCorrection(float angleDeg, int face) const

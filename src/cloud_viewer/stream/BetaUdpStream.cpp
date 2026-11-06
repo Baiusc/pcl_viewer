@@ -28,7 +28,22 @@ namespace
 constexpr int kLines = 96;
 constexpr int kSlots = 800;
 constexpr int kBins = 512;
-constexpr int kHistogramPackets = 24;
+// 直方图每包 4 个像素：96 线 24 包、120 线 30 包。不能写死。
+constexpr int histogramPacketCount(int lines)
+{
+    return (lines > 0 ? lines : kLines) / 4;
+}
+// 单包点数上限：96×800 与 120×800 共用同一套解析，数组按最大值固定分配。
+constexpr int kMaxLines = 160;
+
+/// 垂直线对应的俯仰角（度）。
+/// centerLine 为标定里的 u（SPAD 中心线）；未提供时才退回 (lines-1)/2。
+/// Gamma（120 线）的 u 仍是 47，若按 (120-1)/2=59 推导会整体上仰约 2°。
+inline float pitchDegrees(int line, int lines, int centerLine = -1)
+{
+    const int u = centerLine >= 0 ? centerLine : (lines - 1) / 2;
+    return static_cast<float>((line - u) * (20.0 / lines) - 2.5);
+}
 
 constexpr std::size_t kCartesianHead = 18;
 constexpr std::size_t kCartesianPoint = 13;
@@ -86,22 +101,22 @@ struct ParsedPacket
     std::uint16_t frame = 0;
     std::uint16_t index = 0; // 模式 2/1 为 slot，模式 0 为 seq
     int pointCount = 0;
-    algo_lidar::PointData points[kLines];
+    algo_lidar::PointData points[kMaxLines];
     std::uint16_t bins[4 * kBins];
 };
 
-bool parseCartesian(const std::uint8_t *data, ParsedPacket &packet)
+bool parseCartesian(const std::uint8_t *data, ParsedPacket &packet, int lines, int slots)
 {
     packet.frame = readLe16(data + 10);
     const std::uint16_t totalSlots = readLe16(data + 12);
     packet.index = readLe16(data + 14);
-    if (packet.frame > 3 || totalSlots != kSlots || packet.index >= kSlots)
+    if (packet.frame > 3 || totalSlots != slots || packet.index >= slots)
     {
         return false;
     }
 
-    constexpr double kDegPerSlot = 360.0 / static_cast<double>(kSlots);
-    for (int line = 0; line < kLines; ++line)
+    const double degPerSlot = 360.0 / static_cast<double>(slots);
+    for (int line = 0; line < lines; ++line)
     {
         const std::uint8_t *raw = data + kCartesianHead + static_cast<std::size_t>(line) * kCartesianPoint;
         const float x = readFloat(raw);
@@ -117,8 +132,8 @@ bool parseCartesian(const std::uint8_t *data, ParsedPacket &packet)
         point.y = -y;
         point.z = z;
         point.r = std::sqrt(x * x + y * y + z * z);
-        point.theta = static_cast<float>((line - 47) * (20.0 / kLines) - 2.5);
-        point.slot_ang = static_cast<float>(packet.index * kDegPerSlot);
+        point.theta = pitchDegrees(line, lines);
+        point.slot_ang = static_cast<float>(packet.index * degPerSlot);
         point.intensity = albedo;
         point.reflect = static_cast<float>(albedo);
         point.peak = 0;
@@ -130,7 +145,7 @@ bool parseCartesian(const std::uint8_t *data, ParsedPacket &packet)
         point.is_tail_pt = false;
         point.list_pulse.clear();
     }
-    packet.pointCount = kLines;
+    packet.pointCount = lines;
     packet.mode = 2;
     // 一帧就是一个面，与 slot 无关；真实 xyz 不做二次旋转，面号按帧 ID 取模。
     packet.face = static_cast<int>(packet.frame % 4);
@@ -140,7 +155,8 @@ bool parseCartesian(const std::uint8_t *data, ParsedPacket &packet)
 /// 标定表完全缺失时的最小兜底：只保证点云可见，不代表设备端任何分支。
 /// 设备端缺标定表会直接启动失败，这里仅避免 viewer 无图可看。
 void applyFallbackNoTable(int line, std::uint32_t ft, std::uint16_t slot, std::uint16_t peak,
-                          int face, algo_lidar::PointData &point)
+                          int face, int lines, int slots, int centerLine,
+                          algo_lidar::PointData &point)
 {
     point.pixel_idx = static_cast<std::uint16_t>(line);
     point.slot_idx = slot;
@@ -151,8 +167,8 @@ void applyFallbackNoTable(int line, std::uint32_t ft, std::uint16_t slot, std::u
     point.list_pulse.clear();
 
     const float r = (ft > 16) ? kLightSpeed * static_cast<float>(ft >> 1) : 0.0f;
-    const float thetaDeg = static_cast<float>((line - 47) * (20.0 / kLines) - 2.5);
-    const float omegaDeg = -60.0f + 120.0f * slot / kSlots;
+    const float thetaDeg = pitchDegrees(line, lines, centerLine);
+    const float omegaDeg = -60.0f + 120.0f * slot / slots;
     const float theta = thetaDeg * kDegToRad;
     const float omega = omegaDeg * kDegToRad;
 
@@ -176,12 +192,15 @@ void applyFallbackNoTable(int line, std::uint32_t ft, std::uint16_t slot, std::u
 
 bool parseOrigin(const std::uint8_t *data, ParsedPacket &packet,
                  const Cs96BetaCalibration *calibration,
-                 const Cs96BetaCalibration::DecodeOptions &options, int lockedFace)
+                 const Cs96BetaCalibration::DecodeOptions &options, int lockedFace,
+                 int lines, int slots, int pitchCenter, bool faceFromFrameId)
 {
     packet.frame = readLe16(data + 1);
     packet.index = readLe16(data + 3);
     const std::uint16_t dataLength = readLe16(data + 7);
-    if (data[0] != 0xAA || dataLength != 1552 || packet.index >= kSlots)
+    // slot 数据长度 = 16B slot 头 + lines×16B；96 线为 1552，120 线为 1936。
+    const int expectedLength = 16 + lines * 16;
+    if (data[0] != 0xAA || dataLength != expectedLength || packet.index >= slots)
     {
         return false;
     }
@@ -191,9 +210,15 @@ bool parseOrigin(const std::uint8_t *data, ParsedPacket &packet,
     const std::uint32_t mirrorAngle = (word0 >> 12) & 0xFFFFFu;
 
     packet.face = lockedFace;
+    // Gamma（SL100）板端是 fpga_frame_id % 4，不做 PA 纠偏；
+    // 这里沿用同一策略，避免拿 Beta 的 PA 区间表把面号判错。
+    if (packet.face < 0 && faceFromFrameId)
+    {
+        packet.face = static_cast<int>(packet.frame % 4);
+    }
     // slot0 为同步包，实测 PA 恒为 0；只用帧起始窗口内首个有效 PA 判面。
     // 中途接入（前 10% slot 全丢）不猜测该帧，等待下一帧；后续绝不逐 slot 重新判面。
-    if (packet.face < 0 && packet.index > 0 && packet.index <= kSlots / 10)
+    if (packet.face < 0 && packet.index > 0 && packet.index <= slots / 10)
     {
         // 判面只依赖整圈编码器表（PA 实测的结构参数），不受四项标定开关影响。
         if (calibration != nullptr && calibration->loaded())
@@ -208,10 +233,10 @@ bool parseOrigin(const std::uint8_t *data, ParsedPacket &packet,
         }
     }
     const std::uint8_t *pixels = data + kOriginHead + kOriginSlotHead;
-    for (int i = 0; i < kLines; ++i)
+    for (int i = 0; i < lines; ++i)
     {
-        // 数据区第 1 个像素是 pixel[95]，倒序存放。
-        const int line = kLines - 1 - i;
+        // 数据区第 1 个像素是 pixel[lines-1]，倒序存放。
+        const int line = lines - 1 - i;
         const std::uint8_t *raw = pixels + static_cast<std::size_t>(i) * kOriginPixel;
 
         const std::uint32_t ft0 = readLe24(raw);
@@ -249,19 +274,20 @@ bool parseOrigin(const std::uint8_t *data, ParsedPacket &packet,
         }
 
         // 没有标定表：设备端会直接启动失败，这里仅做最小兜底保证有图可看。
-        applyFallbackNoTable(line, ft, packet.index, peak, packet.face, point);
+        applyFallbackNoTable(line, ft, packet.index, peak, packet.face, lines, slots,
+                             pitchCenter, point);
     }
-    packet.pointCount = kLines;
+    packet.pointCount = lines;
     packet.mode = 1;
     return true;
 }
 
-bool parseHistogram(const std::uint8_t *data, ParsedPacket &packet)
+bool parseHistogram(const std::uint8_t *data, ParsedPacket &packet, int histogramPackets)
 {
     packet.frame = readLe16(data + 1);
     packet.index = readLe16(data + 5);
     const std::uint16_t dataLength = readLe16(data + 7);
-    if (dataLength != 4096 || packet.index >= kHistogramPackets)
+    if (dataLength != 4096 || packet.index >= histogramPackets)
     {
         return false;
     }
@@ -278,7 +304,8 @@ bool parseHistogram(const std::uint8_t *data, ParsedPacket &packet)
 
 bool parseAny(const std::uint8_t *data, std::size_t size, ParsedPacket &packet,
               const Cs96BetaCalibration *calibration,
-              const Cs96BetaCalibration::DecodeOptions &options, int lockedFace)
+              const Cs96BetaCalibration::DecodeOptions &options, int lockedFace,
+              int lines, int slots, int pitchCenter, bool faceFromFrameId)
 {
     if (data == nullptr)
     {
@@ -286,17 +313,19 @@ bool parseAny(const std::uint8_t *data, std::size_t size, ParsedPacket &packet,
     }
     // 不整体重建 ParsedPacket：points 含 vector 成员，逐包重建会拖垮接收线程。
     packet.mode = -1;
-    if (size == BetaUdpStream::kCartesianPacketSize)
+    // 包长随线数变化：96 线真实点云 1266B / 原始 1561B，120 线分别为 1578B / 1945B。
+    if (size == BetaUdpStream::cartesianPacketSize(lines))
     {
-        return parseCartesian(data, packet);
+        return parseCartesian(data, packet, lines, slots);
     }
-    if (size == BetaUdpStream::kOriginPacketSize)
+    if (size == BetaUdpStream::originPacketSize(lines))
     {
-        return parseOrigin(data, packet, calibration, options, lockedFace);
+        return parseOrigin(data, packet, calibration, options, lockedFace, lines, slots,
+                           pitchCenter, faceFromFrameId);
     }
     if (size == BetaUdpStream::kHistogramPacketSize)
     {
-        return parseHistogram(data, packet);
+        return parseHistogram(data, packet, histogramPacketCount(lines));
     }
     return false;
 }
@@ -317,7 +346,11 @@ struct BetaUdpStream::Impl
     bool active = false;
     Stats stats;
 
-    // 帧缓存（模式 2/1：96×800；模式 0：96×512）。
+    /// 运行期规格（96×800 或 120×800）；非法值退回默认 96×800。
+    int lineCount() const { return config.lines > 0 ? config.lines : kLines; }
+    int slotCount() const { return config.slots > 0 ? config.slots : kSlots; }
+
+    // 帧缓存（模式 2/1：lines×slots；模式 0：lines×512）。
     int currentMode = -1;
     bool hasFrame = false;
     std::uint16_t currentFrame = 0;
@@ -341,6 +374,8 @@ struct BetaUdpStream::Impl
     int receivedCount = 0;
     int histCount = 0;
     std::atomic<std::uint64_t> packetCounter{0};
+    /// 上一次发布 4 面合成结果的时间，用于限流（见 publishOrigin）。
+    std::chrono::steady_clock::time_point lastOriginPublish{};
 
     void resetFrame(int mode, std::uint16_t frame)
     {
@@ -354,17 +389,17 @@ struct BetaUdpStream::Impl
         currentFace = -1;
         if (mode == 0)
         {
-            histBins.assign(static_cast<std::size_t>(kLines) * kBins, 0);
-            histSeqReceived.assign(kHistogramPackets, 0);
+            histBins.assign(static_cast<std::size_t>(lineCount()) * kBins, 0);
+            histSeqReceived.assign(static_cast<std::size_t>(histogramPacketCount(lineCount())), 0);
         }
         else
         {
-            slotReceived.assign(kSlots, 0);
+            slotReceived.assign(static_cast<std::size_t>(slotCount()), 0);
             receivedCount = 0;
-            // 仅在首次分配；后续帧复用同一块内存，避免每帧重建 76800 个点。
-            if (flatFrame.size() != static_cast<std::size_t>(kLines) * kSlots)
+            // 仅在首次分配；后续帧复用同一块内存，避免每帧重建整帧点云。
+            if (flatFrame.size() != static_cast<std::size_t>(lineCount()) * slotCount())
             {
-                flatFrame.resize(static_cast<std::size_t>(kLines) * kSlots);
+                flatFrame.resize(static_cast<std::size_t>(lineCount()) * slotCount());
             }
         }
         histCount = 0;
@@ -372,22 +407,38 @@ struct BetaUdpStream::Impl
 
     void publishOrigin(std::uint64_t frameNumber)
     {
+        // 4 面合成是 96×3200 = 307200 点，全量重建一次要几十毫秒；
+        // 每帧（约 50ms）都做会把 UI 线程压满，表现为帧率漂移和卡帧。
+        // 限制到 10Hz 上限，既够用又与真实点云的 9~10 帧一致。
+        const auto now = std::chrono::steady_clock::now();
+        // 设备原始点云 10 帧/秒，每帧 800 包 = 100ms 一批完整数据。
+        // 限流设 100ms 正好跟得上；再小没有意义，再大就会把帧率锁死在 5fps。
+        if (lastOriginPublish.time_since_epoch().count() != 0 &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - lastOriginPublish).count() <
+                100)
+        {
+            return;
+        }
+        lastOriginPublish = now;
+
         const auto mask = faceMask.load();
         for (int face = 0; face < 4; ++face)
             if ((mask & (1u << face)) && !originFaces[face].ready) return;
 
-        algo_lidar::PointMatrix matrix(kLines, std::vector<algo_lidar::PointData>(4 * kSlots));
+        const int lines = lineCount();
+        const int slots = slotCount();
+        algo_lidar::PointMatrix matrix(lines, std::vector<algo_lidar::PointData>(4 * slots));
         const float nan = std::numeric_limits<float>::quiet_NaN();
-        for (int line = 0; line < kLines; ++line)
+        for (int line = 0; line < lines; ++line)
         {
             for (int face = 0; face < 4; ++face)
             {
                 const auto &cached = originFaces[face];
-                for (int slot = 0; slot < kSlots; ++slot)
+                for (int slot = 0; slot < slots; ++slot)
                 {
-                    auto &target = matrix[line][face * kSlots + slot];
+                    auto &target = matrix[line][face * slots + slot];
                     if ((mask & (1u << face)) && cached.ready && cached.received[slot])
-                        target = cached.points[static_cast<std::size_t>(slot) * kLines + line];
+                        target = cached.points[static_cast<std::size_t>(slot) * lines + line];
                     else
                     {
                         target.x = target.y = target.z = nan;
@@ -420,16 +471,18 @@ struct BetaUdpStream::Impl
         if (mode == 0)
         {
             const int received = histCount;
-            if (received < kHistogramPackets)
+            const int expectedPackets = histogramPacketCount(lineCount());
+            if (received < expectedPackets)
             {
                 std::lock_guard<std::mutex> lock(mutex);
-                stats.droppedSlots += static_cast<std::uint64_t>(kHistogramPackets - received);
+                stats.droppedSlots += static_cast<std::uint64_t>(expectedPackets - received);
                 return;
             }
 
             // 直方图：bin × 像素 × 强度，构造可观察地形。
-            algo_lidar::PointMatrix matrix(kLines, std::vector<algo_lidar::PointData>(kBins));
-            for (int line = 0; line < kLines; ++line)
+            const int lines = lineCount();
+            algo_lidar::PointMatrix matrix(lines, std::vector<algo_lidar::PointData>(kBins));
+            for (int line = 0; line < lines; ++line)
             {
                 for (int bin = 0; bin < kBins; ++bin)
                 {
@@ -462,11 +515,12 @@ struct BetaUdpStream::Impl
             return;
         }
 
+        const int slots = slotCount();
         const int received = receivedCount;
-        if (received < kSlots * 9 / 10)
+        if (received < slots * 9 / 10)
         {
             std::lock_guard<std::mutex> lock(mutex);
-            stats.droppedSlots += static_cast<std::uint64_t>(kSlots - received);
+            stats.droppedSlots += static_cast<std::uint64_t>(slots - received);
             return;
         }
         const int face = currentFace;
@@ -482,16 +536,17 @@ struct BetaUdpStream::Impl
             if ((mask & (1u << face)) || mask != publishedMask) publishOrigin(frameNumber);
             return;
         }
-        // 真实点云仍然直接输出设备 xyz、96x800；只修正整帧选面的语义。
+        // 真实点云仍然直接输出设备 xyz，行列数跟随设备规格；只修正整帧选面的语义。
         if ((mask & (1u << face)) == 0) return;
-        algo_lidar::PointMatrix matrix(kLines, std::vector<algo_lidar::PointData>(kSlots));
-        for (int slot = 0; slot < kSlots; ++slot)
+        const int lines = lineCount();
+        algo_lidar::PointMatrix matrix(lines, std::vector<algo_lidar::PointData>(slots));
+        for (int slot = 0; slot < slots; ++slot)
         {
-            for (int line = 0; line < kLines; ++line)
+            for (int line = 0; line < lines; ++line)
             {
                 auto &target = matrix[line][slot];
                 if (slotReceived[slot])
-                    target = flatFrame[static_cast<std::size_t>(slot) * kLines + line];
+                    target = flatFrame[static_cast<std::size_t>(slot) * lines + line];
                 else
                 {
                     target.x = target.y = target.z = std::numeric_limits<float>::quiet_NaN();
@@ -599,9 +654,19 @@ struct BetaUdpStream::Impl
                 const auto now = std::chrono::steady_clock::now();
                 if (now - lastStat >= std::chrono::seconds(5))
                 {
-                    std::cerr << "[beta] recv=" << recvCount << " parsed=" << parseCount
-                              << " timeouts=" << timeoutCount
-                              << " frames=" << [this] { std::lock_guard<std::mutex> lock(mutex); return stats.frames; }() << std::endl;
+                    const std::uint64_t invalid = [this]
+                    {
+                        std::lock_guard<std::mutex> lock(mutex);
+                        return stats.invalidPackets;
+                    }();
+                    const std::uint64_t frames = [this]
+                    {
+                        std::lock_guard<std::mutex> lock(mutex);
+                        return stats.frames;
+                    }();
+                    std::cout << "[beta] recv=" << recvCount << " parsed=" << parseCount
+                              << " invalid(total)=" << invalid << " timeouts=" << timeoutCount
+                              << " frames=" << frames << std::endl;
                     recvCount = 0;
                     parseCount = 0;
                     timeoutCount = 0;
@@ -632,16 +697,18 @@ struct BetaUdpStream::Impl
             {
                 if (recvCount % 1000 == 0)
                 {
-                    std::cerr << "[beta] drain recv=" << recvCount << std::endl;
+                    std::cout << "[beta] drain recv=" << recvCount << std::endl;
                 }
                 continue;
             }
 
             const int lockedFace = hasFrame && currentMode == 1 &&
-                static_cast<std::size_t>(received) == kOriginPacketSize &&
+                static_cast<std::size_t>(received) == BetaUdpStream::originPacketSize(lineCount()) &&
                 readLe16(buffer.data() + 1) == currentFrame ? currentFace : -1;
             if (!parseAny(buffer.data(), static_cast<std::size_t>(received), packet,
-                          packetCalibration.get(), packetOptions, lockedFace))
+                          packetCalibration.get(), packetOptions, lockedFace,
+                          lineCount(), slotCount(), config.pitchCenter,
+                          config.faceFromFrameId))
             {
                 std::lock_guard<std::mutex> lock(mutex);
                 ++stats.invalidPackets;
@@ -670,7 +737,8 @@ struct BetaUdpStream::Impl
             if (packet.face >= 0) currentFace = packet.face;
             if (packet.mode == 0)
             {
-                if (packet.index >= kHistogramPackets || histSeqReceived[packet.index])
+                if (packet.index >= histogramPacketCount(lineCount()) ||
+                    histSeqReceived[packet.index])
                 {
                     continue;
                 }
@@ -678,7 +746,7 @@ struct BetaUdpStream::Impl
                 for (int pixel = 0; pixel < 4; ++pixel)
                 {
                     const int line = static_cast<int>(packet.index) * 4 + pixel;
-                    if (line >= kLines)
+                    if (line >= lineCount())
                     {
                         break;
                     }
@@ -686,27 +754,28 @@ struct BetaUdpStream::Impl
                                 &packet.bins[pixel * kBins], kBins * sizeof(std::uint16_t));
                 }
                 ++histCount;
-                if (histCount >= kHistogramPackets)
+                if (histCount >= histogramPacketCount(lineCount()))
                 {
                     flushFrame();
                 }
                 continue;
             }
 
-            if (packet.index >= kSlots || slotReceived[packet.index])
+            if (packet.index >= slotCount() ||
+                packet.index >= slotReceived.size() || slotReceived[packet.index])
             {
                 continue;
             }
             slotReceived[packet.index] = 1;
             ++receivedCount;
-            // 同一 slot 的 96 个点连续写入，避免跨行随机访问。
+            // 同一 slot 的整列点连续写入，避免跨行随机访问。
             algo_lidar::PointData *destination =
-                flatFrame.data() + static_cast<std::size_t>(packet.index) * kLines;
+                flatFrame.data() + static_cast<std::size_t>(packet.index) * lineCount();
             for (int line = 0; line < packet.pointCount; ++line)
             {
                 destination[line] = packet.points[line];
             }
-            if (receivedCount >= kSlots)
+            if (receivedCount >= slotCount())
             {
                 flushFrame();
             }
@@ -830,6 +899,8 @@ void BetaUdpStream::setFaceMask(std::uint8_t mask)
 {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->faceMask = (mask & 0x0F) == 0 ? 0x0F : static_cast<std::uint8_t>(mask & 0x0F);
+    // 用户切面后要立刻看到新组合，跳过下一次发布限流。
+    impl_->lastOriginPublish = {};
 }
 
 std::uint8_t BetaUdpStream::faceMask() const
@@ -853,12 +924,20 @@ bool BetaUdpStream::parsePacket(const std::uint8_t *data, std::size_t size,
                                 std::uint16_t &frameIndex, std::uint16_t &slot,
                                 algo_lidar::PointData *points, int &pointCount)
 {
-    if (data == nullptr || size != kCartesianPacketSize)
+    return parsePacket(data, size, kLines, kSlots, frameIndex, slot, points, pointCount);
+}
+
+bool BetaUdpStream::parsePacket(const std::uint8_t *data, std::size_t size, int lines, int slots,
+                                std::uint16_t &frameIndex, std::uint16_t &slot,
+                                algo_lidar::PointData *points, int &pointCount)
+{
+    if (data == nullptr || lines <= 0 || lines > kMaxLines || slots <= 0 ||
+        size != cartesianPacketSize(lines))
     {
         return false;
     }
     ParsedPacket packet;
-    if (!parseCartesian(data, packet))
+    if (!parseCartesian(data, packet, lines, slots))
     {
         return false;
     }

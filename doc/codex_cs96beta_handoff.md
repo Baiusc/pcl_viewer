@@ -56,9 +56,17 @@ CV_BETA_IP=10.42.0.218 CV_SCREENSHOT_WAIT_MS=10000 \
 
 | 设备 | IP | 归属 | 说明 |
 |---|---|---|---|
-| CS96 Beta 转镜 | `10.42.0.218` | **用户自己的，可操作** | SSH `root/111` |
-| CS96 Beta 转镜 | `10.42.0.221` | **同事的，严禁操作** | 不要 SSH、不要改配置、不要重启 |
+| CS96 Gamma / SL100（**当前主用**） | `10.42.0.238` | **用户自己的，可操作** | SN `CS96000C0126020001`，**120×800**，SSH `root/111` |
+| CS96 Gamma（上一台，已离线） | `10.42.0.222` | 用户旧设备 | 已退场，不要再按 .222 调试 |
+| CS96 Beta 转镜（旧机，已离线） | `10.42.0.218` | 用户旧设备 | 已断电退场，**不要再按 .218 调试** |
+| CS96 Beta 转镜 | `10.42.0.221` | **用户自用，可操作** | 96×800，SN `CS96000B0126020001`，可切模式/改配置 |
 | FL6532 固态 | `192.168.137.200` | 用户设备 | 走 UDP 6001→本机 6002，已正常工作，不要动 |
+
+> 换雷达后 `~/.config/cloud_viewer/beta_known_hosts` 里的主机密钥会冲突。
+> 现在 `runBetaSsh()` 会自动 `ssh-keygen -R` 该 IP 并以 `accept-new` 重试一次，
+> 输出里会带 `[HOST-KEY] 设备主机密钥已变更`，不需要手工删 known_hosts。
+> 你自己在终端 `ssh root@10.42.0.222` 时仍会看到旧的严格校验报错，那是 `~/.ssh/known_hosts`（另一份文件），
+> 用 `ssh-keygen -f ~/.ssh/known_hosts -R 10.42.0.222` 清理即可。
 
 CS96 设备侧关键信息：
 
@@ -84,6 +92,49 @@ work_mode        = "2"             # 0 直方图 / 1 原始点云 / 2 真实点�
 ---
 
 ## 3. 三种 ARM 输出模式（已实测确认）
+
+### 3.00 型号与标定表
+
+| 型号 | 线数 | 芯片 | `RadarModel` | 标定表 |
+|---|---|---|---|---|
+| CS96 Beta | 96×800 | IMX459 | `beta_rotating` | `data/param/cs96beta_calibration.csv` |
+| CS120 Gamma | 120×800 | SL100 | `gamma_rotating` | `data/param/cs120gamma_calibration.csv` |
+
+两者共用解析链路与 UI，型号按**广播/探测到的线数**判定（≥120 → Gamma）。
+差异（直方图 30 包、`u=47`、`frame_id%4` 判面）见
+[`cs96_gamma_sl100_protocol.md`](./cs96_gamma_sl100_protocol.md)。
+**标定表不可混用**，连接时会按线数校验并拒绝不匹配的表。
+
+### 3.0 硬约束：`work_mode` 必须与设备 `mode` 文件匹配
+
+设备端 `/mnt/mtdblock2/mode` 决定开机 `insmod` 哪个驱动、用哪套 `liblidar.so`：
+
+| `mode` 文件 | 驱动 | 允许的 `work_mode` |
+|---|---|---|
+| `histogram` | `histogram/yousee_lidar_histogram.ko` | **0**（原始直方图） |
+| `point_cloud`（当前设备） | `point_cloud/yousee_lidar.ko` | **1 / 2** |
+| `point_cloud_gray` | `point_cloud_gray/*.ko`（配套 `you_see_arm_gray`） | **4**（灰度） |
+
+只改 `/etc/ys_conf.ini` 的 `work_mode` 而 `mode` 没换，`you_see` 会启动即退出：
+
+```
+ERROR ys_conf.c:407: 工作模式 0 与当前固件数据模式不匹配，请使用同一构建包中的配置
+FATAL main.c:78: load config fail
+```
+
+`/etc/ys_conf.ini` 每次整机启动都会被 `app_startup.sh` 从 `you_see_arm/config/` 覆盖，
+所以出厂默认值（`center_ip=10.42.0.145:50037`）会不断回来；软件每次连接都会自动纠正。
+
+想永久保存上位机地址，改这里（jffs2，掉电保留）：
+
+```sh
+sed -i 's/^center_ip.*/center_ip = "10.42.0.229" ;上位机IP/' \
+  /mnt/mtdblock2/you_see_arm/config/ys_conf.ini
+```
+
+芯片层背景（RAW/RANGING 与 work_mode 的对应、多回波、降采样、假峰）见
+[`sl100_chip_notes.md`](./sl100_chip_notes.md)。
+
 
 ### 3.1 真实点云 work_mode=2（1266 B/包）
 
@@ -181,11 +232,31 @@ r = velocitylight * (ft >> 1) * g_distance_factor[pixel] + g_delta_distance_inde
 - 设备日志实测每面起始角（`start=`）：
 
 ```
-frame_id=0  start=357.00
-frame_id=1  start=87.43
-frame_id=2  start=177.54
-frame_id=3  start=267.03
+旧版标定：face0=357.00  face1=87.43   face2=177.54  face3=267.03
+新版标定：face0=33.13   face1=123.00  face2=213.18  face3=303.19
 ```
+
+  两版相差约 36°（不是 90°），说明是重新标定的结果，不是换个模板。
+  换 ini 后必须重新打包 CSV，否则 PC 端仍用旧角。
+
+### 4.1 `ys_calibration.ini` 新旧版差异（2026-11）
+
+`data/param/cs96beta_calib_data/` 下同时保留了 `ys_calibration.ini`（新）与 `ys_calibration旧版.ini`，
+打包脚本只读前者。
+
+| 项 | 旧版 | 新版 | 影响 |
+|---|---|---|---|
+| 值的写法 | `lines_v = 96` | `lines_v = "96"`（全部带双引号） | `stripComment()` 已去引号，两条加载路径都兼容 |
+| `theta_tilt` | -2.5 | **0** | 俯仰角整体上移 2.5°，必须从标定读，不能写死 |
+| `side*_angular_offset` | 0/74/93/5 | 23/0/31/32 | 面起始角重算 |
+| `angle_face_*` | 238/58/118/178 | 22/82/142/202 | 同上 |
+| 逐线数组 | 96 项 | 96 项（数值全新） | 水平角/距离偏移全部重标 |
+
+适配要点：
+
+- `dist_max` 现在参与有效点判定（`r < dist_max`），不再硬编码 200；
+- `sat_peak_min` 同样从标定读（低于该峰值判无效），与设备端规则一致；
+- 两条路径（聚合 CSV / ini 目录）都已验证可加载新版，起始角一致。
 
 - 设备日志实测每面覆盖：`hc` 约 `0 ~ 59`，`×2 - 60` 后约 `-60 ~ 58`，
   即每面约 118° 视场，面间机械间隔 90°，4 面重叠拼成 360°。
@@ -284,7 +355,7 @@ reflectivity_map.csv      # pixel_target,distance,reflectance_0..4
 - 真实点云模式（1266B）行为不变、帧率正常。
 - 6532 链路不变。
 - `Search Device`、`Mode` 切换、标定加载保持可用。
-- 不要操作 `10.42.0.221`。
+- `10.42.0.221` 是用户自用设备（早前"同事的设备"是误判），可正常操作。
 
 ---
 
@@ -301,6 +372,75 @@ reflectivity_map.csv      # pixel_target,distance,reflectance_0..4
    会拖慢接收线程；应逐字段赋值并 `list_pulse.clear()`。
 5. **组帧完整性**：当前要求 ≥90% slot 才输出；4 面合成时应分别判断每面。
 6. **面内像素倒序**：原始点云数据区第 1 个像素是 `pixel[95]`，映射到 `line` 时要反转。
+7. **在线点云拖动卡顿**：曾是三个来源叠加，已全部处理——
+   - `SelectionStyle::OnMouseMove` 每次鼠标事件都调 `pumpLiveFrame()`，等于拖动过程中反复触发全量重建（已删除）；
+   - 33ms 定时器在拖动期间仍在重建点云（`interacting_` 时暂停，`EndInteractionEvent` 补一帧）；
+   - `PclVtkRenderer::upsert()` 每帧新建 vtkPoints/PolyData/Mapper 并逐点 `SetPoint`（改为复用整条管线，直接写底层 `vtkFloatArray` / `vtkUnsignedCharArray`，拓扑数组预生成后按点数截断）。
+   验证方式：HUD 首行是渲染 FPS，拖动时应接近刷新率，松手后回落到点云帧率。
+8. **原始点云帧率（4 面合成 96×3200 = 307200 点）**：曾低到 0.2~5 fps，四个原因叠加：
+   - **Debug 构建**（`build-lite`）下逐点 `apply()` 慢数倍，接收线程跟不上 → UDP 丢包 97%；
+   - `rebuildDerivedFields` 每帧为 30 万点填 **13 个标量场**（400 万次写入 + 15MB 分配）
+     → 改为按需只生成当前颜色源（`makeFrame(..., colorSource_)`）；
+   - `applyIncomingFrame` 每帧 `renderer_.remove` + `scene_.add`，**id 变化导致渲染层缓存失效**、
+     VTK 管线整条重建 → 改为复用同一个 `currentCloudId_`；
+   - `publishOrigin` 限流 200ms，**正好把帧率锁死在 5 fps** → 改 100ms
+     （设备原始点云就是 10 帧/秒、每帧 800 包 = 100ms）。
+
+   实测（Release）：单帧 `prep 5ms + color 11ms + render 36ms ≈ 52ms`，
+   稳定 **9.7~10.3 fps**、`gap_max 110~140ms`，与真实点云一致。
+   Debug 单帧 72ms，也能到 10fps，但余量小。
+
+   判定方法见 `AGENTS.md` 第 4 节：用 `CV_LIVE_FPS=1` 连续跑，看窗口帧率与 `gap_max`，
+   不要只看首帧截图。
+
+## 离线 TXT（原始点云导出）解析
+
+`cs96_raw_save` 导出的单帧文件长这样：
+
+```
+cols: 800  rows: 96              ← cols = slot 数，rows = 像素数
+start of col [N]                 ← 注意是 col，不是 slot
+rotate mirror angle: <1/61440 圈> ← 绝对值，不是增量
+pixel_number: <行号>  tof w pk  tof w pk  tof w pk   ← tof/width 单位 ps
+```
+
+**同时满足这三条才能解析，缺任何一条都表现为「加载成功但 0 个点」**：
+
+| 要点 | 说明 |
+|---|---|
+| `RotatingTxtLoader` 必须排在 `SolidTxtLoader` 之前 | `Loaders.cpp` 的 `push_back` 顺序就是 `selectLoader` 的优先级；固态解析器只认 `row:` 前缀，抢到就返回空矩阵 |
+| 数据行要兼容 `pixel_number:` 前缀 | 裸 9 数字是另一种格式，两者都从 `tokens[off]` 起跳 |
+| `rotate mirror angle` 是绝对值 | `raw / 61440 * 360` 度；走旧的 1/65536 **增量累加**分支会一路跑飞 |
+
+矩阵尺寸从头部 `cols/rows` 读，不要写死 96×800（120 线会整片错位）。
+
+**水平角换算（含 ×2，最容易错）**：
+
+```
+slot_ang = rotate_mirror_angle / 61440 * 360 * 2   然后 mod 360
+```
+
+- 单位是 **1/61440 圈**，不是 1/65536 圈；
+- 转镜的水平角是编码器机械角的 **2 倍**（镜面反射把转角放大一倍）。
+  漏掉 ×2，120° 视场会缩成 60°，现象就是「FOV 明显变小」；
+- 实测 800 列跨 9961 个计数：`9961 × 2 × 360/61440 ≈ 117°`，与 120° 规格吻合；
+- 第 0 列常出现 `raw = 0` 的脏值（导出时 scale 越界取了角度表首项），
+  用第 1、2 列的增量补回去，否则点云会多出一条 0° 方向的假竖线。
+
+**帧 id 必须全进程唯一**：
+
+各 loader 原来都写 `descriptor.id = 1`，而 `ViewerApp` 的帧缓存以 id 为 key，
+于是所有文件都命中第一帧 —— 表现为「日志显示切换了、画面纹丝不动」。
+现在统一由 `nextFrameId()` 分配。
+
+**换文件后要 `resetCamera()`**：不同文件的点云位置可能完全不重叠，
+不重算包围盒会让新点云整体落在视锥外，看起来像「翻页后一片空白」。
+
+**自检**：每个文件应得 `valid = 76800/76800`（96×800）。
+
+**浏览**：`Prev/Next` 越过文件边界会自动切到相邻文件（这些 txt 每个只有 1 帧，
+只在文件内取模会表现为"点了完全没反应"，日志一直是 `帧 0 -> 0 / 1`）。
+跨文件时日志会写成 `_1.txt -> _2.txt`，`Tab` 仍然直接跳下一个文件。
 
 ---
 

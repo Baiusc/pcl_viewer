@@ -26,42 +26,47 @@ RenderableCloud::Ptr CloudRenderBridge::prepare(const FrameHandle &frame,
     renderable->sourceTotal = rows * cols;
     renderable->scalars = frame->scalarFields;
 
-    // 先统计可显示点数，用于确定性抽样步长。
+    // 只有抽样时才需要先统计可显示点数。
+    // 原始点云 4 面合成是 96×3200 = 307200 点，多遍历一遍并不便宜，
+    // 不抽样时直接按上限预留、单遍填充。
+    const bool subsample = request.maxPoints > 0;
     std::size_t candidateCount = 0;
-    for (std::size_t r = 0; r < rows; ++r)
-    {
-        for (std::size_t c = 0; c < cols; ++c)
-        {
-            const algo_lidar::PointData &point = matrix[r][c];
-            if (request.skipInvalid && !point.is_valid)
-            {
-                continue;
-            }
-            if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
-            {
-                continue;
-            }
-            ++candidateCount;
-        }
-    }
-
     std::size_t step = 1;
-    if (request.maxPoints > 0 && candidateCount > request.maxPoints)
+    if (subsample)
     {
-        step = (candidateCount + request.maxPoints - 1) / request.maxPoints;
-        if (step == 0)
+        for (std::size_t r = 0; r < rows; ++r)
         {
-            step = 1;
+            for (std::size_t c = 0; c < cols; ++c)
+            {
+                const algo_lidar::PointData &point = matrix[r][c];
+                if (request.skipInvalid && !point.is_valid)
+                {
+                    continue;
+                }
+                if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+                {
+                    continue;
+                }
+                ++candidateCount;
+            }
+        }
+        if (candidateCount > request.maxPoints)
+        {
+            step = (candidateCount + request.maxPoints - 1) / request.maxPoints;
+            if (step == 0)
+            {
+                step = 1;
+            }
         }
     }
 
-    renderable->geometry->reserve(
-        (request.maxPoints > 0 && candidateCount > request.maxPoints)
-            ? request.maxPoints
-            : candidateCount);
-    renderable->displayToSource.reserve(renderable->geometry->points.capacity());
+    const std::size_t reserveCount =
+        subsample ? std::min(candidateCount, request.maxPoints) : rows * cols;
+    renderable->geometry->resize(reserveCount);
+    renderable->displayToSource.reserve(reserveCount);
 
     std::size_t seen = 0;
+    std::size_t written = 0;
     bool hasBounds = false;
     float minX = std::numeric_limits<float>::max();
     float minY = std::numeric_limits<float>::max();
@@ -90,7 +95,8 @@ RenderableCloud::Ptr CloudRenderBridge::prepare(const FrameHandle &frame,
                 continue;
             }
 
-            pcl::PointXYZRGB displayPoint;
+            // 直接按下标写，避免 push_back 的每次容量检查（30 万点时很可观）。
+            pcl::PointXYZRGB &displayPoint = renderable->geometry->points[written++];
             displayPoint.x = point.x;
             displayPoint.y = point.y;
             displayPoint.z = point.z;
@@ -98,7 +104,6 @@ RenderableCloud::Ptr CloudRenderBridge::prepare(const FrameHandle &frame,
             displayPoint.g = 200;
             displayPoint.b = 200;
 
-            renderable->geometry->push_back(displayPoint);
             renderable->displayToSource.push_back(
                 SourcePointRef{frame->id, static_cast<int>(r), static_cast<int>(c), point.select_idx});
 
@@ -121,6 +126,8 @@ RenderableCloud::Ptr CloudRenderBridge::prepare(const FrameHandle &frame,
         }
     }
 
+    // 收缩到实际写入的点数（预留时按上限分配过）。
+    renderable->geometry->resize(written);
     renderable->geometry->width = static_cast<std::uint32_t>(renderable->geometry->size());
     renderable->geometry->height = 1;
     renderable->geometry->is_dense = true;

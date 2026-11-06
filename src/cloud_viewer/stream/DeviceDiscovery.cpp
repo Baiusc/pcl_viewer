@@ -10,6 +10,7 @@
 #include <iterator>
 #include <map>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <thread>
 
@@ -48,11 +49,14 @@ std::string classifyModel(const std::string &serial)
 {
     if (serial.rfind("CS96", 0) == 0)
     {
-        // CS96000B...：硬件版本位 B/b 表示 Beta（位置随型号前缀略有变化，取前 12 字符内）。
-        const auto version = serial.find_first_of("Bb", 4);
+        // 硬件版本位（位置随型号前缀略有变化，取前 12 字符内）：
+        //   B/b = Beta（IMX459，96×800）；C/c = Gamma（SL100，120×800）。
+        // Gamma 未试产，SN 仍沿用 CS96 前缀，正式命名应为 cs120 Gamma。
+        const auto version = serial.find_first_of("BbCc", 4);
         if (version != std::string::npos && version < 12)
         {
-            return "CS96 Beta";
+            const char tag = serial[version];
+            return (tag == 'C' || tag == 'c') ? "CS120 Gamma" : "CS96 Beta";
         }
         return "CS96";
     }
@@ -371,6 +375,38 @@ bool DeviceDiscovery::parseBroadcast(const std::uint8_t *data, std::size_t size,
 bool DeviceDiscovery::tcpPortOpen(const std::string &ip, std::uint16_t port, int timeoutMs)
 {
     return tcpPortOpenImpl(ip, port, timeoutMs);
+}
+
+std::vector<DiscoveredDevice>
+DeviceDiscovery::probeFl6532(const std::vector<std::string> &candidates, std::string &note)
+{
+    std::vector<DiscoveredDevice> devices;
+    std::set<std::string> visited;
+    const std::size_t total = candidates.size();
+
+    for (const std::string &ip : candidates)
+    {
+        if (ip.empty() || !visited.insert(ip).second)
+        {
+            continue;
+        }
+        // 6508 是该型号的控制端口；CS96 Beta 不开放，可用于区分型号。
+        if (!tcpPortOpenImpl(ip, 6508, 500))
+        {
+            continue;
+        }
+        DiscoveredDevice device;
+        device.ip = ip;
+        device.model = "FL6532";
+        device.fromProbe = true;
+        device.lastSeenMs = nowMs();
+        devices.push_back(device);
+    }
+
+    std::ostringstream detail;
+    detail << "探测 " << total << " 个已知地址，命中 FL6532 " << devices.size() << " 台";
+    note = detail.str();
+    return devices;
 }
 
 std::vector<std::pair<std::string, std::string>>

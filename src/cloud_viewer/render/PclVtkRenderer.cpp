@@ -5,6 +5,8 @@
 #include <vtkActor.h>
 #include <vtkCamera.h>
 #include <vtkCellArray.h>
+#include <vtkFloatArray.h>
+#include <vtkIdTypeArray.h>
 #include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkPointData.h>
 #include <vtkPointPicker.h>
@@ -49,57 +51,113 @@ void PclVtkRenderer::upsert(SceneObjectId id, const RenderableCloud::Ptr &cloud,
     }
 
     const auto &points = cloud->geometry->points;
-    const std::size_t count = points.size();
+    const auto count = static_cast<vtkIdType>(points.size());
     if (count == 0)
     {
         remove(id);
         return;
     }
 
-    auto vtkPointsData = vtkSmartPointer<vtkPoints>::New();
-    vtkPointsData->SetDataTypeToFloat();
-    vtkPointsData->SetNumberOfPoints(static_cast<vtkIdType>(count));
-
-    auto cells = vtkSmartPointer<vtkCellArray>::New();
-    cells->Allocate(static_cast<vtkIdType>(count));
-
-    auto rgb = vtkSmartPointer<vtkUnsignedCharArray>::New();
-    rgb->SetName("Colors");
-    rgb->SetNumberOfComponents(3);
-    rgb->SetNumberOfTuples(static_cast<vtkIdType>(count));
-
-    for (std::size_t i = 0; i < count; ++i)
+    ActorSlot &slot = actors_[id];
+    if (!slot.actor)
     {
-        vtkPointsData->SetPoint(static_cast<vtkIdType>(i), points[i].x, points[i].y, points[i].z);
-        cells->InsertNextCell(1);
-        cells->InsertCellPoint(static_cast<vtkIdType>(i));
+        slot.coords = vtkSmartPointer<vtkFloatArray>::New();
+        slot.coords->SetName("Points");
+        slot.coords->SetNumberOfComponents(3);
 
-        const std::array<std::uint8_t, 3> color =
-            (i < colors.colors.size()) ? colors.colors[i]
-                                       : std::array<std::uint8_t, 3>{{200, 200, 200}};
-        rgb->SetTypedTuple(static_cast<vtkIdType>(i),
-                           reinterpret_cast<const unsigned char *>(color.data()));
+        slot.points = vtkSmartPointer<vtkPoints>::New();
+        slot.points->SetDataTypeToFloat();
+        slot.points->SetData(slot.coords);
+
+        slot.vertOffsets = vtkSmartPointer<vtkIdTypeArray>::New();
+        slot.vertConn = vtkSmartPointer<vtkIdTypeArray>::New();
+        slot.verts = vtkSmartPointer<vtkCellArray>::New();
+
+        slot.colors = vtkSmartPointer<vtkUnsignedCharArray>::New();
+        slot.colors->SetName("Colors");
+        slot.colors->SetNumberOfComponents(3);
+
+        slot.polyData = vtkSmartPointer<vtkPolyData>::New();
+        slot.polyData->SetPoints(slot.points);
+        slot.polyData->GetPointData()->SetScalars(slot.colors);
+
+        slot.mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+        slot.mapper->SetInputData(slot.polyData);
+        slot.mapper->ScalarVisibilityOn();
+        slot.mapper->SetColorModeToDirectScalars();
+
+        slot.actor = vtkSmartPointer<vtkActor>::New();
+        slot.actor->SetMapper(slot.mapper);
+        slot.actor->GetProperty()->SetPointSize(pointSize_);
+
+        renderer_->AddActor(slot.actor);
+        actorToObject_[slot.actor] = id;
     }
 
-    auto polyData = vtkSmartPointer<vtkPolyData>::New();
-    polyData->SetPoints(vtkPointsData);
-    polyData->SetVerts(cells);
-    polyData->GetPointData()->SetScalars(rgb);
+    // 容量不足才扩容（预留 25%），避免每帧重新分配。
+    if (count > slot.capacity)
+    {
+        const vtkIdType capacity = count + count / 4 + 1024;
+        slot.coords->SetNumberOfTuples(capacity);
+        slot.colors->SetNumberOfTuples(capacity);
 
-    auto mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
-    mapper->SetInputData(polyData);
-    mapper->ScalarVisibilityOn();
-    mapper->SetColorModeToDirectScalars();
+        // 每点一个 vertex cell：offsets = 0,1,2,...,n；connectivity = 0,1,...,n-1。
+        // 预生成到容量上限，之后按 count 截断即可复用，不需要每帧重建拓扑。
+        slot.vertOffsets->SetNumberOfTuples(capacity + 1);
+        vtkIdType *offsets = slot.vertOffsets->GetPointer(0);
+        for (vtkIdType i = 0; i <= capacity; ++i)
+        {
+            offsets[i] = i;
+        }
 
-    auto actor = vtkSmartPointer<vtkActor>::New();
-    actor->SetMapper(mapper);
-    actor->GetProperty()->SetPointSize(pointSize_);
+        slot.vertConn->SetNumberOfTuples(capacity);
+        vtkIdType *conn = slot.vertConn->GetPointer(0);
+        for (vtkIdType i = 0; i < capacity; ++i)
+        {
+            conn[i] = i;
+        }
 
-    remove(id);
+        slot.capacity = capacity;
+    }
 
-    renderer_->AddActor(actor);
-    actors_[id] = actor;
-    actorToObject_[actor] = id;
+    // 坐标：直接写底层数组，省掉 76800 次 SetPoint 虚调用。
+    slot.coords->SetNumberOfTuples(count);
+    float *dst = static_cast<float *>(slot.coords->GetVoidPointer(0));
+    for (vtkIdType i = 0; i < count; ++i)
+    {
+        const auto &p = points[static_cast<std::size_t>(i)];
+        const vtkIdType base = 3 * i;
+        dst[base + 0] = p.x;
+        dst[base + 1] = p.y;
+        dst[base + 2] = p.z;
+    }
+
+    // 颜色：同样直接写标量数组。
+    slot.colors->SetNumberOfTuples(count);
+    auto *rgb = static_cast<unsigned char *>(slot.colors->GetVoidPointer(0));
+    const std::size_t colorCount = colors.colors.size();
+    for (vtkIdType i = 0; i < count; ++i)
+    {
+        const std::size_t index = static_cast<std::size_t>(i);
+        const std::array<std::uint8_t, 3> color =
+            (index < colorCount) ? colors.colors[index]
+                                 : std::array<std::uint8_t, 3>{{200, 200, 200}};
+        const vtkIdType base = 3 * i;
+        rgb[base + 0] = color[0];
+        rgb[base + 1] = color[1];
+        rgb[base + 2] = color[2];
+    }
+
+    // 拓扑：数组内容已预生成，截断到 count 即可。
+    slot.vertOffsets->SetNumberOfTuples(count + 1);
+    slot.vertConn->SetNumberOfTuples(count);
+    slot.verts->SetData(slot.vertOffsets, slot.vertConn);
+    slot.polyData->SetVerts(slot.verts);
+
+    slot.coords->Modified();
+    slot.colors->Modified();
+    slot.points->Modified();
+    slot.polyData->Modified();
 }
 
 void PclVtkRenderer::remove(SceneObjectId id)
@@ -109,10 +167,10 @@ void PclVtkRenderer::remove(SceneObjectId id)
     {
         return;
     }
-    if (renderer_ && it->second)
+    if (renderer_ && it->second.actor)
     {
-        renderer_->RemoveActor(it->second);
-        actorToObject_.erase(it->second);
+        renderer_->RemoveActor(it->second.actor);
+        actorToObject_.erase(it->second.actor);
     }
     actors_.erase(it);
 }
@@ -121,9 +179,9 @@ void PclVtkRenderer::removeAll()
 {
     for (auto &entry : actors_)
     {
-        if (renderer_ && entry.second)
+        if (renderer_ && entry.second.actor)
         {
-            renderer_->RemoveActor(entry.second);
+            renderer_->RemoveActor(entry.second.actor);
         }
     }
     actors_.clear();
@@ -134,9 +192,10 @@ void PclVtkRenderer::removeAll()
 void PclVtkRenderer::setVisible(SceneObjectId id, bool visible)
 {
     const auto it = actors_.find(id);
-    if (it != actors_.end() && it->second)
+    if (it != actors_.end() && it->second.actor)
     {
-        it->second->SetVisibility(visible ? 1 : 0);
+        it->second.visible = visible;
+        it->second.actor->SetVisibility(visible ? 1 : 0);
     }
 }
 
@@ -150,9 +209,9 @@ void PclVtkRenderer::applyPointSize()
 {
     for (auto &entry : actors_)
     {
-        if (entry.second)
+        if (entry.second.actor)
         {
-            entry.second->GetProperty()->SetPointSize(pointSize_);
+            entry.second.actor->GetProperty()->SetPointSize(pointSize_);
         }
     }
     if (highlightActor_)

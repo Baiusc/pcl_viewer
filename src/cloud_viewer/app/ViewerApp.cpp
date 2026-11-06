@@ -18,6 +18,7 @@
 #endif
 
 #include <vtkAxesActor.h>
+#include <vtkCaptionActor2D.h>
 #include <vtkCallbackCommand.h>
 #include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkObjectFactory.h>
@@ -70,6 +71,15 @@ public:
             }
         }
         vtkInteractorStyleTrackballCamera::OnLeftButtonDown();
+    }
+
+    /// 鼠标移动只做相机变换，不再补推点云帧。
+    /// 原实现在每次 mousemove 都调用 pumpLiveFrame()，等于拖动期间把
+    /// "相机重绘 + 全量点云重建" 叠在一起，是最直接的掉帧来源。
+    /// 点云更新由 33ms 定时器负责，交互期间会被自动暂停，松手后补帧。
+    void OnMouseMove() override
+    {
+        vtkInteractorStyleTrackballCamera::OnMouseMove();
     }
 
 private:
@@ -193,13 +203,47 @@ void ViewerApp::setupInteraction()
     keyCallback->SetClientData(this);
     interactor->AddObserver(vtkCommand::KeyPressEvent, keyCallback);
 
+    // 拖动/缩放期间暂停点云重建：相机操作本身已在连续重绘，
+    // 再叠加每秒 20 次的全量点云更新会明显掉帧。松手后补一帧。
+    auto interactionCallback = vtkSmartPointer<vtkCallbackCommand>::New();
+    interactionCallback->SetCallback(
+        [](vtkObject *, unsigned long eventId, void *clientData, void *)
+        {
+            auto *app = static_cast<ViewerApp *>(clientData);
+            if (app)
+            {
+                app->setInteracting(eventId == vtkCommand::StartInteractionEvent);
+            }
+        });
+    interactionCallback->SetClientData(this);
+    interactor->AddObserver(vtkCommand::StartInteractionEvent, interactionCallback);
+    interactor->AddObserver(vtkCommand::EndInteractionEvent, interactionCallback);
+
+    // 渲染帧率：每次 Render 完成计数，HUD 每 0.5 秒刷新一次显示。
+    if (auto *window = renderer_.window())
+    {
+        auto renderTickCallback = vtkSmartPointer<vtkCallbackCommand>::New();
+        renderTickCallback->SetCallback(
+            [](vtkObject *, unsigned long, void *clientData, void *)
+            {
+                auto *app = static_cast<ViewerApp *>(clientData);
+                if (app)
+                {
+                    app->onRenderTick();
+                }
+            });
+        renderTickCallback->SetClientData(this);
+        window->AddObserver(vtkCommand::EndEvent, renderTickCallback);
+    }
+
     hudActor_ = vtkSmartPointer<vtkTextActor>::New();
     hudActor_->GetTextProperty()->SetFontSize(14);
     hudActor_->GetTextProperty()->SetColor(0.92, 0.92, 0.92);
     hudActor_->GetTextProperty()->SetBackgroundColor(0.0, 0.0, 0.0);
     hudActor_->GetTextProperty()->SetBackgroundOpacity(0.35);
     hudActor_->GetPositionCoordinate()->SetCoordinateSystemToNormalizedViewport();
-    hudActor_->SetPosition(0.01, 0.68);
+    // 左下角：顶部是按钮区，放这里不会再和按钮重叠；文本从底部向上排版。
+    hudActor_->SetPosition(0.01, 0.02);
     renderer_.renderer()->AddActor2D(hudActor_);
 
     infoActor_ = vtkSmartPointer<vtkTextActor>::New();
@@ -208,7 +252,8 @@ void ViewerApp::setupInteraction()
     infoActor_->GetTextProperty()->SetBackgroundColor(0.0, 0.0, 0.0);
     infoActor_->GetTextProperty()->SetBackgroundOpacity(0.35);
     infoActor_->GetPositionCoordinate()->SetCoordinateSystemToNormalizedViewport();
-    infoActor_->SetPosition(0.60, 0.55);
+    // 右下角，与左下角的 HUD 分开，互不遮挡。
+    infoActor_->SetPosition(0.70, 0.02);
     renderer_.renderer()->AddActor2D(infoActor_);
 
     // 顶部工具栏：文件导入为第一入口，键盘仅为快捷方式。
@@ -246,19 +291,41 @@ void ViewerApp::setupInteraction()
     ui_.addButton("Search Device", 0.858, kButtonY, 0.136, kButtonHeight,
                   [this] { searchDevices(); });
     modeButtonIndex_ = ui_.size();
-    ui_.addButton("Mode: Cloud", 0.010, 0.863, 0.18, kButtonHeight,
+    ui_.addButton("Mode: Cloud", 0.010, 0.863, 0.145, kButtonHeight,
                   [this] { switchRadarMode(); });
     roiButtonIndex_ = ui_.size();
-    ui_.addButton("ROI: 0", 0.200, 0.863, 0.13, kButtonHeight,
+    ui_.addButton("ROI: 0", 0.160, 0.863, 0.100, kButtonHeight,
                   [this] { switchRadarRoi(); });
-    ui_.addButton("Select Calib", 0.340, 0.863, 0.19, kButtonHeight,
+    ui_.addButton("Select Calib", 0.265, 0.863, 0.145, kButtonHeight,
                   [this] { loadLiveCalibration(); });
     calibrationButtonIndex_ = ui_.size();
-    ui_.addButton("App Cal: OFF", 0.540, 0.863, 0.26, kButtonHeight,
+    ui_.addButton("App Cal: OFF", 0.415, 0.863, 0.205, kButtonHeight,
                   [this] { toggleLiveCalibration(); });
-    faceButtonIndex_ = ui_.size();
-    ui_.addButton("Faces: All", 0.808, 0.863, 0.185, kButtonHeight,
-                  [this] { cycleBetaFace(); });
+
+    // 面选择：F1..F4 独立开关，任意组合；All 一键全开。
+    for (int index = 0; index < 4; ++index)
+    {
+        faceButtonIndices_[index] = ui_.size();
+        const std::string label = "F" + std::to_string(index + 1);
+        ui_.addButton(label, 0.628 + 0.060 * index, 0.863, 0.055, kButtonHeight,
+                      [this, index] { toggleBetaFace(index); });
+    }
+    faceAllButtonIndex_ = ui_.size();
+    ui_.addButton("All", 0.868, 0.863, 0.070, kButtonHeight,
+                  [this]
+                  {
+                      if (!betaStream_)
+                      {
+                          logUi("Faces", "当前不是 CS96 Beta，面选择无效", false);
+                          return;
+                      }
+                      betaFaceMask_ = 0x0F;
+                      betaStream_->setFaceMask(betaFaceMask_);
+                      updateFaceButtons();
+                      logUi("Faces", "显示面帧 " + faceMaskLabel(betaFaceMask_));
+                      updateHud();
+                      renderer_.render();
+                  });
     ui_.addButton("Connect Beta IP", 0.010, 0.735, 0.220, kButtonHeight,
                   [this] { connectBetaManual(); });
     startBetaButtonIndex_ = ui_.size();
@@ -267,6 +334,9 @@ void ViewerApp::setupInteraction()
 
     // 动态设备按钮从该索引开始，刷新时只移除这一段，避免误删固定按钮。
     firstDeviceButtonIndex_ = ui_.size();
+
+    // 未连接时按 Unknown 处理：隐藏型号专属按钮（面选择、ROI）。
+    updateModelDependentUi();
 }
 
 bool ViewerApp::handleUiClick(int displayX, int displayY)
@@ -524,6 +594,24 @@ static std::uint8_t betaAllowedModesForDeviceMode(const std::string &deviceMode)
     return static_cast<std::uint8_t>((1u << 1) | (1u << 2));
 }
 
+/// 确保 known_hosts 的目录存在；文件本身由 accept-new 自动创建。
+/// 首次使用某台设备时文件可以不存在，不应据此直接拒绝。
+static bool ensureKnownHostsReady(const std::string &knownHosts, std::string &message)
+{
+    if (knownHosts.empty())
+    {
+        message = "无法确定 SSH 主机密钥文件路径";
+        return false;
+    }
+    std::error_code ec;
+    const auto directory = std::filesystem::path(knownHosts).parent_path();
+    if (!directory.empty())
+    {
+        std::filesystem::create_directories(directory, ec);
+    }
+    return true;
+}
+
 /// 在设备上执行脚本；主机密钥变更时更新信任并重试一次（新密钥仍会写回文件）。
 static bool runBetaSsh(const std::string &ip, const std::string &password,
                        const std::string &knownHosts, const std::string &script,
@@ -538,7 +626,9 @@ static bool runBetaSsh(const std::string &ip, const std::string &password,
                " sh -s" + remoteArgs + " 2>&1";
     };
 
-    ShellOutput run = runShellCommand(build("yes"));
+    // 首次连接用 accept-new：未知主机自动记录进 known_hosts；
+    // 已记录主机的密钥变化仍会被拒绝（不是无条件信任）。
+    ShellOutput run = runShellCommand(build("accept-new"));
     if (!hostKeyMismatch(run.text))
     {
         output = run.text;
@@ -711,16 +801,14 @@ echo STARTED=$pid
 // 修改前验证 host key；只在目标 IP 确实变化时重启指定雷达进程。
 static bool prepareBetaTarget(const std::string &ip, std::uint16_t dataPort,
                               const std::string &password, std::string &message,
-                              std::string &deviceMode)
+                              std::string &deviceMode, std::string &resolution)
 {
-    if (ip == "10.42.0.221") { message = "该设备不允许自动修改"; return false; }
     const std::string localIp = betaRouteSource(ip);
     if (localIp.empty()) { message = "无法从路由确定到 " + ip + " 的本机 IPv4"; return false; }
     if (password.empty()) { message = "未配置 Beta SSH 密码"; return false; }
     const std::string knownHosts = betaKnownHostsPath();
-    if (knownHosts.empty() || !std::filesystem::exists(knownHosts))
+    if (!ensureKnownHostsReady(knownHosts, message))
     {
-        message = "缺少已确认的 SSH 主机密钥文件: " + knownHosts;
         return false;
     }
     const std::string script = R"SH(set -eu
@@ -730,6 +818,10 @@ expected_port="$2"
 # 设备 mode 文件决定加载哪套驱动/库，work_mode 必须与之匹配（point_cloud/histogram/point_cloud_gray）。
 dev_mode=$(cat /mnt/mtdblock2/mode 2>/dev/null || echo unknown)
 echo "DEVICE_MODE=$dev_mode"
+# 标定表里记录的分辨率：96x800（IMX459）或 120x800（SL100）。
+lines_v=$(awk -F= '/^[[:space:]]*lines_v[[:space:]]*=/{v=$2; sub(/;.*/,"",v); gsub(/[^0-9]/,"",v); if (v != "") print v; exit}' /etc/ys_calibration.ini 2>/dev/null || true)
+lines_h=$(awk -F= '/^[[:space:]]*lines_h[[:space:]]*=/{v=$2; sub(/;.*/,"",v); gsub(/[^0-9]/,"",v); if (v != "") print v; exit}' /etc/ys_calibration.ini 2>/dev/null || true)
+if [ -n "$lines_v" ] && [ -n "$lines_h" ]; then echo "RESOLUTION=${lines_v}x${lines_h}"; fi
 mode=$(awk -F '"' '/^[[:space:]]*work_mode[[:space:]]*=/{n++; v=$2} END{if(n==1) print v}' "$conf")
 case "$mode" in 0|1|2) ;; *) echo "UNSUPPORTED_MODE=$mode"; exit 1;; esac
 old_port=$(awk -F '"' '/^[[:space:]]*center_data_port[[:space:]]*=/{n++; v=$2} END{if(n==1) print v}' "$conf")
@@ -796,13 +888,23 @@ echo CENTER_UPDATED="$old:$old_port"-"$expected:$expected_port"
         const std::size_t end = output.find_first_of("\r\n", begin);
         deviceMode = output.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
     }
+    const auto resolutionPos = output.find("RESOLUTION=");
+    if (resolutionPos != std::string::npos)
+    {
+        const std::size_t begin = resolutionPos + std::string("RESOLUTION=").size();
+        const std::size_t end = output.find_first_of("\r\n", begin);
+        resolution = output.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+    }
     message = "目标 " + ip + "，本机 " + localIp + "：" + output;
     return true;
 }
 
 void ViewerApp::connectBeta(const std::string &ip)
 {
-    lastDeviceIp_ = ip;
+    rememberDevice(ip);
+    // 先按转镜雷达初始化（面选择等按钮立即可用）；
+    // 拿到设备规格后再细分 Beta（96 线 / IMX459）或 Gamma（120 线 / SL100）。
+    setActiveRadarModel(RadarModel::BetaRotating);
     // 用广播中的 work_mode 初始化当前模式，避免 HUD 与实际包格式不一致。
     betaWorkMode_ = 2;
     // 换设备或重连后重新探测固件支持的模式。
@@ -815,24 +917,39 @@ void ViewerApp::connectBeta(const std::string &ip)
         }
     }
 
-    for (const auto &device : discoveredDevices_)
+    // 模式 >2 只有灰度点云（work_mode=4，包长 1165B），本解析器没有实现。
+    // 设备驱动本身就是 point_cloud，所以不必换固件，只要把配置里的 work_mode
+    // 改回 2 并重启 you_see 即可。applyBetaWorkMode 会备份配置、重启后 pidof 校验，
+    // 起不来就自动回滚，因此可以安全地自动执行。
+    if (betaWorkMode_ > 2)
     {
-        if (device.ip == ip && device.workMode > 2)
+        const int grayMode = betaWorkMode_;
+        logUi("Connect Device", "设备处于灰度和模式 " + std::to_string(grayMode) +
+                                    "，正在自动切回 work_mode=2（真实点云）…");
+        std::string switchMessage;
+        if (!applyBetaWorkMode(ip, 2, switchMessage))
         {
             radarState_ = RadarState::Error;
-            { std::lock_guard<std::mutex> lock(radarMessageMutex_);
-              radarMessage_ = "CS96 Beta 模式 " + std::to_string(device.workMode) +
-                              " 当前不支持；请使用匹配的固件和协议"; }
-            logUi("Connect Device", "设备模式 " + std::to_string(device.workMode) +
-                                   " 不支持，未修改设备配置", false);
-            updateHud(); renderer_.render();
+            {
+                std::lock_guard<std::mutex> lock(radarMessageMutex_);
+                radarMessage_ = "设备模式 " + std::to_string(grayMode) +
+                                " 自动切换失败: " + switchMessage;
+            }
+            logUi("Connect Device", "自动切换 work_mode=2 失败，未连接: " + switchMessage,
+                  false);
+            updateHud();
+            renderer_.render();
             return;
         }
-    }
-    if (ip == "10.42.0.221")
-    {
-        logUi("Connect Device", "该设备不允许连接操作", false);
-        return;
+        logUi("Connect Device", "已自动切到 work_mode=2（真实点云）");
+        for (auto &device : discoveredDevices_)
+        {
+            if (device.ip == ip)
+            {
+                device.workMode = 2;
+            }
+        }
+        betaWorkMode_ = 2;
     }
     if (radar_)
     {
@@ -863,8 +980,9 @@ void ViewerApp::connectBeta(const std::string &ip)
     renderer_.render();
     std::string targetMessage;
     std::string deviceMode;
+    std::string deviceResolution;
     const bool targetReady = prepareBetaTarget(ip, config.localPort, betaSshPassword(),
-                                               targetMessage, deviceMode);
+                                               targetMessage, deviceMode, deviceResolution);
     // 记录设备 mode，后续 work_mode 切换只在该驱动支持的集合内循环。
     betaDeviceMode_ = deviceMode;
     betaAllowedModes_ = betaAllowedModesForDeviceMode(deviceMode);
@@ -890,7 +1008,9 @@ void ViewerApp::connectBeta(const std::string &ip)
         // 原始合成为 96x3200，真实点云为 96x800，直方图为 96x512。
         metadata.rows = static_cast<int>(matrix.size());
         metadata.cols = matrix.empty() ? 0 : static_cast<int>(matrix.front().size());
-        metadata.model = RadarModel::BetaRotating;
+        // 型号由连接时按规格确定（96 线 Beta / 120 线 Gamma），这里如实透传。
+        metadata.model = isRotatingModel(activeModel_) ? activeModel_
+                                                       : RadarModel::BetaRotating;
         metadata.roiId = 0;
         metadata.frameNumber = frameNumber;
         metadata.timestampUnit = "frame";
@@ -899,46 +1019,13 @@ void ViewerApp::connectBeta(const std::string &ip)
                                               : "cs96_beta_cartesian";
         metadata.calibrationState = detected == 2 ? "device_xyz" : "device_raw";
 
-        auto frame = makeFrame(std::move(matrix), metadata);
+        // 在线帧只生成当前颜色源，避免每帧为 30 万点填 13 个标量场。
+        auto frame = makeFrame(std::move(matrix), metadata, 0, colorSource_);
         std::lock_guard<std::mutex> lock(radarMutex_);
         pendingRadarFrame_ = frame;
     };
 
-    // 原始点云标定表（距离 / 水平角 / 俯仰角 / 反射率）。
-    // 默认读取聚合成单文件的 CSV；目录布局作为兼容回退。
-    if (!betaCalibration_)
-    {
-        betaCalibration_ = std::make_shared<Cs96BetaCalibration>();
-        std::filesystem::path source = "data/param/cs96beta_calibration.csv";
-        if (const char *override = std::getenv("CV_BETA_CALIB"))
-        {
-            source = override;
-        }
-        std::error_code ec;
-        if (!std::filesystem::exists(source, ec))
-        {
-            const std::filesystem::path legacy = "data/param/cs96beta_calib_data";
-            if (std::filesystem::is_directory(legacy, ec))
-            {
-                logUi("Calib", "未找到 " + source.string() + "，回退目录布局 " + legacy.string());
-                source = legacy;
-            }
-        }
-        std::string calibrationError;
-        if (betaCalibration_->load(source, calibrationError))
-        {
-            const auto &starts = betaCalibration_->startingAngles();
-            std::ostringstream detail;
-            detail << "CS96 Beta 标定已加载: " << source.string()
-                   << " start=" << starts[0] << "," << starts[1] << "," << starts[2] << "," << starts[3];
-            logUi("Calib", detail.str());
-        }
-        else
-        {
-            logUi("Calib", "CS96 Beta 标定加载失败: " + calibrationError, false);
-            betaCalibration_.reset();
-        }
-    }
+    // 标定表在设备规格确定后按型号加载（120 线 Gamma 与 96 线 Beta 不可混用）。
 
     // CV_BETA_CALIB_ENABLED=0 可在启动时关闭标定，便于对比纯几何结果。
     if (const char *enabled = std::getenv("CV_BETA_CALIB_ENABLED"))
@@ -961,6 +1048,107 @@ void ViewerApp::connectBeta(const std::string &ip)
                 betaFaceMask_ = static_cast<std::uint8_t>(1u << (number - 1));
             }
         }
+    }
+
+    // 规格：优先广播上报（最可靠），其次设备标定表里的 lines_v/lines_h。
+    int specLines = 0;
+    int specSlots = 0;
+    for (const auto &device : discoveredDevices_)
+    {
+        if (device.ip == ip && device.lineCount > 0 && device.slotsPerFrame > 0)
+        {
+            specLines = device.lineCount;
+            specSlots = device.slotsPerFrame;
+            break;
+        }
+    }
+    if (specLines <= 0 && !deviceResolution.empty())
+    {
+        int parsedLines = 0;
+        int parsedSlots = 0;
+        if (std::sscanf(deviceResolution.c_str(), "%dx%d", &parsedLines, &parsedSlots) == 2)
+        {
+            specLines = parsedLines;
+            specSlots = parsedSlots;
+        }
+    }
+    if (specLines > 0 && specLines <= 512)
+    {
+        config.lines = specLines;
+    }
+    if (specSlots > 0 && specSlots <= 8192)
+    {
+        config.slots = specSlots;
+    }
+    // Gamma（120 线 / SL100）板端不做 PA 纠偏，原始点云按帧号判面；
+    // Beta（96 线 / IMX459）的 FPGA 帧号实测 99.9% 错位，必须用 PA 判面。
+    config.faceFromFrameId = config.lines >= 120;
+    logUi("Connect Device", "设备规格 " + std::to_string(config.lines) + "x" +
+                                std::to_string(config.slots));
+    // 型号按实际规格确立：120 线 = SL100 的 CS120 Gamma，96 线 = IMX459 的 CS96 Beta。
+    // 两者共用解析与 UI，差异只在型号标识、包长与默认标定表。
+    setActiveRadarModel(config.lines >= 120 ? RadarModel::GammaRotating
+                                            : RadarModel::BetaRotating);
+
+    // 原始点云标定表（距离 / 水平角 / 俯仰角 / 反射率）。
+    // 默认读取聚合成单文件的 CSV；目录布局作为兼容回退。
+    // 120 线（Gamma/SL100）与 96 线（Beta/IMX459）标定表不可混用，按规格选默认路径。
+    const bool gammaSpec = config.lines >= 120;
+    const std::string modelLabel = gammaSpec ? "CS120 Gamma" : "CS96 Beta";
+    if (!betaCalibration_)
+    {
+        betaCalibration_ = std::make_shared<Cs96BetaCalibration>();
+        std::filesystem::path source = gammaSpec ? "data/param/cs120gamma_calibration.csv"
+                                                 : "data/param/cs96beta_calibration.csv";
+        if (const char *override = std::getenv("CV_BETA_CALIB"))
+        {
+            source = override;
+        }
+        std::error_code ec;
+        if (!std::filesystem::exists(source, ec))
+        {
+            const std::filesystem::path legacy = gammaSpec ? "data/param/cs120gamma_calib_data"
+                                                           : "data/param/cs96beta_calib_data";
+            if (std::filesystem::is_directory(legacy, ec))
+            {
+                logUi("Calib", "未找到 " + source.string() + "，回退目录布局 " + legacy.string());
+                source = legacy;
+            }
+        }
+        std::string calibrationError;
+        if (betaCalibration_->load(source, calibrationError))
+        {
+            const auto &starts = betaCalibration_->startingAngles();
+            std::ostringstream detail;
+            detail << modelLabel << " 标定已加载: " << source.string()
+                   << " (" << betaCalibration_->lineCount() << "x" << betaCalibration_->slotCount()
+                   << ") start=" << starts[0] << "," << starts[1] << "," << starts[2] << ","
+                   << starts[3];
+            logUi("Calib", detail.str());
+        }
+        else
+        {
+            logUi("Calib", modelLabel + " 标定加载失败: " + calibrationError, false);
+            betaCalibration_.reset();
+        }
+    }
+
+    // 中心线 u 只依赖标定参数；即使整张表因线数不匹配被拒，兜底解算也用它，
+    // 避免 120 线被按 (lines-1)/2=59 推导而整体上仰约 2°。
+    if (betaCalibration_ && betaCalibration_->loaded())
+    {
+        config.pitchCenter = betaCalibration_->thetaCenterLine();
+    }
+
+    // 标定表必须与设备线数一致，否则原始点云的像素索引与俯仰角会整体错位。
+    if (betaCalibration_ && betaCalibration_->loaded() &&
+        betaCalibration_->lineCount() != config.lines)
+    {
+        logUi("Calib", "标定表为 " + std::to_string(betaCalibration_->lineCount()) +
+                          " 线，与设备 " + std::to_string(config.lines) +
+                          " 线不匹配，本次不套用",
+              false);
+        betaCalibration_.reset();
     }
 
     betaStream_->setCalibration(betaCalibration_);
@@ -1046,6 +1234,64 @@ void ViewerApp::searchDevices()
         discovery_->stop();
     }
 
+    // FL6532 固态雷达不发 55000 广播，只能按已知地址探测控制口 6508。
+    std::vector<std::string> fl6532Candidates;
+    if (const char *envIp = std::getenv("CV_RADAR_IP"))
+    {
+        fl6532Candidates.emplace_back(envIp);
+    }
+    if (!lastFl6532Ip_.empty())
+    {
+        fl6532Candidates.push_back(lastFl6532Ip_);
+    }
+    fl6532Candidates.emplace_back("192.168.137.200");
+
+    std::string probeNote;
+    const auto fl6532 = DeviceDiscovery::probeFl6532(fl6532Candidates, probeNote);
+    logUi("Probe Device", probeNote, !fl6532.empty());
+    for (const auto &device : fl6532)
+    {
+        const bool exists = std::any_of(
+            discoveredDevices_.begin(), discoveredDevices_.end(),
+            [&device](const DiscoveredDevice &existing) { return existing.ip == device.ip; });
+        if (!exists)
+        {
+            discoveredDevices_.push_back(device);
+        }
+    }
+    // 上次连接的设备若不在结果里，单独确认一次可达性：
+    // 它可能只是 you_see 没运行（因此没有广播），设备本身仍在线。
+    if (!lastDeviceIp_.empty())
+    {
+        const bool listed = std::any_of(
+            discoveredDevices_.begin(), discoveredDevices_.end(),
+            [this](const DiscoveredDevice &device) { return device.ip == lastDeviceIp_; });
+        if (!listed)
+        {
+            const bool sshOpen = DeviceDiscovery::tcpPortOpen(lastDeviceIp_, 22, 400);
+            const bool ctrlOpen = DeviceDiscovery::tcpPortOpen(lastDeviceIp_, 6508, 400);
+            if (sshOpen || ctrlOpen)
+            {
+                DiscoveredDevice device;
+                device.ip = lastDeviceIp_;
+                device.model = ctrlOpen ? "FL6532" : "CS96 Beta";
+                device.sshReady = sshOpen;
+                device.fromProbe = true;
+                device.lastSeenMs = nowMs();
+                discoveredDevices_.push_back(device);
+                logUi("Probe Device", "上次设备 " + lastDeviceIp_ + " 在线（" + device.model +
+                                          "），当前没有广播");
+            }
+            else
+            {
+                logUi("Probe Device", "上次设备 " + lastDeviceIp_ + " 不可达（未上电或掉线）", false);
+            }
+        }
+    }
+
+    std::sort(discoveredDevices_.begin(), discoveredDevices_.end(),
+              [](const DiscoveredDevice &a, const DiscoveredDevice &b) { return a.ip < b.ip; });
+
     if (discoveredDevices_.empty())
     {
         // 广播由设备端 you_see 发出，进程没跑就完全搜不到；而 ARP 由内核应答，
@@ -1128,9 +1374,10 @@ void ViewerApp::startBetaProcess()
         return;
     }
     const std::string knownHosts = betaKnownHostsPath();
-    if (knownHosts.empty() || !std::filesystem::exists(knownHosts))
+    std::string keyFileMessage;
+    if (!ensureKnownHostsReady(knownHosts, keyFileMessage))
     {
-        logUi("Start you_see", "缺少已确认的 SSH 主机密钥文件: " + knownHosts, false);
+        logUi("Start you_see", keyFileMessage, false);
         return;
     }
 
@@ -1178,6 +1425,10 @@ void ViewerApp::rebuildDeviceButtons()
         {
             // 无广播元数据，只能显示 IP 与服务可达性。
             label = device.ip + (device.sshReady ? " [scan+ssh]" : " [scan/no-ssh]");
+        }
+        else if (device.fromProbe)
+        {
+            label = device.model + " " + device.ip + " [probe]";
         }
         else
         {
@@ -1231,7 +1482,8 @@ void ViewerApp::connectDiscoveredDevice(std::size_t index)
         return;
     }
 
-    if (device.model == "CS96 Beta" || device.model == "CS96")
+    if (device.model == "CS96 Beta" || device.model == "CS96" ||
+        device.model == "CS120 Gamma")
     {
         connectBeta(device.ip);
         return;
@@ -1243,6 +1495,8 @@ void ViewerApp::connectDiscoveredDevice(std::size_t index)
 
 void ViewerApp::connectRadar()
 {
+    // 型号在这里确立：6532 没有转镜，面选择等 Beta 专属按钮会被隐藏。
+    setActiveRadarModel(RadarModel::Fl6532);
     // 重试时必须先释放旧 socket，否则 Error 状态下 radar_ 仍 running，
     // 直接 return 会导致点击 Retry 毫无反应。
     if (radar_)
@@ -1326,7 +1580,8 @@ void ViewerApp::connectRadar()
         metadata.algorithmId = config.mode == RadarOutputMode::Range ? "range6532_raw" : "device_cloud";
         metadata.calibrationState = config.mode == RadarOutputMode::Range ? "raw_range" : "device_unknown";
 
-        auto frame = makeFrame(std::move(matrix), metadata);
+        // 与 Beta 一致：在线帧只生成当前颜色源。
+        auto frame = makeFrame(std::move(matrix), metadata, 0, colorSource_);
         std::lock_guard<std::mutex> lock(radarMutex_);
         pendingRadarFrame_ = frame;
     };
@@ -1344,6 +1599,10 @@ void ViewerApp::connectRadar()
     {
         radarConnected_ = true;
         radarState_ = RadarState::Waiting;
+        // 记住该地址：下次搜索用它探测，Connect 按钮也优先重连它。
+        lastFl6532Ip_ = config.radarIp;
+        rememberDevice(config.radarIp);
+        radarIpOverride_ = config.radarIp;
         radarWaitStartMs_ = nowMs();
         autoStartAttempted_ = false;
         {
@@ -1420,6 +1679,31 @@ void ViewerApp::toggleRadarConnection()
     else
     {
         logUi("Connect Radar", std::string("state=") + stateName(state));
+        // 统一交互：先搜索再连接。没有搜索结果时先补一次搜索。
+        if (discoveredDevices_.empty())
+        {
+            logUi("Connect Radar", "尚无搜索结果，先执行一次搜索");
+            searchDevices();
+        }
+        if (!discoveredDevices_.empty())
+        {
+            // 优先重连上次的设备，否则用列表第一台。
+            std::size_t target = 0;
+            if (!lastDeviceIp_.empty())
+            {
+                for (std::size_t i = 0; i < discoveredDevices_.size(); ++i)
+                {
+                    if (discoveredDevices_[i].ip == lastDeviceIp_)
+                    {
+                        target = i;
+                        break;
+                    }
+                }
+            }
+            connectDiscoveredDevice(target);
+            return;
+        }
+        logUi("Connect Radar", "未发现设备，按默认地址尝试连接", false);
         connectRadar();
     }
 }
@@ -1513,9 +1797,8 @@ echo SWITCH_OK
     }
 
     const std::string knownHosts = betaKnownHostsPath();
-    if (knownHosts.empty() || !std::filesystem::exists(knownHosts))
+    if (!ensureKnownHostsReady(knownHosts, message))
     {
-        message = "缺少已确认的 SSH 主机密钥文件";
         return false;
     }
 
@@ -1532,33 +1815,43 @@ echo SWITCH_OK
     return false;
 }
 
-void ViewerApp::cycleBetaFace()
+void ViewerApp::toggleBetaFace(int index)
 {
     if (!betaStream_)
     {
         logUi("Faces", "当前不是 CS96 Beta，面选择无效", false);
         return;
     }
-
-    // 常用组合循环：All -> F1 -> F3 -> F1+F3 -> F2 -> F4 -> F2+F4 -> All
-    static const std::uint8_t kCycle[] = {0x0F, 0x01, 0x04, 0x05, 0x02, 0x08, 0x0A};
-    constexpr std::size_t kCount = sizeof(kCycle) / sizeof(kCycle[0]);
-
-    std::size_t index = 0;
-    for (std::size_t i = 0; i < kCount; ++i)
+    if (index < 0 || index > 3)
     {
-        if (kCycle[i] == betaFaceMask_)
-        {
-            index = i;
-            break;
-        }
+        return;
     }
-    betaFaceMask_ = kCycle[(index + 1) % kCount];
+
+    const std::uint8_t bit = static_cast<std::uint8_t>(1u << index);
+    std::uint8_t mask = static_cast<std::uint8_t>(betaFaceMask_ ^ bit);
+    if (mask == 0)
+    {
+        // 全关会导致没有任何面可显示，回退到全部。
+        mask = 0x0F;
+        logUi("Faces", "已关闭最后一个面，自动恢复为全部", false);
+    }
+    betaFaceMask_ = mask;
     betaStream_->setFaceMask(betaFaceMask_);
+    updateFaceButtons();
 
     logUi("Faces", "显示面帧 " + faceMaskLabel(betaFaceMask_));
     updateHud();
     renderer_.render();
+}
+
+void ViewerApp::updateFaceButtons()
+{
+    for (int index = 0; index < 4; ++index)
+    {
+        const bool enabled = (betaFaceMask_ & (1u << index)) != 0;
+        ui_.setLabel(faceButtonIndices_[index],
+                     "F" + std::to_string(index + 1) + (enabled ? "*" : ""));
+    }
 }
 
 void ViewerApp::switchBetaMode()
@@ -1668,8 +1961,113 @@ void ViewerApp::switchRadarRoi()
     updateHud(); renderer_.render();
 }
 
+void ViewerApp::rememberDevice(const std::string &ip)
+{
+    if (ip.empty())
+    {
+        return;
+    }
+    lastDeviceIp_ = ip;
+
+    ViewerSettings settings = loadViewerSettings();
+    if (settings.lastDeviceIp == ip)
+    {
+        return;
+    }
+    settings.lastDeviceIp = ip;
+    std::string error;
+    if (!saveViewerSettings(settings, error))
+    {
+        std::cout << "[cloud_viewer] 记录设备地址失败: " << error << "\n";
+    }
+}
+
+void ViewerApp::setActiveRadarModel(RadarModel model)
+{
+    if (activeModel_ == model)
+    {
+        return;
+    }
+    activeModel_ = model;
+    updateModelDependentUi();
+    logUi("Model", std::string("雷达型号: ") + radarModelName(model));
+}
+
+void ViewerApp::updateModelDependentUi()
+{
+    const bool beta = isRotatingModel(activeModel_);
+    const bool fl6532 = activeModel_ == RadarModel::Fl6532;
+
+    // 面选择只对转镜雷达有意义：6532 是固态，没有“面”的概念。
+    for (std::size_t index : faceButtonIndices_)
+    {
+        ui_.setVisible(index, beta);
+    }
+    ui_.setVisible(faceAllButtonIndex_, beta);
+
+    // Start you_see 只服务 CS96 Beta；未连接时保留可见，便于先拉起设备再连接。
+    ui_.setVisible(startBetaButtonIndex_, !fl6532);
+
+    // ROI 分档是 6532 专有概念。
+    ui_.setVisible(roiButtonIndex_, fl6532);
+}
+
+void ViewerApp::loadBetaCalibration()
+{
+    const auto files = FileDialogService::openFiles();
+    if (files.empty())
+    {
+        logUi("Select Calib", "用户取消或未选择文件", false);
+        return;
+    }
+
+    std::string copyError;
+    const auto stored = importCalibrationFile(files.front(), copyError);
+    if (stored.empty())
+    {
+        logUi("Select Calib", "复制标定表失败: " + copyError, false);
+        return;
+    }
+
+    auto calibration = std::make_shared<Cs96BetaCalibration>();
+    std::string error;
+    if (!calibration->load(stored, error))
+    {
+        controlState_ = "CS96 Beta calibration parse failed; previous table retained";
+        logUi("Select Calib", "CS96 Beta 标定解析失败: " + error, false);
+        updateHud();
+        renderer_.render();
+        return;
+    }
+
+    betaCalibration_ = calibration;
+    betaCalibrationEnabled_ = true;
+    controlState_ = "CS96 Beta calibration: " + stored.filename().string();
+    const auto &starts = betaCalibration_->startingAngles();
+    std::ostringstream detail;
+    detail << "CS96 Beta 标定已加载: " << stored.string()
+           << " start=" << starts[0] << "," << starts[1] << "," << starts[2] << "," << starts[3];
+    logUi("Select Calib", detail.str());
+    updateHud();
+    renderer_.render();
+}
+
 void ViewerApp::loadLiveCalibration()
 {
+    // 按当前型号选择标定格式，避免把 6532 的 bin 当成 Beta 的 CSV 解析。
+    if (isRotatingModel(activeModel_))
+    {
+        logUi("Select Calib", std::string("当前为 ") + radarModelName(activeModel_) +
+                                  "，选择聚合 CSV 标定表");
+        loadBetaCalibration();
+        return;
+    }
+
+    if (activeModel_ == RadarModel::Unknown)
+    {
+        logUi("Select Calib", "尚未连接雷达，按 6532 固态雷达的 bin 格式加载");
+    }
+
     logUi("Select Calib", "打开标定表选择对话框");
     const auto files = FileDialogService::openFiles();
     if (files.empty())
@@ -1701,7 +2099,8 @@ void ViewerApp::loadLiveCalibration()
         controlState_ = "Calibration table: " + stored.filename().string();
 
         // 只记住文件，不改变开关状态；开关由 App Cal 按钮独立控制。
-        ViewerSettings settings;
+        // 用读-改-写，避免覆盖掉其它字段（例如 LAST_DEVICE_IP）。
+        ViewerSettings settings = loadViewerSettings();
         settings.calibrationFile = stored.filename().string();
         settings.calibrationEnabled = liveCalibration_ != 0;
         std::string saveError;
@@ -1792,8 +2191,59 @@ FrameHandle ViewerApp::preprocessLiveFrame(const FrameHandle& raw)
                                          : OnlineCalibrationMode::TableB);
 }
 
+void ViewerApp::setInteracting(bool value)
+{
+    if (interacting_ == value)
+    {
+        return;
+    }
+    interacting_ = value;
+    // 松手后立刻补一帧，否则会停在拖动开始时的那一帧数据上。
+    if (!value)
+    {
+        applyIncomingFrame();
+    }
+    updateHud();
+}
+
+void ViewerApp::onRenderTick()
+{
+    ++renderTicks_;
+    const auto now = std::chrono::steady_clock::now();
+    const double elapsed = std::chrono::duration<double>(now - fpsStamp_).count();
+    if (elapsed < 0.5)
+    {
+        return;
+    }
+    displayFps_ = static_cast<double>(renderTicks_) / elapsed;
+    renderTicks_ = 0;
+    fpsStamp_ = now;
+    // 只刷新文本，不在这里主动 Render（本回调就是 Render 结束时触发的）。
+    updateHud();
+}
+
+void ViewerApp::pumpLiveFrame()
+{
+    {
+        // 只有真的有待消费帧时才进入完整处理，避免鼠标移动时反复刷新 HUD。
+        std::lock_guard<std::mutex> lock(radarMutex_);
+        if (!pendingRadarFrame_)
+        {
+            return;
+        }
+    }
+    applyIncomingFrame();
+}
+
 void ViewerApp::applyIncomingFrame()
 {
+    // 拖动/缩放期间不重建点云：把渲染时间全部让给相机操作，
+    // 松手时 setInteracting(false) 会补一帧。
+    if (interacting_)
+    {
+        return;
+    }
+
     // TCP 控制等待在后台完成，UI 不阻塞；只有收到成功 ACK 后才切换本地解析器。
     if (modeFuture_.valid() && modeFuture_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         const auto error = modeFuture_.get();
@@ -1835,6 +2285,32 @@ void ViewerApp::applyIncomingFrame()
     }
     if (!frame)
     {
+        // 心跳：没有新帧也每 2 秒报一次，用来区分"设备没推流/解析慢"与"渲染慢"，
+        // 否则只看 [fps] 的空白输出会误以为是渲染卡住了。
+        if (std::getenv("CV_LIVE_FPS") != nullptr)
+        {
+            static auto lastBeat = std::chrono::steady_clock::now();
+            const auto now = std::chrono::steady_clock::now();
+            const double gap = std::chrono::duration<double>(now - lastBeat).count();
+            if (gap >= 2.0)
+            {
+                lastBeat = now;
+                std::uint64_t beatPackets = 0;
+                std::uint64_t beatFrames = 0;
+                if (betaStream_)
+                {
+                    const auto beatStats = betaStream_->stats();
+                    beatPackets = beatStats.packets;
+                    beatFrames = beatStats.frames;
+                }
+                std::fprintf(stderr,
+                             "[fps]  0.00 fps | no new frame for %.0fs "
+                             "(recv pkts=%llu frames=%llu)\n",
+                             gap, static_cast<unsigned long long>(beatPackets),
+                             static_cast<unsigned long long>(beatFrames));
+            }
+        }
+
         // 等待阶段：2.5s 无包则尝试通过 SSH 启动雷达驱动；12s 仍无包判为失败。
         if (radarState_.load() == RadarState::Waiting)
         {
@@ -1896,35 +2372,92 @@ void ViewerApp::applyIncomingFrame()
         logUi("Radar Live", detail.str());
     }
     lastRawLiveFrame_ = frame;
+    const auto perfT0 = std::chrono::steady_clock::now();
     frame = preprocessLiveFrame(frame);
+    const auto perfT1 = std::chrono::steady_clock::now();
     // 必须在清空 currentCloudId_ 之前判断，否则每帧都会误判为首帧并 resetCamera，
     // 导致相机随点云包络反复重算（表现为视角螺旋/抖动）。
     const bool firstLiveFrame = (currentCloudId_ == 0);
 
-    if (currentCloudId_ != 0)
+    currentFrameHandle_ = frame;
+    // 原始点云 4 面合成是 96×3200 = 307200 点，渲染一次要 60ms 以上，
+    // 直接决定帧率上限。超过 25 万点时按 2:1 抽稀，画面密度几乎无感，
+    // 但单帧渲染时间减半；HUD 会显示 LOD: on。
+    RenderRequest renderRequest;
+    if (frame->metadata.totalSamples > 250000)
     {
-        renderer_.remove(currentCloudId_);
-        scene_.remove(currentCloudId_);
-        currentCloudId_ = 0;
+        renderRequest.maxPoints = 200000;
+    }
+    currentRenderable_ = CloudRenderBridge::prepare(frame, renderRequest);
+    const auto perfT2 = std::chrono::steady_clock::now();
+
+    // 复用同一个场景对象 id。
+    // 原来每帧 remove + add 会生成新 id，而渲染层是按 id 缓存整条 VTK 管线的，
+    // id 一变就只能重建 vtkPoints/Mapper/Actor —— 30 万点时单帧就要几十毫秒。
+    if (SceneObject *existing = (currentCloudId_ != 0) ? scene_.find(currentCloudId_) : nullptr)
+    {
+        existing->frame = frame;
+        existing->renderable = currentRenderable_;
+    }
+    else
+    {
+        SceneObject object;
+        object.name = "LIVE";
+        object.kind = SceneObjectKind::Cloud;
+        object.frame = frame;
+        object.renderable = currentRenderable_;
+        currentCloudId_ = scene_.add(0, std::move(object));
     }
 
-    currentFrameHandle_ = frame;
-    currentRenderable_ = CloudRenderBridge::prepare(frame);
-
-    SceneObject object;
-    object.name = "LIVE";
-    object.kind = SceneObjectKind::Cloud;
-    object.frame = frame;
-    object.renderable = currentRenderable_;
-    currentCloudId_ = scene_.add(0, std::move(object));
-
     applyColor();
+    const auto perfT3 = std::chrono::steady_clock::now();
     if (firstLiveFrame)
     {
         renderer_.resetCamera();
     }
     updateHud();
     renderer_.render();
+    const auto perfT4 = std::chrono::steady_clock::now();
+
+    // 帧率观测：每 2 秒吐一行，包含窗口帧率、最大帧间隔与各阶段耗时均值。
+    // 只看首帧截图无法判断"持续慢"还是"首帧慢"，必须按时间窗口统计。
+    // 用法：CV_LIVE_FPS=1 ./cloud_viewer
+    if (std::getenv("CV_LIVE_FPS") != nullptr)
+    {
+        const auto ms = [](const auto &a, const auto &b)
+        {
+            return std::chrono::duration<double, std::milli>(b - a).count();
+        };
+        static auto windowStart = std::chrono::steady_clock::now();
+        static auto lastFrame = windowStart;
+        static int frames = 0;
+        static double sumPre = 0.0, sumPrep = 0.0, sumCol = 0.0, sumRender = 0.0;
+        static double maxGap = 0.0;
+
+        maxGap = std::max(maxGap, ms(lastFrame, perfT4));
+        lastFrame = perfT4;
+
+        ++frames;
+        sumPre += ms(perfT0, perfT1);
+        sumPrep += ms(perfT1, perfT2);
+        sumCol += ms(perfT2, perfT3);
+        sumRender += ms(perfT3, perfT4);
+
+        const double elapsed = ms(windowStart, perfT4) / 1000.0;
+        if (elapsed >= 2.0)
+        {
+            const double n = static_cast<double>(frames);
+            std::fprintf(stderr,
+                         "[fps] %5.2f fps | frames=%d/%.1fs gap_max=%.0fms | "
+                         "pre=%.1f prep=%.1f color=%.1f render=%.1f ms\n",
+                         n / elapsed, frames, elapsed, maxGap,
+                         sumPre / n, sumPrep / n, sumCol / n, sumRender / n);
+            windowStart = perfT4;
+            frames = 0;
+            maxGap = 0.0;
+            sumPre = sumPrep = sumCol = sumRender = 0.0;
+        }
+    }
 }
 
 bool ViewerApp::loadFiles(const std::vector<std::string> &files)
@@ -2172,22 +2705,70 @@ void ViewerApp::stepFrame(int delta)
         logUi(action, "尚未加载任何文件", false);
         return;
     }
-    LoadedFile &file = files_[currentFile_];
-    if (file.index.frames.empty())
+    const int fileCount = static_cast<int>(files_.size());
+    const auto frameCountOf = [this](int index)
     {
-        logUi(action, "当前文件没有可用帧: " + file.path.filename().string(), false);
-        return;
+        return static_cast<int>(files_[static_cast<std::size_t>(index)].index.frames.size());
+    };
+
+    const int previousFile = static_cast<int>(currentFile_);
+    const int previousFrame = static_cast<int>(currentFrame_);
+    int targetFile = previousFile;
+    int targetFrame = previousFrame + delta;
+
+    // 单个 txt 往往只有 1 帧，只在文件内取模会让 Prev/Next 看起来"点了没反应"。
+    // 越过边界就切到相邻文件，这样一对按钮就能连续浏览整个文件夹。
+    if (targetFrame < 0)
+    {
+        for (int i = 1; i <= fileCount; ++i)
+        {
+            const int candidate = ((previousFile - i) % fileCount + fileCount) % fileCount;
+            if (frameCountOf(candidate) > 0)
+            {
+                targetFile = candidate;
+                targetFrame = frameCountOf(candidate) - 1;
+                break;
+            }
+        }
+    }
+    else if (targetFrame >= frameCountOf(previousFile))
+    {
+        for (int i = 1; i <= fileCount; ++i)
+        {
+            const int candidate = (previousFile + i) % fileCount;
+            if (frameCountOf(candidate) > 0)
+            {
+                targetFile = candidate;
+                targetFrame = 0;
+                break;
+            }
+        }
     }
 
-    const int count = static_cast<int>(file.index.frames.size());
-    const int previous = static_cast<int>(currentFrame_);
-    int next = previous + delta;
-    next = (next % count + count) % count;
+    if (frameCountOf(targetFile) <= 0)
+    {
+        logUi(action, "当前没有可用帧", false);
+        return;
+    }
+    if (targetFrame < 0 || targetFrame >= frameCountOf(targetFile))
+    {
+        targetFrame = 0;
+    }
 
-    loadFrame(currentFile_, static_cast<std::size_t>(next));
+    loadFrame(static_cast<std::size_t>(targetFile), static_cast<std::size_t>(targetFrame));
+    // 故意不重置相机：翻页时保持当前视角，方便对比不同文件的同一方位。
+    // 点云若跑到视野外，用户按 R（Reset）手动重算即可。
     renderer_.render();
-    logUi(action, file.path.filename().string() + " 帧 " + std::to_string(previous) +
-                     " -> " + std::to_string(next) + " / " + std::to_string(count));
+
+    const std::string fromName =
+        files_[static_cast<std::size_t>(previousFile)].path.filename().string();
+    const std::string toName =
+        files_[static_cast<std::size_t>(targetFile)].path.filename().string();
+    const std::string where =
+        (targetFile == previousFile) ? fromName : fromName + " -> " + toName;
+    logUi(action, where + " 帧 " + std::to_string(previousFrame) + " -> " +
+                     std::to_string(targetFrame) + " / " +
+                     std::to_string(frameCountOf(targetFile)));
 }
 
 void ViewerApp::handleKey(const std::string &key)
@@ -2290,8 +2871,21 @@ void ViewerApp::selectAt(int displayX, int displayY)
     std::ostringstream text;
     text << "Picked point\n";
     text << "file: " << object->frame->metadata.sourcePath.filename().string() << "\n";
+    // 原始点云 4 面合成后矩阵是 96×3200，直接用矩阵列会显示到 3199；
+    // 物理 slot 仍是 0~799。PointData 里记着真实行/列（解析时写入），优先用它。
+    int rowIndex = ref.matrixRow;
+    int colIndex = ref.matrixCol;
+    const bool originLayout =
+        object->frame->metadata.algorithmId.find("origin") != std::string::npos;
+    if (originLayout && point.pixel_idx < matrix.size() &&
+        point.slot_idx < matrix[ref.matrixRow].size())
+    {
+        rowIndex = static_cast<int>(point.pixel_idx);
+        colIndex = static_cast<int>(point.slot_idx);
+    }
+
     text << "frame: " << object->frame->metadata.frameNumber
-         << "  row/col: " << ref.matrixRow << "/" << ref.matrixCol << "\n";
+         << "  row/col: " << rowIndex << "/" << colIndex << "\n";
     text << "xyz: " << formatFloat(point.x) << ", " << formatFloat(point.y)
          << ", " << formatFloat(point.z) << " m\n";
     text << "r: " << formatFloat(point.r) << " m\n";
@@ -2336,6 +2930,14 @@ void ViewerApp::updateHud()
     }
 
     std::ostringstream text;
+    // 渲染帧率放首行：拖动视角时能直接看到是否掉帧。
+    text << "FPS: " << formatFloat(displayFps_, 1);
+    if (interacting_)
+    {
+        text << "  [interacting, cloud paused]";
+    }
+    text << "\n";
+
     if (files_.empty() && !radarConnected_)
     {
         text << "No point cloud loaded\n";
@@ -2431,11 +3033,9 @@ void ViewerApp::updateHud()
                                                         : "Hist";
         ui_.setLabel(modeButtonIndex_, std::string("Mode: ") + betaModeName);
     }
-    if (faceButtonIndex_ < ui_.size())
-    {
-        ui_.setLabel(faceButtonIndex_, "Faces: " + faceMaskLabel(betaFaceMask_));
-    }
-    else
+    // 面按钮的标签（F1* 表示启用）；不可见时刷新也无副作用。
+    updateFaceButtons();
+    if (!betaStream_)
     {
         ui_.setLabel(modeButtonIndex_, liveMode_ == RadarOutputMode::Range ? "Mode: Range" : "Mode: Cloud");
     }
@@ -2493,6 +3093,11 @@ int ViewerApp::run(const std::vector<std::string> &files, double fps,
     // 恢复上次选择的标定表与开关状态（文件已复制到软件目录 calib/）。
     {
         const ViewerSettings saved = loadViewerSettings();
+        if (!saved.lastDeviceIp.empty())
+        {
+            lastDeviceIp_ = saved.lastDeviceIp;
+            std::cout << "[cloud_viewer] 上次连接的设备: " << lastDeviceIp_ << "\n";
+        }
         if (!saved.calibrationFile.empty())
         {
             const auto path = calibrationDirectory() / saved.calibrationFile;
@@ -2526,8 +3131,9 @@ int ViewerApp::run(const std::vector<std::string> &files, double fps,
             saveViewerSettings(settings, saveError);
         }
     }
-    // 便于自动化验证：设置后启动即执行一次设备搜索。
-    if (std::getenv("CV_AUTO_SEARCH") != nullptr)
+    // 启动即搜索一次（广播 + 6532 探测），让“先搜索再连接”的流程开箱可用。
+    // CV_NO_AUTO_SEARCH=1 可关闭，CV_FORCE_SCAN=1 则跳过广播直接扫描。
+    if (std::getenv("CV_NO_AUTO_SEARCH") == nullptr)
     {
         searchDevices();
     }
@@ -2590,14 +3196,31 @@ int ViewerApp::run(const std::vector<std::string> &files, double fps,
     auto *interactor = renderer_.interactor();
     interactor->Initialize();
 
-    // 左下角坐标轴。
+    // 坐标轴画在世界原点，轴长固定 1m。
+    // 原来用 vtkOrientationMarkerWidget 只能钉在视口角落，而且长度随视口缩放，
+    // 看不出真实尺度；改成普通 actor 后长度就是 1m，可用来目测点云比例。
     auto axes = vtkSmartPointer<vtkAxesActor>::New();
-    auto marker = vtkSmartPointer<vtkOrientationMarkerWidget>::New();
-    marker->SetOrientationMarker(axes);
-    marker->SetInteractor(interactor);
-    marker->SetViewport(0.0, 0.0, 0.15, 0.15);
-    marker->SetEnabled(1);
-    marker->InteractiveOn();
+    axes->SetPosition(0.0, 0.0, 0.0);
+    axes->SetTotalLength(1.0, 1.0, 1.0);
+    axes->SetShaftTypeToLine(); // 1m 尺度下圆柱太粗，会挡住点云
+    axes->SetConeRadius(0.02);
+    // 直接加到主 renderer 之后，X/Y/Z caption 的尺寸按整个视口归一化，
+    // 默认会大到遮住画面（widget 里显小是因为它的 viewport 只有屏幕 15%）。
+    for (vtkCaptionActor2D *cap : {axes->GetXAxisCaptionActor2D(),
+                                   axes->GetYAxisCaptionActor2D(),
+                                   axes->GetZAxisCaptionActor2D()})
+    {
+        if (cap)
+        {
+            cap->SetWidth(0.04);
+            cap->SetHeight(0.015);
+            cap->GetCaptionTextProperty()->SetFontSize(12);
+        }
+    }
+    if (auto *vtkRen = renderer_.renderer())
+    {
+        vtkRen->AddActor(axes);
+    }
 
     if (fps > 0.0)
     {
@@ -2655,13 +3278,26 @@ int ViewerApp::run(const std::vector<std::string> &files, double fps,
             updateHud();
         }
 
-        renderer_.window()->SetOffScreenRendering(1);
+        // 截图前先启一个 0 大小的 orientation widget。
+        // 它的 SetEnabled(1) 会把渲染窗口切到多层渲染并完成一次完整绘制，
+        // 否则本机这套 VTK 在取窗口像素时拿不到有效 buffer，两个取帧 filter
+        // （vtkWindowToImageFilter / vtkRenderLargeImage）都会在 memcpy 越界。
+        // viewport 取 0.001 保证它在画面上不可见。
+        auto shotAxes = vtkSmartPointer<vtkAxesActor>::New();
+        auto shotMarker = vtkSmartPointer<vtkOrientationMarkerWidget>::New();
+        shotMarker->SetOrientationMarker(shotAxes);
+        shotMarker->SetInteractor(interactor);
+        shotMarker->SetViewport(0.0, 0.0, 0.001, 0.001);
+        shotMarker->SetEnabled(1);
+
+        renderer_.render();
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
         renderer_.render();
 
         auto grabber = vtkSmartPointer<vtkWindowToImageFilter>::New();
         grabber->SetInput(renderer_.window());
         grabber->SetInputBufferTypeToRGB();
-        grabber->ReadFrontBufferOff();
+        grabber->ReadFrontBufferOn();
         grabber->Update();
 
         auto writer = vtkSmartPointer<vtkPNGWriter>::New();

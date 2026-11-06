@@ -32,12 +32,22 @@ enum class RadarModel
     Unknown = 0,
     AlphaRotating,
     BetaRotating,
+    /// CS120 Gamma：SL100 的 dToF SPAD，120×800。沿用 Beta 的解析链路与 UI，
+    /// 差异只在规格（120 线/包长）与面号策略（设备不做 PA 纠偏）。
+    GammaRotating,
     Fl6031,
     Fl6532,
     Generic
 };
 
 const char *radarModelName(RadarModel model);
+
+/// 转镜雷达（Alpha / Beta / Gamma）共用同一套解析、面选择与标定链路。
+inline bool isRotatingModel(RadarModel model)
+{
+    return model == RadarModel::AlphaRotating || model == RadarModel::BetaRotating ||
+           model == RadarModel::GammaRotating;
+}
 
 /// 着色源。字段名与界面显示名一一对应。
 enum class ColorSource
@@ -118,12 +128,15 @@ struct CloudFrame
 using FrameHandle = std::shared_ptr<const CloudFrame>;
 
 /// 建立一帧，并填充统计与派生标量场。
+/// only != Unknown 时只生成该颜色源的标量场：在线点云每帧 30 万点，
+/// 13 个场全填要 400 万次写入 + 15MB 分配，是掉帧主因之一。
 std::shared_ptr<CloudFrame> makeFrame(algo_lidar::PointMatrix points,
                                       FrameMetadata metadata,
-                                      FrameId id = 0);
+                                      FrameId id = 0,
+                                      std::optional<ColorSource> only = std::nullopt);
 
-/// 重新计算可用字段与标量 sidecar（原地）。
-void rebuildDerivedFields(CloudFrame &frame);
+/// 重新计算可用字段与标量 sidecar（原地）。only 同上。
+void rebuildDerivedFields(CloudFrame &frame, std::optional<ColorSource> only = std::nullopt);
 
 /// 多帧序列描述。不永久持有整个 PointMatrix，只保存定位信息。
 struct FrameDescriptor

@@ -99,6 +99,10 @@ bool UiOverlay::handleClick(int displayX, int displayY, int windowWidth, int win
 
     for (auto &button : buttons_)
     {
+        if (!button.visible)
+        {
+            continue; // 隐藏按钮不参与命中，避免与三维交互抢事件。
+        }
         if (nx >= button.x && nx <= button.x + button.width &&
             ny >= button.y && ny <= button.y + button.height)
         {
@@ -132,6 +136,29 @@ void UiOverlay::setLabel(std::size_t index, const std::string &label)
     if (buttons_[index].text)
     {
         buttons_[index].text->SetInput(label.c_str());
+    }
+}
+
+void UiOverlay::setVisible(std::size_t index, bool visible)
+{
+    if (index >= buttons_.size())
+    {
+        return;
+    }
+    UiButton &button = buttons_[index];
+    if (button.visible == visible)
+    {
+        return;
+    }
+    button.visible = visible;
+    const int flag = visible ? 1 : 0;
+    if (button.background)
+    {
+        button.background->SetVisibility(flag);
+    }
+    if (button.text)
+    {
+        button.text->SetVisibility(flag);
     }
 }
 

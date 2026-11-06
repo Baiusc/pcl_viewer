@@ -37,6 +37,17 @@ public:
     {
         std::string radarIp = "10.42.0.218";
         std::uint16_t localPort = 50007;
+        /// 雷达规格：垂直线数 / 每帧 slot 数。
+        /// 96×800（IMX459）与 120×800（SL100）的点数、包长、俯仰角间隔都不同，
+        /// 由广播上报的 lineCount/slotsPerFrame 决定；默认 96×800 保持旧行为。
+        int lines = 96;
+        int slots = 800;
+        /// 标定里的俯仰中心线 u（SPAD 中心线）。-1 表示按 (lines-1)/2 推导。
+        /// 120 线 Gamma 的 u 仍是 47，按推导会得 59，整体上仰约 2°。
+        int pitchCenter = -1;
+        /// 原始点云的面号来源：true 用帧号（Gamma 板端就是 frame_id%4，不做 PA 纠偏），
+        /// false 用 PA 编码器区间判定（Beta 必须，FPGA 帧号实测 99.9% 错位）。
+        bool faceFromFrameId = false;
     };
 
     struct Stats
@@ -82,16 +93,33 @@ public:
                             std::uint16_t &frameIndex, std::uint16_t &slot,
                             algo_lidar::PointData *points, int &pointCount);
 
+    /// 按指定规格解析真实点云包，供单元测试覆盖 120×800（1578B）。
+    static bool parsePacket(const std::uint8_t *data, std::size_t size, int lines, int slots,
+                            std::uint16_t &frameIndex, std::uint16_t &slot,
+                            algo_lidar::PointData *points, int &pointCount);
+
     /// PA 固定机械四分区：以 0/90/180/270 度为中心，不依赖标定文件。
     /// F1=[315,360)∪[0,45)，F2=[45,135)，F3=[135,225)，F4=[225,315)。
     static int faceFromPa(std::uint32_t mirrorAngle);
 
-    static constexpr std::size_t kCartesianPacketSize = 1266;
-    static constexpr std::size_t kOriginPacketSize = 1561;
+    static constexpr std::size_t kCartesianPacketSize = 1266; // 96 线真实点云
+    static constexpr std::size_t kOriginPacketSize = 1561;    // 96 线原始点云
     static constexpr std::size_t kHistogramPacketSize = 4105;
     static constexpr int kLines = 96;
     static constexpr int kSlots = 800;
     static constexpr int kBins = 512;
+
+    /// 按线数计算真实点云包长：18B 头 + lines×13B。
+    static constexpr std::size_t cartesianPacketSize(int lines)
+    {
+        return 18 + static_cast<std::size_t>(lines) * 13;
+    }
+
+    /// 按线数计算原始点云包长：9B 头 + 16B slot 头 + lines×16B。
+    static constexpr std::size_t originPacketSize(int lines)
+    {
+        return 9 + 16 + static_cast<std::size_t>(lines) * 16;
+    }
 
 private:
     struct Impl;
