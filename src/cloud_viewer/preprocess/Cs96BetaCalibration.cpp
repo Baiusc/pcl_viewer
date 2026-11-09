@@ -847,16 +847,29 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     //   hc    = encoder[scale] + 0.0009·real - starting[face]，wrap 到 ±180
     //   omega = hc·2 + omega0
     // 编码器表与面起始角属结构参数（PA 实测、非逐线修正），任何开关下都保留。
-    const int scale = static_cast<int>((mirrorAngle >> 12) & 0xFF);
-    const int realAngle = static_cast<int>(mirrorAngle & 0xFFF);
+    const int scale = static_cast<int>((mirrorAngle >> 12) & 0xFF); // 8位 0-256 0-240
+    const int realAngle = static_cast<int>(mirrorAngle & 0xFFF); // 0-4095 0-1700 12位
     if (slot != 0 && scale >= static_cast<int>(encoderAngle_.size())) return;
     // slot0 为同步标记，严格保留设备的 omega0 -> *2 + omega0 分支。
     float hc = omega0_;
     if (slot != 0)
     {
-        hc = encoderAngle_[scale] + 0.0009f * static_cast<float>(realAngle) - startingAngle_[face];
-        if (hc > 180.0f) hc -= 360.0f;
-        else if (hc < -180.0f) hc += 360.0f;
+        // 计算 码盘水平角
+        // const float encoderPart = 360.f/240 * scale ;                 // debug 若不查表
+        const float encoderPart = encoderAngle_[scale];                 // 码盘一圈360°分成 240 个刻度 编码器查表
+        const float realPart = 0.0009f * static_cast<float>(realAngle); // 计时估算的细角度 1.53°/1700 = 0.0009
+        const float startPart = startingAngle_[face];                   // 本面起始角
+
+        hc = encoderPart + realPart - startPart;
+        // wrap 到 [-180, 180]
+        if (hc > 180.0f) 
+        {
+            hc -= 360.0f;
+        }
+        else if (hc < -180.0f)
+        {
+            hc += 360.0f;
+        }
     }
     // 单面视场只有约 120°，面间 90° 偏移不能加进来，否则 4 个面会被摊成 360°。
     float omegaDeg = hc * 2.0f + omega0_;
