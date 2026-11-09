@@ -1,6 +1,7 @@
 #include "cloud_viewer/preprocess/Cs96BetaCalibration.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
@@ -800,7 +801,23 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
 {
     point.pixel_idx = static_cast<std::uint16_t>(pixel);
     point.slot_idx = slot;
-    point.peak = peak;
+    if (slot > 1)
+    {
+        int kdebug = 1;
+    }
+    // 调试开关：CV_BETA_SLOT_TRACE=1 时限流打印 slot/pixel 序列
+    // （每 2000 次调用一行，约每秒 400 行，不阻塞接收线程）。
+    // 实测设备推流的首个 slot 是 2，slot 0/1 从未进入过本函数。
+    if (0)
+    {
+        static std::atomic<unsigned long> traceCount{0};
+        if ((traceCount.fetch_add(1, std::memory_order_relaxed) % 2000) == 0)
+        {
+            std::fprintf(stderr, "[slot] slot=%u pixel=%d\n",
+                         static_cast<unsigned>(slot), pixel);
+            std::fflush(stderr);
+        }
+    }
     point.select_idx = 0;
     point.timestamp = 0;
     point.is_tail_pt = false;

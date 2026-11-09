@@ -232,6 +232,7 @@ bool parseOrigin(const std::uint8_t *data, ParsedPacket &packet,
             packet.face = BetaUdpStream::faceFromPa(mirrorAngle);
         }
     }
+
     const std::uint8_t *pixels = data + kOriginHead + kOriginSlotHead;
     for (int i = 0; i < lines; ++i)
     {
