@@ -130,8 +130,10 @@ bool parseCartesian(const std::uint8_t *data, ParsedPacket &packet, int lines, i
         point.y = y;
         point.z = z;
         point.r = std::sqrt(x * x + y * y + z * z);
-        point.theta = pitchDegrees(line, lines);
-        point.slot_ang = static_cast<float>(packet.index * degPerSlot);
+        point.theta = static_cast<float>(std::asin(z / std::max(point.r, 1e-6f)) * 180.0 / M_PI);
+        // 真实点云的 xyz 由 arm 算好，方位角 和 俯仰角 直接反算，别再按 slot 线性铺。
+        // 实测：一个面 120°/800 slot，方向与 index 递增相反。
+        point.slot_ang = static_cast<float>(std::atan2(y, x) * 180.0 / M_PI);
         point.intensity = albedo;
         point.reflect = static_cast<float>(albedo);
         point.peak = 0;
