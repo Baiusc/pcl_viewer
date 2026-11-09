@@ -86,6 +86,15 @@ public:
     bool loaded() const { return loaded_; }
     const std::filesystem::path &directory() const { return directory_; }
 
+    /// 把当前标定写回单文件聚合表，格式与 tools/pack_cs96beta_calibration.py 一致。
+    /// 用于「选一个目录标定包，一键更新 cs96beta_calibration.csv」。
+    /// 只导出解算实际用到的 section；vcsel_index / light_intensity 不参与几何，不写回。
+    ///
+    /// base 用于「目录里缺某一份数据」时继承旧表：例如新标定包没有
+    /// reflectivity_map.csv，此时沿用 base 的反射率，避免覆盖后反射率查表失效。
+    bool exportUnifiedCsv(const std::filesystem::path &path, std::string &error,
+                          const Cs96BetaCalibration *base = nullptr) const;
+
     /// 标定表记录的规格：垂直线数 / 每帧 slot 数。
     /// 96×800（IMX459）与 120×800（SL100）的标定表不能混用，连接时需比对。
     int lineCount() const { return linesV_; }

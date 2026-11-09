@@ -301,6 +301,10 @@ void ViewerApp::setupInteraction()
     calibrationButtonIndex_ = ui_.size();
     ui_.addButton("App Cal: OFF", 0.415, 0.863, 0.205, kButtonHeight,
                   [this] { toggleLiveCalibration(); });
+    // 一键把目录标定包（ys_calibration.ini + ys_encoder_angle.csv + spot_slope_map.csv）
+    // 打包回聚合表 cs96beta_calibration.csv。
+    ui_.addButton("Update Calib", 0.630, 0.863, 0.150, kButtonHeight,
+                  [this] { updateCalibTableFromDirectory(); });
 
     // 面选择：F1..F4 独立开关，任意组合；All 一键全开。
     for (int index = 0; index < 4; ++index)
@@ -1098,17 +1102,40 @@ void ViewerApp::connectBeta(const std::string &ip)
     if (!betaCalibration_)
     {
         betaCalibration_ = std::make_shared<Cs96BetaCalibration>();
-        std::filesystem::path source = gammaSpec ? "data/param/cs120gamma_calibration.csv"
-                                                 : "data/param/cs96beta_calibration.csv";
+        const std::string csvName =
+            gammaSpec ? "cs120gamma_calibration.csv" : "cs96beta_calibration.csv";
+        // 资源路径不能只看 cwd：从 IDE、启动器或别的目录启动时 cwd 不是项目根，
+        // 会出现「文件明明存在却报无法打开」。按 exe 目录优先，cwd 兜底。
+        std::vector<std::filesystem::path> candidates;
         if (const char *override = std::getenv("CV_BETA_CALIB"))
         {
-            source = override;
+            candidates.emplace_back(override);
         }
-        std::error_code ec;
-        if (!std::filesystem::exists(source, ec))
+        else
         {
-            const std::filesystem::path legacy = gammaSpec ? "data/param/cs120gamma_calib_data"
-                                                           : "data/param/cs96beta_calib_data";
+            const auto exeDir = executableDirectory();
+            candidates.push_back(exeDir / "calib" / csvName); // Select Calib 的落地目录
+            candidates.push_back(exeDir / "data" / "param" / csvName);
+            candidates.push_back(exeDir.parent_path() / "data" / "param" / csvName);
+            candidates.push_back(std::filesystem::path("data") / "param" / csvName);
+        }
+
+        std::error_code ec;
+        std::filesystem::path source;
+        for (const auto &candidate : candidates)
+        {
+            if (std::filesystem::exists(candidate, ec))
+            {
+                source = candidate;
+                break;
+            }
+        }
+        if (source.empty())
+        {
+            source = candidates.front();
+            const std::filesystem::path legacy =
+                source.parent_path() /
+                (gammaSpec ? "cs120gamma_calib_data" : "cs96beta_calib_data");
             if (std::filesystem::is_directory(legacy, ec))
             {
                 logUi("Calib", "未找到 " + source.string() + "，回退目录布局 " + legacy.string());
@@ -2042,12 +2069,98 @@ void ViewerApp::loadBetaCalibration()
 
     betaCalibration_ = calibration;
     betaCalibrationEnabled_ = true;
+    // 正在运行的流持有的是**连接那一刻**的指针。不同步的话，这里换表只改了界面状态，
+    // 实际解算仍用旧表（甚至兜底公式），用户完全无从判断有没有生效。
+    if (betaStream_)
+    {
+        betaStream_->setCalibration(betaCalibration_);
+        betaStream_->setCalibrationEnabled(betaCalibrationEnabled_);
+        logUi("Select Calib", "已把新标定推送给正在运行的解码线程");
+    }
     controlState_ = "CS96 Beta calibration: " + stored.filename().string();
     const auto &starts = betaCalibration_->startingAngles();
     std::ostringstream detail;
     detail << "CS96 Beta 标定已加载: " << stored.string()
            << " start=" << starts[0] << "," << starts[1] << "," << starts[2] << "," << starts[3];
     logUi("Select Calib", detail.str());
+    updateHud();
+    renderer_.render();
+}
+
+void ViewerApp::updateCalibTableFromDirectory()
+{
+    if (!FileDialogService::available())
+    {
+        logUi("Update Calib", "系统文件对话框不可用", false);
+        return;
+    }
+
+    const auto chosen = FileDialogService::chooseDirectory();
+    if (!chosen.has_value() || chosen->empty())
+    {
+        logUi("Update Calib", "用户取消目录选择", false);
+        return;
+    }
+    const std::filesystem::path directory = *chosen;
+
+    // 目录布局：ys_calibration.ini + ys_encoder_angle.csv + spot_slope_map.csv
+    auto calibration = std::make_shared<Cs96BetaCalibration>();
+    std::string error;
+    if (!calibration->load(directory, error))
+    {
+        logUi("Update Calib", "目录标定解析失败: " + error, false);
+        return;
+    }
+
+    std::error_code ec;
+    if (!std::filesystem::exists(directory / "spot_slope_map.csv", ec) &&
+        std::filesystem::exists(directory / "spot_slope_map.bin", ec))
+    {
+        logUi("Update Calib", "目录里只有 spot_slope_map.bin（暂不支持解析），本次不含 FPGA 旋转角修正",
+              false);
+    }
+
+    const auto target = executableDirectory() / "calib" / "cs96beta_calibration.csv";
+    std::filesystem::create_directories(target.parent_path(), ec);
+
+    // 以现有表为基底：目录包里没有的部分（反射率、角度曲线）继续沿用，
+    // 否则一次"更新"就会把没提供的 section 整段清空。
+    Cs96BetaCalibration previous;
+    if (std::filesystem::exists(target, ec))
+    {
+        std::string ignored;
+        previous.load(target, ignored);
+    }
+
+    if (!calibration->exportUnifiedCsv(target, error, previous.loaded() ? &previous : nullptr))
+    {
+        logUi("Update Calib", "导出聚合表失败: " + error, false);
+        return;
+    }
+
+    // 立刻回读校验：宁可这次不生效，也不要让写坏的表覆盖掉原来好用的表。
+    Cs96BetaCalibration verify;
+    if (!verify.load(target, error))
+    {
+        logUi("Update Calib", "回读校验失败（文件已写入但未启用）: " + error, false);
+        return;
+    }
+
+    betaCalibration_ = calibration;
+    betaCalibrationEnabled_ = true;
+    if (betaStream_)
+    {
+        betaStream_->setCalibration(betaCalibration_);
+        betaStream_->setCalibrationEnabled(betaCalibrationEnabled_);
+    }
+
+    const auto &starts = betaCalibration_->startingAngles();
+    std::ostringstream detail;
+    detail << "已更新 " << target.string() << " (" << verify.lineCount() << "x"
+           << verify.slotCount() << ") start=" << starts[0] << "," << starts[1] << ","
+           << starts[2] << "," << starts[3];
+    logUi("Update Calib", detail.str());
+    controlState_ = "CS96 Beta calibration updated from " + directory.filename().string();
     updateHud();
     renderer_.render();
 }
@@ -2964,6 +3077,22 @@ void ViewerApp::updateHud()
                  << formatFloat(lastRange_.maxValue, 3) << "] n=" << lastRange_.finiteCount;
         }
         text << "\n";
+        // 标定到底有没有生效，必须显式写出来：之前只靠控制台日志，
+        // 手动换表后实际解算仍走旧表，界面上完全看不出来。
+        if (isRotatingModel(activeModel_))
+        {
+            text << "Calib: ";
+            if (betaCalibration_ && betaCalibration_->loaded())
+            {
+                text << (betaCalibrationEnabled_ ? "ON" : "OFF") << "  "
+                     << betaCalibration_->lineCount() << "x" << betaCalibration_->slotCount();
+            }
+            else
+            {
+                text << "未加载（纯几何兜底）";
+            }
+            text << "\n";
+        }
         if (currentRenderable_)
         {
             text << "Points: " << currentRenderable_->displayed << "/"

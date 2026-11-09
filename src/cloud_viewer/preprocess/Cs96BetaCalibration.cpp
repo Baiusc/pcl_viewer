@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <sstream>
 
@@ -131,7 +132,23 @@ bool Cs96BetaCalibration::load(const std::filesystem::path &path, std::string &e
         // spot_slope_map 不是整圈编码器表，缺表直接报告，避免静默使用错误几何。
         if (!parseEncoderAngle(path / "ys_encoder_angle.csv", error)) return false;
         parseReflectivity(path / "reflectivity_map.csv", error);
-        parseSpotSlope(path / "spot_slope_map.csv", error);
+
+        // FPGA 旋转角曲线有两种命名：旧的 spot_slope_map.csv，新的 angle_calib_YYYYMMDD.csv。
+        std::filesystem::path spotPath = path / "spot_slope_map.csv";
+        std::error_code spotEc;
+        if (!std::filesystem::exists(spotPath, spotEc))
+        {
+            for (const auto &entry : std::filesystem::directory_iterator(path, spotEc))
+            {
+                const std::string name = entry.path().filename().string();
+                if (entry.path().extension() == ".csv" && name.rfind("angle_calib", 0) == 0)
+                {
+                    spotPath = entry.path();
+                    break;
+                }
+            }
+        }
+        parseSpotSlope(spotPath, error);
     }
     else
     {
@@ -927,6 +944,120 @@ float Cs96BetaCalibration::spotSlopeCorrection(float angleDeg, int face) const
         }
     }
     return angleDeg + diff;
+}
+
+bool Cs96BetaCalibration::exportUnifiedCsv(const std::filesystem::path &path, std::string &error,
+                                           const Cs96BetaCalibration *base) const
+{
+    if (!loaded_)
+    {
+        error = "标定未加载，无法导出";
+        return false;
+    }
+
+    std::ofstream out(path);
+    if (!out.is_open())
+    {
+        error = "无法写入 " + path.string();
+        return false;
+    }
+
+    const auto number = [](float value)
+    {
+        std::ostringstream text;
+        // 9 位有效数字足够覆盖标定值（角度/系数），又不会写出一长串尾数。
+        text << std::setprecision(9) << value;
+        return text.str();
+    };
+
+    out << "section,key,index,value0,value1,value2,value3,value4,value5\n";
+
+    const auto parameter = [&](const char *key, const std::string &value)
+    {
+        out << "parameter," << key << ",," << value << ",,,,,\n";
+    };
+    parameter("lines_v", std::to_string(linesV_));
+    parameter("lines_h", std::to_string(linesH_));
+    parameter("u", std::to_string(u_));
+    parameter("omega0", number(omega0_));
+    parameter("sat_peak_max", std::to_string(satPeakMax_));
+    parameter("sat_peak_min", std::to_string(satPeakMin_));
+    parameter("dist_max", number(distMax_));
+    parameter("theta_min", number(thetaMin_));
+    parameter("theta_max", number(thetaMax_));
+    parameter("theta_tilt", number(thetaTilt_));
+
+    // 面起始角由 standard_encoder(计数) + side_angular_offset 派生，
+    // 所以写回这两项、不写 starting_angle，重新加载时 finalizeGeometry 会重算。
+    for (int face = 0; face < kFaces; ++face)
+    {
+        out << "side_angular_offset,," << face << "," << number(sideAngularOffset_[face])
+            << ",,,,,\n";
+    }
+    for (int face = 0; face < kFaces; ++face)
+    {
+        out << "standard_encoder,angle_face_" << (face + 1) << "," << face << ","
+            << number(standardEncoder_[face]) << ",,,,,\n";
+    }
+
+    for (std::size_t i = 0; i < omegaDelta_.size(); ++i)
+    {
+        out << "horizontal_angular_offset,," << i << "," << number(omegaDelta_[i]) << ",,,,,\n";
+    }
+    for (std::size_t i = 0; i < dDelta_.size(); ++i)
+    {
+        out << "zero_distance_offset,," << i << "," << number(dDelta_[i]) << ",,,,,\n";
+    }
+    for (std::size_t i = 0; i < aFactor_.size(); ++i)
+    {
+        out << "distance_factor,," << i << "," << number(aFactor_[i]) << ",,,,,\n";
+    }
+    for (std::size_t i = 0; i < encoderAngle_.size(); ++i)
+    {
+        out << "encoder_angle,," << i << "," << number(encoderAngle_[i]) << ",,,,,\n";
+    }
+
+    // 目录标定包常常没有 reflectivity_map.csv / 角度曲线；此时沿用旧表，
+    // 否则一次「更新」会把反射率查表和 FPGA 旋转角修正整段清空。
+    const std::vector<ReflectivityRow> &reflectRows =
+        (!reflectivityRows_.empty() || base == nullptr) ? reflectivityRows_
+                                                        : base->reflectivityRows_;
+    for (const auto &row : reflectRows)
+    {
+        out << "reflectivity,," << row.pixel << "," << number(row.distance);
+        for (float reference : row.reference)
+        {
+            out << "," << number(reference);
+        }
+        out << "\n";
+    }
+
+    bool ownSpotSlope = false;
+    for (const auto &curve : spotSlope_)
+    {
+        if (!curve.empty())
+        {
+            ownSpotSlope = true;
+            break;
+        }
+    }
+    const auto &spotCurves = (ownSpotSlope || base == nullptr) ? spotSlope_ : base->spotSlope_;
+    for (int face = 0; face < kFaces; ++face)
+    {
+        for (const auto &entry : spotCurves[static_cast<std::size_t>(face)])
+        {
+            out << "spot_slope,," << (face + 1) << "," << number(entry.first) << ","
+                << number(entry.second) << ",,,,\n";
+        }
+    }
+
+    out.flush();
+    if (!out.good())
+    {
+        error = "写入失败: " + path.string();
+        return false;
+    }
+    return true;
 }
 
 } // namespace cloud_viewer

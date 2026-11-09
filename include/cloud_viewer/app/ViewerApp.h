@@ -97,6 +97,8 @@ private:
     void loadLiveCalibration();
     /// 按当前型号加载对应格式的标定表（6532 用 bin，CS96 Beta 用聚合 CSV）。
     void loadBetaCalibration();
+    /// 选一个目录标定包（ini + encoder_angle + spot_slope），解析后写回聚合 CSV 并立即生效。
+    void updateCalibTableFromDirectory();
     /// 连接成功后确立型号，并据此调整与设备型号相关的按钮显隐。
     void setActiveRadarModel(RadarModel model);
     void updateModelDependentUi();
