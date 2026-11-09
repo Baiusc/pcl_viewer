@@ -303,7 +303,9 @@ void ViewerApp::setupInteraction()
                   [this] { toggleLiveCalibration(); });
     // 一键把目录标定包（ys_calibration.ini + ys_encoder_angle.csv + spot_slope_map.csv）
     // 打包回聚合表 cs96beta_calibration.csv。
-    ui_.addButton("Update Calib", 0.630, 0.863, 0.150, kButtonHeight,
+    // 不能放在 y=0.863 这一排：面选择 F1~F4 占了 0.628~0.863，会盖住。
+    // 放设备操作行（y=0.735）右侧的空档 0.450~0.600。
+    ui_.addButton("Update Calib", 0.450, 0.735, 0.150, kButtonHeight,
                   [this] { updateCalibTableFromDirectory(); });
 
     // 面选择：F1..F4 独立开关，任意组合；All 一键全开。
