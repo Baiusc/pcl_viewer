@@ -177,12 +177,20 @@ bool Cs96BetaCalibration::finalizeGeometry(std::string &error)
     theta_.resize(static_cast<std::size_t>(linesV_), 0.0f);
 
     // 与设备端 PA 公式一致，不能用编码器表采样点代替面起始参数。
+    // for (int face = 0; face < kFaces; ++face)
+    // {
+    //     startingAngle_[face] = (standardEncoder_[face] * 256.0f + sideAngularOffset_[face]) /
+    //                            256.0f * 360.0f / kPaCountsPerRevolution;
+    // }
+    // 拆分上式  便于调试
     for (int face = 0; face < kFaces; ++face)
     {
-        startingAngle_[face] = (standardEncoder_[face] * 256.0f + sideAngularOffset_[face]) /
-                               256.0f * 360.0f / kPaCountsPerRevolution;
+        const float stdEncode_ = standardEncoder_[face];    // 第 0-3 面转镜的起始发光粗刻度 取值范围 0-240
+        const float sideOffset = sideAngularOffset_[face]; // 第 0-3 面的水平角相对于第 0 面的误差细角度 取值范围 0-255 单位为 1.5°/256
+        const float roughAngle = stdEncode_ / 240.f * 360.f; // 4面起始发光角 粗角度
+        const float offsetAngle = sideOffset / 256.f * 1.5f; // 4面零位角 细角度
+        startingAngle_[face] = roughAngle + offsetAngle;
     }
-
 
     // 俯仰角：与下位机 CalculateTheta 一致（像素倒序映射）。
     const float step = (thetaMax_ - thetaMin_) / static_cast<float>(linesV_);
@@ -838,7 +846,7 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     //   r = c·(ft >> 1)·a[pixel] + d_delta[pixel]
     // 关闭 distanceCorrection 等价于 a = 1、d_delta = 0。
     float r = kLightSpeed * static_cast<float>(ft >> 1);
-    if (options.distanceCorrection)
+    if (options.distanceCorrection )  // debug 可选 || 1 一直开
     {
         r = r * aFactor_[index] + dDelta_[index]; // 设备端直接按米相加（ys_decode_common.c）
     }
@@ -864,11 +872,11 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
         // wrap 到 [-180, 180]
         if (hc > 180.0f) 
         {
-            hc -= 360.0f;
+            hc -= 360.0f; 
         }
         else if (hc < -180.0f)
         {
-            hc += 360.0f;
+            hc += 360.0f;  // 尚未转过起始角，等价于绕一整圈后到达
         }
     }
     // 单面视场只有约 120°，面间 90° 偏移不能加进来，否则 4 个面会被摊成 360°。
