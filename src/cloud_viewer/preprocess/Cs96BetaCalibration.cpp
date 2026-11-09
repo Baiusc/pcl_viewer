@@ -885,9 +885,7 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     point.omega_rad = omega;
     point.slot_ang = omegaDeg;
     // 坐标约定统一为：x+ 雷达正前方、y+ 雷达自身右侧、z+ 向上。
-    // omega 随 slot 从 -60° 增到 +60°（encoder_angle 表递增 + omega0=-60），
-    // 因此 y = +r·cosθ·sinω 使 slot0 落在 y<0（左侧）、slot799 落在 y>0（右侧），
-    // 与实测"左侧目标先扫到"一致；设备端内部是 y+ 左，故真实点云在那侧取反。
+
     point.x = r * std::cos(theta) * std::cos(omega);
     point.y = r * std::cos(theta) * std::sin(omega);
     point.z = r * std::sin(theta);
@@ -959,6 +957,10 @@ float Cs96BetaCalibration::spotSlopeCorrection(float angleDeg, int face) const
                 break;
             }
         }
+    }
+    if(abs(diff) > 10.f)
+    {
+        int dd_debug = 1;
     }
     return angleDeg + diff;
 }

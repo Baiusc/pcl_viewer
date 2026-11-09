@@ -162,8 +162,7 @@ int main()
           std::to_string(on.slot_ang) + " vs " + std::to_string(expectedOnOmega));
 
     // 坐标约定：x+ 雷达正前、y+ 雷达自身右侧、z+ 向上。
-    // omega 随 slot 由 -60° 增到 +60°，故 y = +r·cosθ·sinω 让 slot0 落在左侧，
-    // 与"左侧目标先扫到"一致。设备内部 y+ 向左，真实点云在 BetaUdpStream 侧取反。
+
     const float thetaRad = off.theta * (3.14159265358979323846f / 180.0f);
     const float horizontal = off.r * std::cos(thetaRad);
     const float axisTol = 1e-4f * (1.0f + std::fabs(horizontal));

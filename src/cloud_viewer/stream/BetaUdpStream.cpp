@@ -125,11 +125,9 @@ bool parseCartesian(const std::uint8_t *data, ParsedPacket &packet, int lines, i
         const std::uint8_t albedo = raw[12];
 
         algo_lidar::PointData &point = packet.points[line];
-        // 设备端 xyz 的坐标系是 x+ 前 / y+ 左（ys_decode_common.c 对 Y 取反）。
-        // viewer 统一为 x+ 前 / y+ 右，这里把 Y 翻回正方向，
-        // 与原始点云保持一致：slot0 在左（y<0）、slot799 在右（y>0）。
+
         point.x = x;
-        point.y = -y;
+        point.y = y;
         point.z = z;
         point.r = std::sqrt(x * x + y * y + z * z);
         point.theta = pitchDegrees(line, lines);

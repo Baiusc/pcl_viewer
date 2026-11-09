@@ -97,7 +97,7 @@ int main()
 
     const bool ok = outFrame == frameIndex && outSlot == slot && count == 96 &&
                     std::fabs(points[0].x - 1.5f) < 1e-5 &&
-                    // 设备 y+ 向左；viewer 统一 x+ 前 / y+ 右，故 y 取反。
+                    // 设备 y+ 向左；viewer 统一 x+ 前 / y+ 右，故 y 取反。 TODO
                     std::fabs(points[0].y + 2.5f) < 1e-5 &&
                     std::fabs(points[0].z - 3.5f) < 1e-5 &&
                     points[0].intensity == 100 && points[0].is_valid;
