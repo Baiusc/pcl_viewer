@@ -872,8 +872,11 @@ void BetaUdpStream::setCalibration(std::shared_ptr<const Cs96BetaCalibration> ca
 void BetaUdpStream::setCalibrationEnabled(bool enabled)
 {
     std::lock_guard<std::mutex> lock(impl_->mutex);
+    // 水平角方案（Alpha/Beta）与四项标定开关相互独立，重置 options 时必须保留。
+    const bool alphaAngle = impl_->options.alphaHorizontalAngle;
     impl_->options = enabled ? Cs96BetaCalibration::DecodeOptions{}
                              : Cs96BetaCalibration::DecodeOptions::allOff();
+    impl_->options.alphaHorizontalAngle = alphaAngle;
     ++impl_->optionsGeneration;
 }
 

@@ -99,6 +99,8 @@ private:
     void loadBetaCalibration();
     /// 选一个目录标定包（ini + encoder_angle + spot_slope），解析后写回聚合 CSV 并立即生效。
     void updateCalibTableFromDirectory();
+    /// 切换原始点云水平角的解算方案：Beta（查表+面起始角）/ Alpha（编码盘差分+帧中点基准）。
+    void toggleHorizontalAngleScheme();
     /// 连接成功后确立型号，并据此调整与设备型号相关的按钮显隐。
     void setActiveRadarModel(RadarModel model);
     void updateModelDependentUi();
@@ -172,6 +174,7 @@ private:
     std::size_t modeButtonIndex_ = 0;
     std::size_t roiButtonIndex_ = 0;
     std::size_t calibrationButtonIndex_ = 0;
+    std::size_t angleSchemeButtonIndex_ = 0;
     std::size_t searchButtonIndex_ = 0;
     std::size_t startBetaButtonIndex_ = 0;
     std::size_t firstDeviceButtonIndex_ = 0;
@@ -198,6 +201,8 @@ private:
     std::shared_ptr<Cs96BetaCalibration> betaCalibration_;
     /// 原始点云是否应用标定；关闭后距离/水平角/反射率全部退化为纯几何。
     bool betaCalibrationEnabled_ = true;
+    /// false = Beta 方案（查表 + 面起始角），true = Alpha 方案（编码盘差分 + 帧中点基准）。
+    bool alphaHorizontalAngle_ = false;
     int betaWorkMode_ = 2;         // 0=直方图 1=原始点云 2=真实点云
     int requestedBetaMode_ = 2;
     bool betaModeSwitch_ = false;  // modeFuture_ 的结果用于 Beta 模式切换

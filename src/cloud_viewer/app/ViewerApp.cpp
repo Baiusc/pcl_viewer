@@ -307,6 +307,11 @@ void ViewerApp::setupInteraction()
     // 放设备操作行（y=0.735）右侧的空档 0.450~0.600。
     ui_.addButton("Update Calib", 0.450, 0.735, 0.150, kButtonHeight,
                   [this] { updateCalibTableFromDirectory(); });
+    // 水平角解算方案切换：Beta（查表 + 面起始角）/ Alpha（编码盘差分 + 帧中点基准）。
+    // 两者是不同代固件对同一物理量的算法，切换后可直接对照点云形态差异。
+    angleSchemeButtonIndex_ = ui_.size();
+    ui_.addButton("Angle: Beta", 0.610, 0.735, 0.140, kButtonHeight,
+                  [this] { toggleHorizontalAngleScheme(); });
 
     // 面选择：F1..F4 独立开关，任意组合；All 一键全开。
     for (int index = 0; index < 4; ++index)
@@ -1182,7 +1187,36 @@ void ViewerApp::connectBeta(const std::string &ip)
 
     betaStream_->setCalibration(betaCalibration_);
     betaStream_->setCalibrationEnabled(betaCalibrationEnabled_);
+    // 水平角方案独立于四项标定开关，连接时单独下发一次。
+    {
+        auto options = betaStream_->decodeOptions();
+        if (options.alphaHorizontalAngle != alphaHorizontalAngle_)
+        {
+            options.alphaHorizontalAngle = alphaHorizontalAngle_;
+            betaStream_->setDecodeOptions(options);
+        }
+    }
     betaStream_->setFaceMask(betaFaceMask_);
+
+    // 调试用：连接前按环境变量把设备切到指定 work_mode
+    //（0=直方图 1=原始点云 2=真实点云），便于无人值守验证原始点云链路。
+    if (const char *wmEnv = std::getenv("CV_BETA_WORK_MODE"))
+    {
+        const int mode = std::atoi(wmEnv);
+        if (mode >= 0 && mode <= 2 && mode != betaWorkMode_)
+        {
+            std::string modeMessage;
+            if (applyBetaWorkMode(ip, mode, modeMessage))
+            {
+                betaWorkMode_ = mode;
+                logUi("Mode", "已按 CV_BETA_WORK_MODE 切到 work_mode=" + std::to_string(mode));
+            }
+            else
+            {
+                logUi("Mode", "按 CV_BETA_WORK_MODE 切换失败: " + modeMessage, false);
+            }
+        }
+    }
 
     std::string error;
     if (!betaStream_->open(config, sink, error))
@@ -2167,6 +2201,31 @@ void ViewerApp::updateCalibTableFromDirectory()
     renderer_.render();
 }
 
+void ViewerApp::toggleHorizontalAngleScheme()
+{
+    alphaHorizontalAngle_ = !alphaHorizontalAngle_;
+
+    if (betaStream_)
+    {
+        auto options = betaStream_->decodeOptions();
+        options.alphaHorizontalAngle = alphaHorizontalAngle_;
+        betaStream_->setDecodeOptions(options);
+    }
+    else if (betaCalibrationEnabled_)
+    {
+        // 未连接时先把选择记住，connectBeta 里会同步给流对象。
+    }
+
+    ui_.setLabel(angleSchemeButtonIndex_,
+                 alphaHorizontalAngle_ ? "Angle: Alpha" : "Angle: Beta");
+    logUi("Angle Scheme",
+          alphaHorizontalAngle_
+              ? "Alpha 方案：绝对编码(1/65536圈) − 帧中点基准(面起点+400×13.6+7)，×2 后过 spot_slope"
+              : "Beta 方案：查表角度 + 0.0009×real − 面起始角，×2 + omega0 后过 spot_slope");
+    updateHud();
+    renderer_.render();
+}
+
 void ViewerApp::loadLiveCalibration()
 {
     // 按当前型号选择标定格式，避免把 6532 的 bin 当成 Beta 的 CSV 解析。
@@ -3087,7 +3146,8 @@ void ViewerApp::updateHud()
             if (betaCalibration_ && betaCalibration_->loaded())
             {
                 text << (betaCalibrationEnabled_ ? "ON" : "OFF") << "  "
-                     << betaCalibration_->lineCount() << "x" << betaCalibration_->slotCount();
+                     << betaCalibration_->lineCount() << "x" << betaCalibration_->slotCount()
+                     << "  angle=" << (alphaHorizontalAngle_ ? "Alpha" : "Beta");
             }
             else
             {
@@ -3214,6 +3274,14 @@ int ViewerApp::run(const std::vector<std::string> &files, double fps,
     if (!renderer_.initialize(1280, 800))
     {
         return 11;
+    }
+
+    // 调试用：固定初始水平角方案（CV_ALPHA_ANGLE=1 选 Alpha），便于无人值守对比截图。
+    if (const char *alphaEnv = std::getenv("CV_ALPHA_ANGLE"))
+    {
+        alphaHorizontalAngle_ = (std::atoi(alphaEnv) != 0);
+        ui_.setLabel(angleSchemeButtonIndex_,
+                     alphaHorizontalAngle_ ? "Angle: Alpha" : "Angle: Beta");
     }
 
     setupInteraction();

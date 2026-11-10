@@ -106,7 +106,7 @@ mirror_angle ──拆位──> scale, real_angle ──查表──> pa_angle
 |---|---|---|
 | `240` | `kPaCountsPerRevolution` | **一圈编码器计数格数**。`kBetaEncoderAngle[]` 共 241 项（index 0~240），每格约 1.5° |
 | `61440` | 导出格式、`raw/61440×360` | `240 × 256`，把 0~360° 量化成整数写进文本。1 单位 = 360/61440 = **0.005859°**。它只是**文本编码基数**，不是物理量；取 240×256 是为了让 240 格能整除表示 |
-| `0.0009` | `encoder[scale] + 0.0009×real` | 12 位 `real_angle` 的细分步长，`4096 × 0.0009 = 3.69°`。它与 scale 的 1.5°/格 有约 2.4 倍的不一致，**来源未确认**（厂商常数，不要自行"修正"） |
+| `0.0009` | `encoder[scale] + 0.0009×real` | **转镜角速度**：`algo/ys_algo_def.h:30` 的 `g_angle_speed = 0.0009 度/us`。`real` 就是 12 位位域 `scale_time`（单位 us，`ys_core_def.h:155`），所以 `0.0009 × scale_time` 是"自该粗刻度起转过的角度"。scale 格距 1.5° 需要 1.5/0.0009 = **1667 us**，12 位满量程 4095 us（3.69°）留了约 2.4 倍余量 —— 之前的"2.4 倍不一致"其实是位宽余量，不是矛盾 |
 | `×2` | `hc * 2` | 镜面反射：镜面转 θ，反射光线转 **2θ** |
 | `-60` | `omega0` 默认值 | 视场 120°，中心对准正前方 → 范围 [-60, +60] |
 | `65536` | 旧 `angle:` 格式的增量单位 | 1/65536 圈。**与 61440 不是同一个基数**，混用会让角度整体偏 6.25% |
@@ -352,3 +352,169 @@ face = frame_index % 4
 - 真实点云已由设备算好 xyz，面号直接用 `frame_index % 4`；
 - 当前 PC 端“按 slot 分面”和“用固定 scale 段分面”都是错的，
   这是原始点云旋转异常与面选择语义混乱的共同根因。
+
+---
+
+## 9. alpha 与 beta 的水平角链条对比（源码 `2865c8b`）
+
+来源：`lidar_sdk/you_see_arm` @ `2865c8b`（alpha 转镜版本）。
+型号由编译宏 `CS96_ALPHA` / `CS96_BETA` 二选一（`Makefile:38/40`）。
+
+### 9.1 alpha 链条
+
+入口：`ys_business/ys_algo.c:415`
+
+```c
+horizontal_corner = get_horizontal_corners(p_head->slot_number, p_head->frame_index,
+                                           org_data->code_disc_angle);
+```
+
+`ys_business/algo/ys_algo_horizontal_corners.c:80-100`（alpha 生效分支）：
+
+```c
+static const double k_mirror_portion = 360.0 / MAX_ENCODER;   // MAX_ENCODER = 65536
+
+int16_t raw_diff = (int16_t)(code_disc_angle - g_omega0[now_frame_index]);
+// 跨零点归一，超过半圈就补一圈
+if (raw_diff >  MAX_ENCODER / 2) slot_angel = (raw_diff - MAX_ENCODER) * k_mirror_portion * 2;
+else if (raw_diff < -MAX_ENCODER / 2) slot_angel = (raw_diff + MAX_ENCODER) * k_mirror_portion * 2;
+else                             slot_angel = raw_diff * k_mirror_portion * 2;
+
+horizontal_corner = (slot_number != 0)
+    ? get_spot_slope(slot_angel, code_disc_angle, now_frame_index)   // 查 bin 曲线做非线性修正
+    : cal_param.omega0.f;                                             // slot0 直接 -60
+```
+
+三处基准：
+
+| 量 | 位置 | 计算 |
+|---|---|---|
+| `MAX_ENCODER` | `algo/ys_algo_def.h:18` | alpha = **65536** |
+| `g_standard_encoder[i]` | `algo/ys_algo_def.h:25` | 默认 `{0xBB8, 0x4BB8, 0x8BB8, 0xCBB8}`，间隔 `0x4000 = 90°`；标定可覆盖 |
+| `g_omega0[i]` | `ys_algo.c:263` | `get_mid_slot_code(angle_face[i], side_angular_offset[i])`，即该面**中间 slot** 的编码值 |
+
+`g_omega0` 依赖 `spot_slope_map.bin`（`ys_algo_spot_slope.c:58-79`）：
+
+- 有 bin：`calibRotateAngle_GetMidSlotCode(handle, start, offset, code_delay=7)`
+- 无 bin：`start + offset + 7 + 136*40`（`136*40 = 5440` 是固定补偿）
+
+判面（`algo/ys_algo_frame_id.c:16-60`）：
+
+```c
+if (code_disc_angle >= g_standard_encoder[0] && < [1]) now = 0;
+else if (... [1] .. [2]) now = 1;
+else if (... [2] .. [3]) now = 2;
+else                     now = 3;
+if (|code_disc_angle - 上一值| > 6000) now = 上一帧的 index;   // 突变视为错误
+if (slot_number == 0) now = (g_frame_index + 1) % 4;          // slot0 编码不准，用自增
+```
+
+### 9.2 beta 链条（同版本）
+
+`ys_business/ys_algo.c:417-422` + `algo/ys_algo_horizontal_corners.c:111-127`：
+
+```c
+integer_scale_angle = g_encoder_angle[org_data->scale];               // 241 项表
+hc = integer_scale_angle + (g_angle_speed * org_data->scale_time)     // 细分
+     - g_staring_angle[frame_id];                                     // 减该面起始角
+if (slot_number == 0) hc = 0;
+hc = hc * 2 + cal_param.omega0.f;                                     // 镜面 ×2 + 零点
+```
+
+| 量 | 位置 | 值 |
+|---|---|---|
+| `MAX_ENCODER` | `algo/ys_algo_def.h:20` | beta = **61409** |
+| `g_angle_speed` | `algo/ys_algo_def.h:30` | **0.0009 度/us** ← 这就是 `0.0009` 的出处 |
+| `g_staring_angle[i]` | `ys_algo.c:269` | `(angle_face[i] + side_angular_offset[i]) / 256 * 360 / 240` |
+
+### 9.3 差异对照
+
+| 维度 | alpha | beta |
+|---|---|---|
+| 编码输入 | `code_disc_angle`（16 位绝对编码） | `scale` 查表 + `scale_time` |
+| 细分角来源 | 编码盘直接给 | `0.0009 度/us × scale_time` |
+| 满量程 | 65536 | 61409（此版本 beta 分支**未使用**它） |
+| 判面依据 | `code_disc_angle` 四区间 + 突变保护 | `scale` 四区间 |
+| 基准点语义 | 该面**中间 slot** 的编码 | 该面**起始角**（度） |
+| 基准换算 | `get_mid_slot_code()`，可查 bin | `(angle_face + offset) / 256 × 360 / 240` |
+| `spot_slope_map.bin` | **必经环节**（`GetMidSlotCode` + `DoCalib`） | **此版本未调用**（新版才加 `get_beta_spot_slope`） |
+| `×2` 位置 | 在 `raw_diff` 换算时 | 在最后一步 |
+| slot0 | `omega0`（−60） | `0 → 0×2 + omega0 = omega0` |
+| 输出范围 | [−60, +60] | [−60, +60] |
+
+### 9.4 对 PC 端的影响
+
+- 我们 `Cs96BetaCalibration::apply()` 复刻的是 **beta 链**（`encoderAngle_[scale] + 0.0009×real − startingAngle_[face]`），
+  与 alpha 的“编码盘差分 + 中间 slot 基准”不是一套东西；
+- alpha 的 `0.0009` 是**角速度**（度/us）；beta 的 `0.0009` 是**12 位细分的每单位角度**，
+  数值相同但**含义不同**，不要因为数字一样就当成同一条公式；
+- alpha 把 `spot_slope_map.bin` 用在两处（求基准 `mid_slot_code`、逐点 `DoCalib`），
+  而我们的 PC 端只用它做逐点修正，**缺少“用 bin 求面基准”这一半**；
+- `MAX_ENCODER` 的 65536（alpha）/ 61409（beta）与导出格式的 **61440**
+  都不是同一个数，三者混用会让满圈换算差千分之几。
+
+> 待确认：`61409` 与 `61440` 相差 31，疑为笔误或实测标定值，源码无注释说明。
+
+### 9.5 alpha 的面基准 `getMidSlotCode()` 详解
+
+`g_omega0[face]` **不是**该面第一列（slot0）的编码，而是**该帧中点（约 slot 400）**的编码：
+
+```cpp
+uint16_t CalibRotateAngle::getMidSlotCode(uint16_t code_start, uint16_t code_offset,
+                                          uint16_t code_delay) {
+    float    code_spacing_per_slot = 13.6;   // 相邻 slot 的编码间隔
+    uint16_t spot_spacing          = 10;     // 相邻光斑相隔几个 slot
+    uint16_t spot_mid              = 40;     // 中间光斑是从左往右第几个
+    uint16_t code_spacing_per_spot = code_spacing_per_slot * spot_spacing;  // 136
+    return code_start + code_offset + code_delay + code_spacing_per_spot * spot_mid;
+    //     3000      +  75         +  7         + 136 * 40 = 8522
+}
+```
+
+常数逐一溯源：
+
+| 常数 | 含义 | 换算 / 依据 |
+|---|---|---|
+| `13.6` | 每 slot 的编码增量 | `13.6/65536×360 = 0.0747°` 机械；×2 = **0.1494° 光路** |
+| `spot_spacing = 10` | 相邻光斑隔 10 个 slot | 800 slot ÷ 80 光斑 = 10 |
+| `spot_mid = 40` | 中间光斑序号（80 个光斑的中间） | `40 × 10 = 400 slot` = **半帧** |
+| `code_delay = 7` | 光斑短半轴对应的旋转补偿 | `7/65536×360×2 ≈ 0.077°` |
+
+**自洽性（这是最关键的一点）**：
+
+```
+spot_mid × spot_spacing = 40 × 10 = 400 slot = 半帧
+136 × 40 = 5440 = 400 × 13.6     = 半帧的编码跨度
+```
+
+所以 `result = code_start + code_offset + 7 + 5440` 的物理含义就是
+**「该面起点 + 半帧编码」= 该帧中点 slot 的编码值**。
+
+**视场自检**：`800 × 13.6 = 10880` 编码，
+`10880 / 65536 × 360 × 2 = 119.5°`，与单面 120° 吻合 ——
+说明 `13.6` 是**设计常数**，不是实测拟合值。
+
+**为什么拿中点当零点**：
+
+```c
+raw_diff = (int16_t)(code_disc_angle - g_omega0[now_frame_index]);
+slot_angel = raw_diff * (360/65536) * 2;
+```
+
+以帧中点为 0，则 slot0 ≈ −5440、slot799 ≈ +5440，
+光路角天然对称落在 **[−60, +60]**，不必再判别正负半圈。
+配合 `±MAX_ENCODER/2` 的跨零处理，只在帧边界跨圈时才需要补偿。
+
+**无 bin 时的兜底与此完全等价**：
+
+```c
+return code_start + code_offset + code_delay + 136 * 40;   // ys_algo_spot_slope.c:66
+```
+
+即"没有 `spot_slope_map.bin` 就用理论常数算中点"，
+有 bin 时改由 `calibRotateAngle_GetMidSlotCode()` 查曲线求更准的中点。
+
+> ⚠️ `13.6` 建立在 **alpha 的 `MAX_ENCODER = 65536`** 之上。
+> beta 的编码基数是 61409/61440，实测每 slot 约 **12.47**（61440 基数，
+> 见 §2.2），换算成机械角后两者仍差约 2%，
+> **不能把 13.6 直接套到 beta**。

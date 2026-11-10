@@ -61,6 +61,11 @@ public:
         /// 反射率查表：对应 reflectivity_map（缺失时退回 get_intensity_by_peak）。
         bool reflectivityMap = true;
 
+        /// 水平角解算方案：false = Beta（查表 + 面起始角），true = Alpha（编码盘差分 + 帧中点基准）。
+        /// 这不是"修正开关"，而是两代固件对同一物理量的两套算法，仅供对照观察。
+        /// Alpha 方案依赖 spot_slope_map（设备端是必经环节），spotSlope 关闭时不修正。
+        bool alphaHorizontalAngle = false;
+
         bool any() const
         {
             return distanceCorrection || lineOmegaDelta || spotSlope || reflectivityMap;

@@ -71,13 +71,44 @@ CV_BETA_IP=10.42.0.218 CV_SCREENSHOT_WAIT_MS=10000 \
 CS96 设备侧关键信息：
 
 - 配置文件：`/etc/ys_conf.ini`
-- 启动程序：`/root/you_see`
-- 该固件 `S99user` 的 `stop/restart` 是空实现，必须 `kill` 后手动启动：
+- 启动程序：`/root/you_see`（**必须先 `cd /root`**，它靠当前目录找配置和动态库）
+
+#### 手工 SSH 重启 `you_see`
+
+该固件 `/etc/init.d/S99user` 的 `stop` / `restart` 都是空实现，
+`/etc/init.d/S99user restart` 什么也不做，必须 `kill` 后手动启动：
 
 ```sh
-kill -9 $(ps | grep you_see | grep -v grep | awk '{print $1}')
+# 1. 停（pidof 为空时不要直接 kill，否则 busybox 报用法错误）
+pids=$(pidof you_see || true); [ -z "$pids" ] || kill -9 $pids
+sleep 1
+
+# 2. 起
 setsid sh -c 'cd /root && exec ./you_see >>/tmp/you_stdout.log 2>&1' </dev/null >/dev/null 2>&1 &
+
+# 3. 校验（起来了 ≠ 还活着）
+sleep 3; pidof you_see || echo RESTART_FAILED
+
+# 4. 看日志
+tail -n 20 /tmp/you_stdout.log
 ```
+
+四个不能省的细节：
+
+| 细节 | 原因 |
+|---|---|
+| `setsid` | 不加则进程挂在当前 SSH 会话的进程组下，**退出 SSH 时被 SIGHUP 杀掉**，表现成"重启成功，一断线就没了" |
+| `</dev/null >/dev/null 2>&1 &` | 不重定向时进程占着 stdin/stdout，`exit` 会卡住、SSH 会话关不掉 |
+| `cd /root` | you_see 用相对路径找 `ys_conf.ini`、标定表、`.so`，换目录启动直接失败 |
+| `sleep 1` 后再起 | 刚被 `kill -9` 时串口/采集句柄可能没释放，立刻启动常报设备忙并静默退出 |
+
+**第 3 步校验不能省**：`work_mode` 与 `/mnt/mtdblock2/mode` 不匹配时，`you_see`
+会启动后立刻退出（还可能回滚配置）。只有 `pidof you_see` 有输出才算真的起来了；
+没有输出就看 `/tmp/you_stdout.log` 末尾和 `/var/log/ys.log` 末尾。
+
+**改了 `/etc/ys_conf.ini` 必须重启 `you_see` 才生效**，并且注意：整机重启时
+`app_startup.sh` 会用 `/mnt/mtdblock2/you_see_arm/config/ys_conf.ini` 覆盖 `/etc/ys_conf.ini`。
+只改 `/etc/ys_conf.ini` 在断电重启后会被冲掉，要长期生效得改那个副本。
 
 - 设备推流目标由 `center_ip` / `center_data_port` 决定，当前已配置为：
 

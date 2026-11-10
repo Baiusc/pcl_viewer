@@ -191,7 +191,7 @@ bool Cs96BetaCalibration::finalizeGeometry(std::string &error)
         const float offsetAngle = sideOffset / 256.f * 1.5f; // 4面零位角 细角度
         startingAngle_[face] = roughAngle + offsetAngle;
     }
-
+    // startingAngle_[0] -= 20.0f;
     // 俯仰角：与下位机 CalculateTheta 一致（像素倒序映射）。
     const float step = (thetaMax_ - thetaMin_) / static_cast<float>(linesV_);
     for (int i = linesV_ - 1, j = 0; i >= 0; --i, ++j)
@@ -846,7 +846,7 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     //   r = c·(ft >> 1)·a[pixel] + d_delta[pixel]
     // 关闭 distanceCorrection 等价于 a = 1、d_delta = 0。
     float r = kLightSpeed * static_cast<float>(ft >> 1);
-    if (options.distanceCorrection )  // debug 可选 || 1 一直开
+    if (options.distanceCorrection || 1)  // debug 可选 || 1 一直开
     {
         r = r * aFactor_[index] + dDelta_[index]; // 设备端直接按米相加（ys_decode_common.c）
     }
@@ -858,36 +858,75 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     const int scale = static_cast<int>((mirrorAngle >> 12) & 0xFF); // 8位 0-256 0-240
     const int realAngle = static_cast<int>(mirrorAngle & 0xFFF); // 0-4095 0-1700 12位
     if (slot != 0 && scale >= static_cast<int>(encoderAngle_.size())) return;
-    // slot0 为同步标记，严格保留设备的 omega0 -> *2 + omega0 分支。
-    float hc = omega0_;
-    if (slot != 0)
-    {
-        // 计算 码盘水平角
-        // const float encoderPart = 360.f/240 * scale ;                 // debug 若不查表
-        const float encoderPart = encoderAngle_[scale];                 // 码盘一圈360°分成 240 个刻度 编码器查表
-        const float realPart = 0.0009f * static_cast<float>(realAngle); // 计时估算的细角度 1.53°/1700 = 0.0009
-        const float startPart = startingAngle_[face];                   // 本面起始角
 
-        hc = encoderPart + realPart - startPart;
-        // wrap 到 [-180, 180]
-        if (hc > 180.0f) 
+    float omegaDeg = 0.0f;
+    if (options.alphaHorizontalAngle)
+    {
+        // ── Alpha 方案（ys_algo_horizontal_corners.c:80-100）────────────────
+        //   code  = 绝对编码（1/65536 圈）
+        //   mid   = 该面起始编码 + 400 slot × 13.6 + code_delay(7)   ← 帧中点
+        //   diff  = code - mid，wrap 到 ±半圈
+        //   omega = diff × (360/65536) × 2       （不再加 omega0：alpha 以帧中点为 0）
+        constexpr float kMaxEncoder = 65536.0f;
+        constexpr float kCodePerSlot = 13.6f;
+        constexpr float kHalfFrameCode = 400.0f * kCodePerSlot; // 5440 = 半帧
+        constexpr float kCodeDelay = 7.0f;                      // 光斑短半轴补偿
+
+        const float absDeg =
+            encoderAngle_[scale] + 0.0009f * static_cast<float>(realAngle);
+        const float absCode = absDeg / 360.0f * kMaxEncoder;
+        const float midCode =
+            startingAngle_[face] / 360.0f * kMaxEncoder + kHalfFrameCode + kCodeDelay;
+
+        float diff = absCode - midCode;
+        while (diff > kMaxEncoder * 0.5f) diff -= kMaxEncoder;
+        while (diff < -kMaxEncoder * 0.5f) diff += kMaxEncoder;
+
+        omegaDeg = diff * (360.0f / kMaxEncoder) * 2.0f;
+        if (slot == 0)
         {
-            hc -= 360.0f; 
+            omegaDeg = omega0_;
         }
-        else if (hc < -180.0f)
+        else if (options.spotSlope)
         {
-            hc += 360.0f;  // 尚未转过起始角，等价于绕一整圈后到达
+            // alpha 里 get_spot_slope() 是必经环节，无表时原样返回。
+            omegaDeg = spotSlopeCorrection(omegaDeg, face);
         }
     }
-    // 单面视场只有约 120°，面间 90° 偏移不能加进来，否则 4 个面会被摊成 360°。
-    float omegaDeg = hc * 2.0f + omega0_;
-
-    // FPGA 旋转角标定 —— ys_algo_horizontal_corners.c 在同一位置调用
-    // get_beta_spot_slope()，入参正是"已乘 2 加 omega0"的水平角。
-    // spot_slope_map 缺失时设备端原样返回，等价于关闭本项。
-    if (slot != 0 && options.spotSlope)
+    else
     {
-        omegaDeg = spotSlopeCorrection(omegaDeg, face);
+        // ── Beta 方案（ys_algo_horizontal_corners.c:111-127）────────────────
+        // slot0 为同步标记，严格保留设备的 omega0 -> *2 + omega0 分支。
+        float hc = omega0_;
+        if (slot != 0)
+        {
+            // 计算 码盘水平角
+            // const float encoderPart = 360.f/240 * scale ;                 // debug 若不查表
+            const float encoderPart = encoderAngle_[scale];                 // 码盘一圈360°分成 240 个刻度 编码器查表
+            const float realPart = 0.0009f * static_cast<float>(realAngle); // 计时估算的细角度 1.53°/1700 = 0.0009
+            const float startPart = startingAngle_[face];                   // 本面起始角
+
+            hc = encoderPart + realPart - startPart;
+            // wrap 到 [-180, 180]
+            if (hc > 180.0f)
+            {
+                hc -= 360.0f;
+            }
+            else if (hc < -180.0f)
+            {
+                hc += 360.0f; // 尚未转过起始角，等价于绕一整圈后到达
+            }
+        }
+        // 机械旋转角转换成光学扫描角
+        omegaDeg = hc * 2.0f + omega0_;
+
+        // FPGA 旋转角标定 —— ys_algo_horizontal_corners.c 在同一位置调用
+        // get_beta_spot_slope()，入参正是"已乘 2 加 omega0"的水平角。
+        // spot_slope_map 缺失时设备端原样返回，等价于关闭本项。
+        if (slot != 0 && options.spotSlope)
+        {
+            omegaDeg = spotSlopeCorrection(omegaDeg, face);
+        }
     }
 
     // 逐线（VCSEL 通道）水平角修正 —— [horizontal_angular_offset]。
@@ -930,7 +969,7 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     point.reflect = reflectNorm * 100.0f;
     point.intensity = static_cast<std::uint8_t>(std::clamp(reflectNorm * 255.0f, 0.0f, 255.0f));
     // 距离上限与峰值下限都来自标定表（dist_max / sat_peak_min），不要写死 200。
-    point.is_valid = r > 0.1f && r < distMax_ && peak >= satPeakMin_;
+    point.is_valid = r >= 0.5f && r <= distMax_ && peak >= satPeakMin_ && peak <= satPeakMax_;
 }
 
 float Cs96BetaCalibration::spotSlopeCorrection(float angleDeg, int face) const
