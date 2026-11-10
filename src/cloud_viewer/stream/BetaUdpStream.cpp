@@ -375,8 +375,8 @@ struct BetaUdpStream::Impl
     int receivedCount = 0;
     int histCount = 0;
     std::atomic<std::uint64_t> packetCounter{0};
-    /// 上一次发布 4 面合成结果的时间，用于限流（见 publishOrigin）。
-    std::chrono::steady_clock::time_point lastOriginPublish{};
+    /// 上一次发布的面号；选面开关变化时重发它，避免只改了掩码却不出图。
+    int lastPublishedFace = -1;
 
     void resetFrame(int mode, std::uint16_t frame)
     {
@@ -406,54 +406,70 @@ struct BetaUdpStream::Impl
         histCount = 0;
     }
 
-    void publishOrigin(std::uint64_t frameNumber)
+    /// 发布单个面（模式 1）。
+    ///
+    /// 一帧就是一个面：96×800、FOV 120°（车规级前向主雷达，不是环视雷达）。
+    /// 原始点云按面流式输出：某个面凑齐 90% 就立刻发出去，不再等 4 个面齐了
+    /// 拼成一个超宽矩阵。设备本身就是一帧一个面（10Hz），拼接只会把 4 个面
+    /// 压到同一角度区间（angle 计算是每面相对各自起始角），表现为
+    /// 「墙壁变厚 / 同一面墙出现两三次」。单面输出后与真实点云一致：
+    /// 一帧一个面，下一帧换下一个面。
+    void publishOrigin(int face, std::uint64_t frameNumber)
     {
-        // 4 面合成是 96×3200 = 307200 点，全量重建一次要几十毫秒；
-        // 每帧（约 50ms）都做会把 UI 线程压满，表现为帧率漂移和卡帧。
-        // 限制到 10Hz 上限，既够用又与真实点云的 9~10 帧一致。
-        const auto now = std::chrono::steady_clock::now();
-        // 设备原始点云 10 帧/秒，每帧 800 包 = 100ms 一批完整数据。
-        // 限流设 100ms 正好跟得上；再小没有意义，再大就会把帧率锁死在 5fps。
-        if (lastOriginPublish.time_since_epoch().count() != 0 &&
-            std::chrono::duration_cast<std::chrono::milliseconds>(now - lastOriginPublish).count() <
-                100)
+        if (face < 0 || face >= 4)
         {
             return;
         }
-        lastOriginPublish = now;
-
         const auto mask = faceMask.load();
-        for (int face = 0; face < 4; ++face)
-            if ((mask & (1u << face)) && !originFaces[face].ready) return;
+        if ((mask & (1u << face)) == 0)
+        {
+            // 这个面没被选中：只更新掩码，不发布，避免用空帧冲掉当前画面。
+            publishedMask = mask;
+            return;
+        }
+        const auto &cached = originFaces[face];
+        if (!cached.ready)
+        {
+            return;
+        }
 
         const int lines = lineCount();
         const int slots = slotCount();
-        algo_lidar::PointMatrix matrix(lines, std::vector<algo_lidar::PointData>(4 * slots));
+        algo_lidar::PointMatrix matrix(lines, std::vector<algo_lidar::PointData>(slots));
         const float nan = std::numeric_limits<float>::quiet_NaN();
         for (int line = 0; line < lines; ++line)
         {
-            for (int face = 0; face < 4; ++face)
+            for (int slot = 0; slot < slots; ++slot)
             {
-                const auto &cached = originFaces[face];
-                for (int slot = 0; slot < slots; ++slot)
+                auto &target = matrix[line][slot];
+                if (cached.received[static_cast<std::size_t>(slot)])
                 {
-                    auto &target = matrix[line][face * slots + slot];
-                    if ((mask & (1u << face)) && cached.ready && cached.received[slot])
-                        target = cached.points[static_cast<std::size_t>(slot) * lines + line];
-                    else
-                    {
-                        target.x = target.y = target.z = nan;
-                        target.is_valid = false;
-                    }
+                    target = cached.points[static_cast<std::size_t>(slot) * lines + line];
+                }
+                else
+                {
+                    target.x = target.y = target.z = nan;
+                    target.is_valid = false;
                 }
             }
         }
         publishedMask = mask;
+        lastPublishedFace = face;
+        // CV_FACE_TRACE=1 时打印发布的面号，用来确认 4 面确实在轮转。
+        if (std::getenv("CV_FACE_TRACE") != nullptr)
+        {
+            std::fprintf(stderr, "[face] publish face=%d frame=%llu\n", face,
+                         static_cast<unsigned long long>(frameNumber));
+            std::fflush(stderr);
+        }
         {
             std::lock_guard<std::mutex> lock(mutex);
             ++stats.frames;
         }
-        if (sink) sink(std::move(matrix), frameNumber);
+        if (sink)
+        {
+            sink(std::move(matrix), frameNumber);
+        }
     }
 
     void flushFrame()
@@ -533,8 +549,8 @@ struct BetaUdpStream::Impl
             cached.points.swap(flatFrame);
             cached.received = slotReceived;
             cached.ready = true;
-            // 未选中的面只更新缓存，不用空帧冲掉当前选中的面。
-            if ((mask & (1u << face)) || mask != publishedMask) publishOrigin(frameNumber);
+            // 流式输出：这个面凑齐就立刻发布，不等其他三个面。
+            publishOrigin(face, frameNumber);
             return;
         }
         // 真实点云仍然直接输出设备 xyz，行列数跟随设备规格；只修正整帧选面的语义。
@@ -646,8 +662,8 @@ struct BetaUdpStream::Impl
                 for (auto &face : originFaces) face.ready = false;
                 activeGeneration = packetGeneration;
             }
-            if (currentMode == 1 && faceMask.load() != publishedMask)
-                publishOrigin(currentFrame);
+            if (currentMode == 1 && faceMask.load() != publishedMask && lastPublishedFace >= 0)
+                publishOrigin(lastPublishedFace, currentFrame);
 
             // 每 5 秒输出一次接收统计（仅调试开关开启时）。
             if (debugStats)
@@ -902,9 +918,8 @@ Cs96BetaCalibration::DecodeOptions BetaUdpStream::decodeOptions() const
 void BetaUdpStream::setFaceMask(std::uint8_t mask)
 {
     std::lock_guard<std::mutex> lock(impl_->mutex);
+    // 只改掩码。接收循环会对比 publishedMask 发现变化，立刻重发最近一个面。
     impl_->faceMask = (mask & 0x0F) == 0 ? 0x0F : static_cast<std::uint8_t>(mask & 0x0F);
-    // 用户切面后要立刻看到新组合，跳过下一次发布限流。
-    impl_->lastOriginPublish = {};
 }
 
 std::uint8_t BetaUdpStream::faceMask() const

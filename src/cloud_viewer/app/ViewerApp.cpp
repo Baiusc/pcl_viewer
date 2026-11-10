@@ -1016,7 +1016,7 @@ void ViewerApp::connectBeta(const std::string &ip)
     {
         const int detected = betaStream_ ? betaStream_->stats().detectedMode : 2;
         FrameMetadata metadata;
-        // 原始合成为 96x3200，真实点云为 96x800，直方图为 96x512。
+        // 原始点云与真实点云都是单面 96x800，直方图为 96x512。
         metadata.rows = static_cast<int>(matrix.size());
         metadata.cols = matrix.empty() ? 0 : static_cast<int>(matrix.front().size());
         // 型号由连接时按规格确定（96 线 Beta / 120 线 Gamma），这里如实透传。
@@ -2457,6 +2457,10 @@ void ViewerApp::applyIncomingFrame()
         frame = std::move(pendingRadarFrame_);
         pendingRadarFrame_.reset();
     }
+    // 最近一次真正收到帧的时刻。心跳只在真的超过 2 秒没帧时才报：
+    // 否则正常推流期间主循环的 idle 调用也会每 2 秒刷一条 "no new frame"，
+    // 与 [fps] 交替出现，看起来像在断流。
+    static auto lastRealFrameAt = std::chrono::steady_clock::now();
     if (!frame)
     {
         // 心跳：没有新帧也每 2 秒报一次，用来区分"设备没推流/解析慢"与"渲染慢"，
@@ -2466,7 +2470,8 @@ void ViewerApp::applyIncomingFrame()
             static auto lastBeat = std::chrono::steady_clock::now();
             const auto now = std::chrono::steady_clock::now();
             const double gap = std::chrono::duration<double>(now - lastBeat).count();
-            if (gap >= 2.0)
+            if (gap >= 2.0 &&
+                std::chrono::duration<double>(now - lastRealFrameAt).count() >= 2.0)
             {
                 lastBeat = now;
                 std::uint64_t beatPackets = 0;
@@ -2554,9 +2559,9 @@ void ViewerApp::applyIncomingFrame()
     const bool firstLiveFrame = (currentCloudId_ == 0);
 
     currentFrameHandle_ = frame;
-    // 原始点云 4 面合成是 96×3200 = 307200 点，渲染一次要 60ms 以上，
-    // 直接决定帧率上限。超过 25 万点时按 2:1 抽稀，画面密度几乎无感，
-    // 但单帧渲染时间减半；HUD 会显示 LOD: on。
+    // 一帧就是一个面：96×800 = 76800 点、120° FOV，远低于下面的阈值，
+    // 正常不会抽稀。阈值保留给 120 线或将来更大的帧兜底；
+    // 触发时按 2:1 抽稀，单帧渲染时间减半，HUD 显示 LOD: on。
     RenderRequest renderRequest;
     if (frame->metadata.totalSamples > 250000)
     {
@@ -2598,6 +2603,7 @@ void ViewerApp::applyIncomingFrame()
     // 用法：CV_LIVE_FPS=1 ./cloud_viewer
     if (std::getenv("CV_LIVE_FPS") != nullptr)
     {
+        lastRealFrameAt = perfT4; // 有帧就刷新心跳基准，正常推流不再报"no new frame"
         const auto ms = [](const auto &a, const auto &b)
         {
             return std::chrono::duration<double, std::milli>(b - a).count();
@@ -3045,8 +3051,9 @@ void ViewerApp::selectAt(int displayX, int displayY)
     std::ostringstream text;
     text << "Picked point\n";
     text << "file: " << object->frame->metadata.sourcePath.filename().string() << "\n";
-    // 原始点云 4 面合成后矩阵是 96×3200，直接用矩阵列会显示到 3199；
-    // 物理 slot 仍是 0~799。PointData 里记着真实行/列（解析时写入），优先用它。
+    // 原始点云一帧就是 96×800，矩阵列即物理 slot（0~799）。
+    // PointData 里记着解析时写入的真实行列，优先用它：
+    // 填充列或将来改尺寸时都不会错位。
     int rowIndex = ref.matrixRow;
     int colIndex = ref.matrixCol;
     const bool originLayout =

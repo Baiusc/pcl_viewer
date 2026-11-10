@@ -82,7 +82,33 @@ DISPLAY=:0 CV_BETA_IP=10.42.0.221 CV_LIVE_FPS=1 timeout 24 ./build-rel/cloud_vie
 | `recv pkts` | 累计收包数 | 每 2 秒应涨约 16000（800 包/帧 × 10 帧） |
 
 `no new frame for Ns` 是心跳，用来区分「设备没推流/解析慢」和「渲染慢」——
+**只在连续 2 秒真的没有新帧时输出**（收到帧会刷新基准，不会和 `[fps]` 交替刷屏）。
 如果只有心跳没有 `[fps]`，问题在接收侧，不要去优化渲染。
+
+### 面轮转验证（原始点云 / 真实点云通用）
+
+```bash
+# 每帧打印发布的面号
+DISPLAY=:0 CV_BETA_IP=10.42.0.221 CV_FACE_TRACE=1 timeout 16 ./build-lite/cloud_viewer 2>&1 | grep '\[face\]'
+```
+
+正常输出是面号 `0→1→2→3→0` 严格轮转、`frame=` 连续递增：
+
+```
+[face] publish face=1 frame=16371
+[face] publish face=2 frame=16372
+[face] publish face=3 frame=16373
+[face] publish face=0 frame=16374
+```
+
+面号跳号 = 某些面被 `faceMask` 过滤掉（正常）；**帧号跳号 = 丢包或整帧被丢弃**，
+去查 `CV_BETA_DEBUG=1` 的 `recv/parsed/timeouts`。
+
+原始点云与真实点云都是**一帧一个面：96×800 = 76800 点，FOV 120°**。
+
+CS96 是车规级**前向主雷达**，不是 360° 环视雷达。4 个面只是转镜的机械结构：
+每帧独立输出一个 120° 扇区，既不相加、也不拼整圈。HUD 的 `Points: N/76800`
+分母若不对，说明帧尺寸算错了。
 
 **性能类结论必须用 `build-rel`（Release）复测一遍**：Debug 下单帧成本可高 30% 以上，
 且容易被误判成"架构瓶颈"。

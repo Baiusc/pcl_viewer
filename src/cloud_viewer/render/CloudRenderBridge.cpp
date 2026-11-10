@@ -27,7 +27,7 @@ RenderableCloud::Ptr CloudRenderBridge::prepare(const FrameHandle &frame,
     renderable->scalars = frame->scalarFields;
 
     // 只有抽样时才需要先统计可显示点数。
-    // 原始点云 4 面合成是 96×3200 = 307200 点，多遍历一遍并不便宜，
+    // 一帧是 96×800 = 76800 点，多遍历一遍并不便宜，
     // 不抽样时直接按上限预留、单遍填充。
     const bool subsample = request.maxPoints > 0;
     std::size_t candidateCount = 0;

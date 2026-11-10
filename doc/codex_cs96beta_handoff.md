@@ -8,7 +8,8 @@
 现在需要你修复 CS96 Beta **原始点云模式（work_mode=1）** 的两个问题：
 
 1. **原始点云异常旋转**：多帧画面在“转圈圈”，角度合成错误。
-2. **面选择功能语义完全错误**：当前按 slot 分面，而正确语义是 **1 面 = 1 帧，4 帧 = 转镜 360°**。
+2. **面选择功能语义完全错误**：当前按 slot 分面，而正确语义是
+   **1 面 = 1 帧 = 96×800 = 120° FOV**（车规级前向主雷达，不是环视，一帧不拼整圈）。
 
 请先通读本文，再读代码，最后给出最小改动方案并实施。
 
@@ -258,7 +259,8 @@ r = velocitylight * (ft >> 1) * g_distance_factor[pixel] + g_delta_distance_inde
 补充事实：
 
 - `g_encoder_angle` 来自 `ys_encoder_angle.csv`（`scale,angle`，241 行，0~360），
-  不是 `spot_slope_map.csv`。
+  不是 `spot_slope_map.csv`。这张表来自**光学光条标定**；刻度时间测量（FPGA `(n,cnt)`）
+  是独立验证手段，两者不能互相替代，详见 `doc/cs96beta_encoder_angle_table.md`。
 - `frame_id` 就是面号（0~3），**每帧一个面**。
 - 设备日志实测每面起始角（`start=`）：
 
@@ -290,7 +292,8 @@ r = velocitylight * (ft >> 1) * g_distance_factor[pixel] + g_delta_distance_inde
 - 两条路径（聚合 CSV / ini 目录）都已验证可加载新版，起始角一致。
 
 - 设备日志实测每面覆盖：`hc` 约 `0 ~ 59`，`×2 - 60` 后约 `-60 ~ 58`，
-  即每面约 118° 视场，面间机械间隔 90°，4 面重叠拼成 360°。
+  即**每帧约 118° 视场**。面间机械间隔 90° 只是转镜的物理结构差，
+  **不要加进水平角**：每个面各自由自己的 `starting_angle[face]` 起算，减去后回到同一段视场。
 - `ys_calibration.ini` 中 `d0_delta...d95_delta` 单位是 **cm**（约 -5.87），
   换算要 `× 0.01`。
 
@@ -300,7 +303,7 @@ r = velocitylight * (ft >> 1) * g_distance_factor[pixel] + g_delta_distance_inde
 
 ```
 ys_calibration.ini        # omega_delta[96] / d_delta[96](cm) / a[96] / theta 参数 / standard_encoder
-ys_encoder_angle.csv      # scale 0~240 -> 0~360°（整圈编码器表）
+ys_encoder_angle.csv      # scale 0~240 -> 0~360°（整圈编码器表，实测生成，见 encoder_angle_table.md）
 spot_slope_map.csv        # Face,Angle_FPGA,Diff（4 面 × 80 点，用于 spot slope 修正）
 reflectivity_map.csv      # pixel_target,distance,reflectance_0..4
 ```
@@ -346,17 +349,31 @@ reflectivity_map.csv      # pixel_target,distance,reflectance_0..4
 - `face = frame_index % 4`，一帧 800 slot 全部属于同一面。
 - 删除按 `slot/200` 与 `faceByScale` 的一帧内分面逻辑。
 
-### 6.2 4 面累积合成
+### 6.2 单面流式输出（原「4 面累积合成」已废弃）
 
-- 维护 4 个面的帧缓存（每面 96×800）。
-- 合成的输出矩阵为 `96 × 3200`（列 = `face*800 + slot`），
-  4 面拼成完整 360°。
-- 只在选中面全部就绪后输出；未就绪/未选中的面列填 `NaN`（渲染桥会跳过）。
-- 输出需同步设置 `metadata.rows = 96`、`metadata.cols = 3200`，
-  否则着色重排会错位。
-- 合成频率可限制为“每次面缓存更新后”，若 10 fps 下开销过大，可降为每 4 帧合成一次。
+早期设计把 4 个面的缓存拼成一个超宽矩阵（列 = `face*800 + slot`）一次输出，
+想做到"一屏看到 4 个面"。**这个设计是错的**：CS96 是车规级**前向主雷达**，
+一帧就是 `96×800`、FOV 120°，不拼整圈。实测表现为墙壁变厚 / 同一面墙出现两三次：
 
-**验收**：原始点云画面不再出现 4 方向跳跃/转圈，4 面拼成稳定一圈。
+- 设备本身就是一帧一个面（10 Hz，`frame_id` 每帧 +1 即换面）；
+- `apply()` 输出的是**每面相对自己起始角**的水平角
+  （`hc = encoderPart + realPart - startingAngle_[face]`），
+  4 面拼在一起后全部落在同一个 ±60° 区间，同一面墙自然被画 4 次；
+- 拼接后每帧点数是一帧的 4 倍，`render` 耗时约 36 ms。
+
+现在改为**流式单面**（与真实点云一致）：
+
+- 某个面凑齐 ≥90% slot 就立刻发布，矩阵为 `96 × 800`；
+- 不再等 4 面齐，也**不再有限流**（单面重建成本只有 1/4）；
+- `metadata.cols = 800`；
+- 未选中的面只更新缓存、不发布；切换 Faces 时重发最近一面
+  （靠 `faceMask != publishedMask` 触发，见 `setFaceMask`）。
+
+**验收**：`Radar Live ... 显示点 76800`（即 96×800，一帧一面）；
+`CV_FACE_TRACE=1` 时 `[face] publish` 严格按 `0→1→2→3` 轮转且帧号连续；
+帧率 9.7~10.2 fps，`render` 约 15 ms。
+
+代价：任一时刻只看到一个面的 120° 扇区（真实点云模式本来也是这样）。
 
 ### 6.3 Faces 按钮
 
@@ -365,7 +382,8 @@ reflectivity_map.csv      # pixel_target,distance,reflectance_0..4
 - HUD 标签同步显示当前选择。
 - 未连接 CS96 Beta 时点击应提示无效，不崩溃。
 
-**验收**：选 `F1` 时只看到第一面的 90°~118° 扇区，画面稳定；选 `All` 时看到完整一圈。
+**验收**：选 `F1` 时只看到第一面的 90°~118° 扇区；选 `All` 时 4 个面**轮流刷新**
+（每 100ms 换一个面），不是一屏拼成一圈。
 
 ### 6.4 角度与距离正确性
 
@@ -401,25 +419,26 @@ reflectivity_map.csv      # pixel_target,distance,reflectance_0..4
    `CV_BETA_DEBUG=1` 的 `recv/parsed/timeouts`。
 4. **`PointData` 含 `std::vector<Pulse>`**：不要逐点 `point = PointData{}` 重建，
    会拖慢接收线程；应逐字段赋值并 `list_pulse.clear()`。
-5. **组帧完整性**：当前要求 ≥90% slot 才输出；4 面合成时应分别判断每面。
+5. **组帧完整性**：每个面各自要求 ≥90% slot 才输出，凑齐即发布 —— 一帧就是一面 96×800。
 6. **面内像素倒序**：原始点云数据区第 1 个像素是 `pixel[95]`，映射到 `line` 时要反转。
 7. **在线点云拖动卡顿**：曾是三个来源叠加，已全部处理——
    - `SelectionStyle::OnMouseMove` 每次鼠标事件都调 `pumpLiveFrame()`，等于拖动过程中反复触发全量重建（已删除）；
    - 33ms 定时器在拖动期间仍在重建点云（`interacting_` 时暂停，`EndInteractionEvent` 补一帧）；
    - `PclVtkRenderer::upsert()` 每帧新建 vtkPoints/PolyData/Mapper 并逐点 `SetPoint`（改为复用整条管线，直接写底层 `vtkFloatArray` / `vtkUnsignedCharArray`，拓扑数组预生成后按点数截断）。
    验证方式：HUD 首行是渲染 FPS，拖动时应接近刷新率，松手后回落到点云帧率。
-8. **原始点云帧率（4 面合成 96×3200 = 307200 点）**：曾低到 0.2~5 fps，四个原因叠加：
+8. **原始点云帧率**：曾低到 0.2~5 fps，原因叠加：
    - **Debug 构建**（`build-lite`）下逐点 `apply()` 慢数倍，接收线程跟不上 → UDP 丢包 97%；
    - `rebuildDerivedFields` 每帧为 30 万点填 **13 个标量场**（400 万次写入 + 15MB 分配）
      → 改为按需只生成当前颜色源（`makeFrame(..., colorSource_)`）；
    - `applyIncomingFrame` 每帧 `renderer_.remove` + `scene_.add`，**id 变化导致渲染层缓存失效**、
      VTK 管线整条重建 → 改为复用同一个 `currentCloudId_`；
-   - `publishOrigin` 限流 200ms，**正好把帧率锁死在 5 fps** → 改 100ms
-     （设备原始点云就是 10 帧/秒、每帧 800 包 = 100ms）。
+   - `publishOrigin` 限流 200ms，**正好把帧率锁死在 5 fps** → 改 100ms。
 
-   实测（Release）：单帧 `prep 5ms + color 11ms + render 36ms ≈ 52ms`，
-   稳定 **9.7~10.3 fps**、`gap_max 110~140ms`，与真实点云一致。
-   Debug 单帧 72ms，也能到 10fps，但余量小。
+   之后又去掉了多面拼接（见 6.2）：那阶段一帧点数是一帧的 4 倍、`render` 36 ms；
+   改成单面 `96×800 = 76800` 点后 `render` 降到 15 ms 左右，限流也随之删除。
+
+   实测（Release，单面流式）：`prep 5~6ms + color 8~9ms + render 15~27ms`，
+   稳定 **9.7~10.2 fps**、`gap_max 120~190ms`。Debug 也能到 10fps，但余量小。
 
    判定方法见 `AGENTS.md` 第 4 节：用 `CV_LIVE_FPS=1` 连续跑，看窗口帧率与 `gap_max`，
    不要只看首帧截图。
@@ -551,7 +570,7 @@ CV_BETA_IP=10.42.0.218 CV_SCREENSHOT_WAIT_MS=12000 \
 ```
 
 - 在回复中说明：
-  1. 面判定与 4 面合成的新实现方式；
+  1. 面判定与单面流式输出（一帧 `96×800`）的实现方式；
   2. `starting_angle` 的取值来源与偏差；
   3. 截图对比（修复前 / 修复后）；
   4. 仍未解决的风险点。

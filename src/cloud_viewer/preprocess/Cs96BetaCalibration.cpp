@@ -925,7 +925,7 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
         // spot_slope_map 缺失时设备端原样返回，等价于关闭本项。
         if (slot != 0 && options.spotSlope)
         {
-            omegaDeg = spotSlopeCorrection(omegaDeg, face);
+            // omegaDeg = spotSlopeCorrection(omegaDeg, face);
         }
     }
 
