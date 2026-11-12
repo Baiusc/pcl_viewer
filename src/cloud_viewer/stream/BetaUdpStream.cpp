@@ -168,7 +168,9 @@ void applyFallbackNoTable(int line, std::uint32_t ft, std::uint16_t slot, std::u
 
     const float r = (ft > 16) ? kLightSpeed * static_cast<float>(ft >> 1) : 0.0f;
     const float thetaDeg = pitchDegrees(line, lines, centerLine);
-    const float omegaDeg = -60.0f + 120.0f * slot / slots;
+    // 兜底路径与 Cs96BetaCalibration::apply 保持一致：水平角取反，
+    // 让原始点云以左手系呈现（slot0 最左、slot799 最右，顺时针）。
+    const float omegaDeg = -(-60.0f + 120.0f * slot / slots);
     const float theta = thetaDeg * kDegToRad;
     const float omega = omegaDeg * kDegToRad;
 
@@ -183,7 +185,8 @@ void applyFallbackNoTable(int line, std::uint32_t ft, std::uint16_t slot, std::u
     if (point.is_valid)
     {
         const float horizontal = r * std::cos(theta);
-        // 统一约定：x+ 前、y+ 右；slot0 在左（y<0），与 Cs96BetaCalibration 一致。
+        // 与 Cs96BetaCalibration 一致：水平角已取反，slot0 侧 y>0、slot799 侧 y<0，
+        // 在右手系的俯视图里表现为 slot0 在左、slot799 在右（顺时针扫描）。
         point.x = horizontal * std::cos(omega);
         point.y = horizontal * std::sin(omega);
         point.z = r * std::sin(theta);

@@ -110,6 +110,32 @@ CS96 是车规级**前向主雷达**，不是 360° 环视雷达。4 个面只�
 每帧独立输出一个 120° 扇区，既不相加、也不拼整圈。HUD 的 `Points: N/76800`
 分母若不对，说明帧尺寸算错了。
 
+### 坐标约定（改坐标前必看）
+
+VTK 是右手系，两种点云的处理**不同**：
+
+| | 原始点云（work_mode=1） | 真实点云（work_mode=2） |
+|---|---|---|
+| 坐标来源 | PC 端算 `Cs96BetaCalibration::apply` | 设备 xyz `parseCartesian` |
+| 水平角 | **取反**（`Cs96BetaCalibration.cpp:950`） | 不改 |
+| 呈现 | 左手系外观：俯视时 slot0 最左、slot799 最右、顺时针 | 右手系 |
+
+取反是**成对**的：`Cs96BetaCalibration.cpp:950`（标定路径）与
+`BetaUdpStream.cpp:173`（无表兜底）必须同时存在或同时去掉，否则开关标定会让画面左右跳变。
+
+**真实点云 `parseCartesian` 里 `point.x = x; point.y = y` 一行都不要改**，那里直接用设备 xyz。
+
+验证：
+
+```bash
+CV_ANGLE_PROBE=1 ./build-lite/cloud_viewer 2>&1 | grep '\[probe\]'
+# [probe] slot=2   omega=60.96  y=0.224     ← slot 小：y>0
+# [probe] slot=799 omega=-56.07 y=-3.873    ← slot 大：y<0
+```
+
+`tests/test_beta_calibration.cpp` 的 `axis_y_right` 用 `off.omega_rad` 现算期望值，
+取反后仍 PASS（值符号翻转但断言自洽），不要误以为测试覆盖了方向正确性。
+
 **性能类结论必须用 `build-rel`（Release）复测一遍**：Debug 下单帧成本可高 30% 以上，
 且容易被误判成"架构瓶颈"。
 

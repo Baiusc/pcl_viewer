@@ -408,6 +408,55 @@ reflectivity_map.csv      # pixel_target,distance,reflectance_0..4
 
 ---
 
+## 6.5 坐标约定：原始点云左手系 / 真实点云右手系
+
+VTK 渲染器是**右手系**，两种点云对它的处理不同：
+
+| | 原始点云（work_mode=1） | 真实点云（work_mode=2） |
+|---|---|---|
+| 坐标来源 | PC 端算（`Cs96BetaCalibration::apply`） | 设备 xyz（`BetaUdpStream::parseCartesian`） |
+| 水平角 | `omegaDeg = -omegaDeg`（`Cs96BetaCalibration.cpp:950`） | `slot_ang = atan2(y,x)`，不改 |
+| 呈现 | **左手系外观**：俯视时 slot0 最左、slot799 最右、顺时针 | 右手系，保持不变 |
+| 实测 | slot=2 → omega=+60.96, y=+0.224；slot=799 → omega=−55.90, y=−3.872 | — |
+
+**为什么原始点云要取反**：若直接按 `y = r·cosθ·sinω` 生成，在右手系俯视图（x+ 朝上）里
+y+ 落在**左**边，结果是 slot0 显示在右、slot799 显示在左，方向与需求相反。把水平角取反
+（等价于 y 取反；x 因 `cos` 是偶函数而不变）之后：
+
+```
+slot 小（slot 0 侧） → omega ≈ +60° → y > 0 → 显示在左
+slot 大（slot 799）  → omega ≈ −56° → y < 0 → 显示在右
+```
+
+`slot_ang` 跟着取反，所以着色梯度和坐标符号不会打架。
+
+**这里有个取舍要说清**：取反后是「**左 y+ / 右 y−**」。若要求「左 y− / 右 y+」且 slot0 仍在左，
+右手系下做不到，必须给原始点云的 actor 加 `Scale(1,-1,1)` 镜像（坐标轴也得跟着翻）。
+当前选前者：语义最简单，拾取点信息和坐标轴自洽。
+
+**兜底路径同步**：`BetaUdpStream::applyFallbackNoTable`（无标定表时）写成
+`omegaDeg = -(-60.0f + 120.0f * slot / slots)`（`BetaUdpStream.cpp:173`）。
+两条路径必须一致，否则开关标定会让画面左右跳变。
+
+**真实点云一行都不要改**：`parseCartesian` 里 `point.x = x; point.y = y; point.z = z`
+直接用设备 xyz，改了就和设备端、其他工具全对不上。
+
+**验证方法**：
+
+```bash
+DISPLAY=:0 CV_BETA_IP=10.42.0.218 CV_ANGLE_PROBE=1 timeout 20 ./build-lite/cloud_viewer 2>&1 | grep '\[probe\]'
+```
+
+```
+[probe] slot=2   omega=60.96  x=0.124 y=0.224     ← slot 小：y>0
+[probe] slot=799 omega=-55.90 x=2.621 y=-3.872    ← slot 大：y<0
+```
+
+两个 y 的符号若反了，说明取反被删掉或加了两次，检查上面两处行号。
+
+**测试是自洽的**：`tests/test_beta_calibration.cpp` 的 `axis_y_right` 用 `off.omega_rad`
+现算期望值，所以取反后仍 `PASS`（值从 −1.86 变 +1.86），不会误报。
+
 ## 7. 已知坑与调试建议
 
 1. **设备进程容易没起来**：`Mode` 切换后务必确认 `ps | grep you_see`；

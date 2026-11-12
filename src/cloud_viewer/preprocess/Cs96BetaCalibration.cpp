@@ -925,7 +925,7 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
         // spot_slope_map 缺失时设备端原样返回，等价于关闭本项。
         if (slot != 0 && options.spotSlope)
         {
-            // omegaDeg = spotSlopeCorrection(omegaDeg, face);
+            omegaDeg = spotSlopeCorrection(omegaDeg, face);
         }
     }
 
@@ -937,6 +937,18 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
         omegaDeg += omegaDelta_[index];
     }
 
+    // ── 原始点云走左手系：x+ 前、y+ 右、z+ 上 ──────────────────────────────
+    // VTK 渲染器是右手系。若直接按 y = r·cosθ·sinω 生成，画面里 y+ 会落在左边，
+    // 于是 slot0 显示在右、slot799 显示在左 —— 方向与真实点云一致但和需求相反。
+    // 这里把水平角取反（等价于 y 取反，x 因为 cos 是偶函数而不变），得到左手系的视觉：
+    //   slot0   → y > 0 → 显示在最左
+    //   slot799 → y < 0 → 显示在最右
+    // 扫描方向随之变为顺时针，且 slot_ang 与坐标符号保持一致（着色梯度不打架）。
+    //
+    // 真实点云走 BetaUdpStream::parseCartesian，直接用设备 xyz，不经过这里，
+    // 因此保持原有右手系不变。兜底路径 applyFallbackNoTable 有同样的取反。
+    omegaDeg = -omegaDeg;
+
     const float omega = omegaDeg * kDegToRad;
     const float theta = theta_[index] * kDegToRad;
 
@@ -944,11 +956,30 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     point.theta = theta_[index];
     point.omega_rad = omega;
     point.slot_ang = omegaDeg;
-    // 坐标约定统一为：x+ 雷达正前方、y+ 雷达自身右侧、z+ 向上。
+    // 坐标约定：x+ 雷达正前方、y+ 雷达自身右侧、z+ 向上（左手系外观）。
+    // 注意 omegaDeg 已在上面取反，因此 slot 递增时 y 从正变负：
+    // slot0 侧 y>0、slot799 侧 y<0，在右手系俯视图里就是 slot0 在左、slot799 在右。
 
     point.x = r * std::cos(theta) * std::cos(omega);
     point.y = r * std::cos(theta) * std::sin(omega);
     point.z = r * std::sin(theta);
+
+    // CV_ANGLE_PROBE=1：各打一次首末 slot 的角度与坐标，用来确认左手系方向。
+    // getenv 结果缓存成 static：本函数每秒被调用 76 万次，不能每次都查环境变量。
+    static const bool angleProbe = std::getenv("CV_ANGLE_PROBE") != nullptr;
+    if (angleProbe && (slot == 2 || slot == 799))
+    {
+        static bool done2 = false;
+        static bool done799 = false;
+        bool &done = (slot == 2) ? done2 : done799;
+        if (!done)
+        {
+            done = true;
+            std::fprintf(stderr, "[probe] slot=%u omega=%.2f x=%.3f y=%.3f\n",
+                         static_cast<unsigned>(slot), omegaDeg, point.x, point.y);
+            std::fflush(stderr);
+        }
+    }
 
     // 反射率 —— 有表时复刻 CalibReflect::calcIntensity()：
     //   用 5 个参考峰值对 peak 做线性插值，得到 0.1~0.9 的反射率。
