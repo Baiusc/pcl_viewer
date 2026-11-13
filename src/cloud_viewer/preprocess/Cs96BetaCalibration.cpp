@@ -21,6 +21,12 @@ constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
 constexpr float kPaCountsPerRevolution = 240.0f;
 constexpr int kFaces = 4;
 
+// 码盘一圈 240 个粗刻度（scale 0..239）；encoderAngle_ 有 241 项（含 240 边界）。
+constexpr int kScalesPerRev = 240;
+// time_intervals.txt 缺失时的名义刻度耗时（us）。理论值 1000/240/2.5≈1666.7，
+// 现场实测普遍在 1700 上下，沿用旧实现里的 1701 作为兜底。
+constexpr float kNominalIntervalUs = 1701.0f;
+
 // ys_algo_calib_reflectivity.c: #define MIN_PEAK 51
 constexpr std::uint16_t kMinPeak = 51;
 
@@ -150,6 +156,11 @@ bool Cs96BetaCalibration::load(const std::filesystem::path &path, std::string &e
             }
         }
         parseSpotSlope(spotPath, error);
+
+        // 可选：FPGA 实测的每格耗时（us）。缺失时 apply() 用 kNominalIntervalUs，
+        // 因此解析失败不阻断加载，只影响细角度的折算精度。
+        std::string timingError;
+        parseTimeIntervals(path / "time_intervals.txt", timingError);
     }
     else
     {
@@ -360,6 +371,94 @@ bool Cs96BetaCalibration::parseEncoderAngle(const std::filesystem::path &path, s
     return true;
 }
 
+bool Cs96BetaCalibration::parseTimeIntervals(const std::filesystem::path &path,
+                                             std::string &error)
+{
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec))
+    {
+        error.clear();
+        return false; // 可选文件：缺失时用名义间隔，不算错误
+    }
+
+    std::ifstream input(path);
+    if (!input.is_open())
+    {
+        error = "无法打开 " + path.string();
+        return false;
+    }
+
+    std::vector<float> values;
+    std::string line;
+    while (std::getline(input, line))
+    {
+        const std::string text = trim(line);
+        if (text.empty() || text[0] == '#')
+        {
+            continue;
+        }
+        char *end = nullptr;
+        const float value = std::strtof(text.c_str(), &end);
+        if (end == text.c_str() || !std::isfinite(value) || value <= 0.0f)
+        {
+            continue;
+        }
+        values.push_back(value);
+    }
+
+    if (values.empty())
+    {
+        error = path.string() + " 里没有可用的刻度耗时";
+        return false;
+    }
+
+    // 241 行 = 1 个 FPGA t0 + 240 个间隔；t0 远小于其余值，判定后丢掉。
+    if (values.size() == static_cast<std::size_t>(kScalesPerRev) + 1)
+    {
+        std::vector<float> rest(values.begin() + 1, values.end());
+        std::nth_element(rest.begin(), rest.begin() + rest.size() / 2, rest.end());
+        if (values.front() < rest[rest.size() / 2] * 0.5f)
+        {
+            values.erase(values.begin());
+        }
+    }
+
+    // 239 行：末格（scale 239 → 0）缺失，用其余均值补齐，避免整格退回名义值。
+    if (values.size() + 1 == static_cast<std::size_t>(kScalesPerRev))
+    {
+        float sum = 0.0f;
+        for (float value : values)
+        {
+            sum += value;
+        }
+        values.push_back(sum / static_cast<float>(values.size()));
+    }
+
+    if (values.size() != static_cast<std::size_t>(kScalesPerRev))
+    {
+        error = path.string() + " 需要 " + std::to_string(kScalesPerRev) +
+                " 个刻度耗时（也接受 239/241 行），实际 " + std::to_string(values.size());
+        return false;
+    }
+
+    timeIntervals_ = std::move(values);
+    error.clear();
+    return true;
+}
+
+float Cs96BetaCalibration::timeIntervalUs(int scale) const
+{
+    if (scale >= 0 && scale < static_cast<int>(timeIntervals_.size()))
+    {
+        const float value = timeIntervals_[static_cast<std::size_t>(scale)];
+        if (value > 1.0f)
+        {
+            return value;
+        }
+    }
+    return kNominalIntervalUs;
+}
+
 bool Cs96BetaCalibration::parseSpotSlope(const std::filesystem::path &path, std::string &error)
 {
     std::ifstream input(path);
@@ -566,6 +665,20 @@ bool Cs96BetaCalibration::parseUnifiedCsv(const std::filesystem::path &path, std
             {
                 spotSlope_[face].emplace_back(std::strtof(value0.c_str(), nullptr),
                                               std::strtof(fields[4].c_str(), nullptr));
+            }
+        }
+        else if (section == "time_interval")
+        {
+            // 每格实测耗时（us），apply() 用它把 realAngle 折算成角度。
+            const int index = std::atoi(indexText.c_str());
+            if (index >= 0 && index < kScalesPerRev)
+            {
+                if (timeIntervals_.size() != static_cast<std::size_t>(kScalesPerRev))
+                {
+                    timeIntervals_.assign(static_cast<std::size_t>(kScalesPerRev), 0.0f);
+                }
+                timeIntervals_[static_cast<std::size_t>(index)] =
+                    std::strtof(value0.c_str(), nullptr);
             }
         }
         else
@@ -905,23 +1018,46 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
         float hc = omega0_;
         if (slot != 0)
         {
-            // 计算 码盘机械转角
-            // const float encoderPart = 360.f/240 * scale ;                 // debug 若不查表
-            const float encoderPart = encoderAngle_[scale];                 // 码盘一圈360°分成 240 个刻度 编码器查表
-            // float realPart = 0.0009f * static_cast<float>(realAngle); // 计时估算的细角度 1.53°/1700 = 0.0009
-            const float angle_cur = encoderAngle_[scale];
-            float angle_next = encoderAngle_[scale + 1];
-            if(scale+1>240)
+            // 码盘机械粗刻度角度（查表，消除刻度不均匀）
+            const float encoderPart = encoderAngle_[scale];
+            // 下一格角度。必须先判边界再取下标：encoderAngle_ 只有 241 项，
+            // scale=240 时取 [241] 是越界（原实现把边界判断写在了取值之后）。
+            const int lastScale = static_cast<int>(encoderAngle_.size()) - 1;
+            float angle_next = (scale < lastScale) ? encoderAngle_[scale + 1] : 360.0f;
+            if (angle_next <= encoderPart)
             {
-                angle_next = 360.0f;  // 处理最后一个刻度 TODO
+                // 跨零或脏值兜底：退化为均匀分布的一格。
+                angle_next = encoderPart + 360.0f / static_cast<float>(kScalesPerRev);
             }
-            const float angle_spacing = angle_next - angle_cur;
-            float realPart = realAngle / 1701.0 * angle_spacing; // planB 用真实刻度角度算 细角度
-            if (std::abs(realPart) > 1.53f * 2)
+            const float angle_spacing = angle_next - encoderPart;
+
+            // 细角度：realAngle 是本格内的计时计数，除以"本格实际耗时"再乘本格角度差。
+            // 原来固定除以 1701us，转速或该格耗时有偏差时整格都会被推歪。
+            const float interval = timeIntervalUs(scale);
+            const float interval_prev = timeIntervalUs(scale - 1);
+            const float interval_next = timeIntervalUs(scale + 1);
+
+            float realPart = realAngle / interval * angle_spacing;
+
+            const float fineLimit = angle_spacing * 1.05f;
+            // 细角度不应超过一格：超了说明该格计时/角度表不可信，钳到边界。
+            if (realPart < -fineLimit || realPart > fineLimit)
             {
-                realPart = 1.53f; // 限制最大细角度为 1.53° TODO
+                const float raw = realPart; // 保存越界前的值
+                realPart = std::clamp(raw, -fineLimit, fineLimit);
+
+                static int lastScale = std::numeric_limits<int>::min(); // 保证首帧必打
+                if ( 0 && scale != lastScale)
+                {
+                    lastScale = scale;
+                    std::fprintf(stderr,
+                                 "[clamp]: scale=%d, realAngle=%d, interval=%.3f, interval_prev=%.3f, "
+                                 "interval_next=%.3f, angle_spacing=%.3f\n",
+                                 scale, realAngle, interval, interval_prev, interval_next, angle_spacing);
+                }
             }
-            const float startPart = startingAngle_[face];                   // 本面起始角
+            realPart = std::clamp(realPart, -fineLimit, fineLimit);
+            const float startPart = startingAngle_[face]; // 本面起始角
 
             hc = encoderPart + realPart - startPart;
             // wrap 到 [-180, 180]
@@ -1176,6 +1312,14 @@ bool Cs96BetaCalibration::exportUnifiedCsv(const std::filesystem::path &path, st
             out << "spot_slope,," << (face + 1) << "," << number(entry.first) << ","
                 << number(entry.second) << ",,,,\n";
         }
+    }
+
+    // 每格实测耗时（us）：更新标定时从目录读入并写回，apply() 用它折算细角度。
+    const auto &timing =
+        (!timeIntervals_.empty() || base == nullptr) ? timeIntervals_ : base->timeIntervals_;
+    for (std::size_t i = 0; i < timing.size(); ++i)
+    {
+        out << "time_interval,," << i << "," << number(timing[i]) << ",,,,,\n";
     }
 
     // 本类不解析的 section（vcsel_index / light_intensity 等）原样写回。

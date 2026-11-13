@@ -126,6 +126,10 @@ public:
 
     const std::array<float, 4> &startingAngles() const { return startingAngle_; }
 
+    /// 是否加载了每格实测耗时（time_intervals.txt）。
+    /// false 时 apply() 的细角度退回名义间隔 kNominalIntervalUs。
+    bool hasTimeIntervals() const { return !timeIntervals_.empty(); }
+
     /// PA 绝对角（0~360°）。
     float paAngle(int scale, int realAngle) const;
 
@@ -135,6 +139,11 @@ public:
 private:
     bool parseIni(const std::filesystem::path &path, std::string &error);
     bool parseEncoderAngle(const std::filesystem::path &path, std::string &error);
+    /// 读取 time_intervals.txt：每个粗刻度到下一个刻度的实测耗时（us，240 项）。
+    /// 可接受 239 行（末格用均值补）、241 行（首行是 FPGA t0，自动丢弃）。
+    bool parseTimeIntervals(const std::filesystem::path &path, std::string &error);
+    /// 第 scale 格的名义/实测耗时（us）；缺表时返回 kNominalIntervalUs。
+    float timeIntervalUs(int scale) const;
     bool parseReflectivity(const std::filesystem::path &path, std::string &error);
     bool parseSpotSlope(const std::filesystem::path &path, std::string &error);
     /// 读取 tools/pack_cs96beta_calibration.py 生成的单文件聚合表。
@@ -167,6 +176,10 @@ private:
     std::array<float, 4> standardEncoder_{};
     std::array<float, 4> sideAngularOffset_{};
     std::vector<float> encoderAngle_; // 241，含 scale=240 边界
+
+    /// 每个粗刻度到下一个刻度的实测耗时（us，240 项，scale 0..239）。
+    /// 来自 time_intervals.txt；为空时 apply() 退回 kNominalIntervalUs。
+    std::vector<float> timeIntervals_;
 
     /// 按面的角度旋转曲线（spot_slope_map）：face -> (FPGA 角, 修正量)。
     /// 目前只做保存与访问，未参与 apply()，便于后续对齐下位机 get_beta_spot_slope()。

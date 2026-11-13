@@ -96,7 +96,9 @@ private:
     void toggleLiveCalibration();
     void loadLiveCalibration();
     /// 按当前型号加载对应格式的标定表（6532 用 bin，CS96 Beta 用聚合 CSV）。
-    void loadBetaCalibration();
+    /// 加载 CS96 聚合标定表。preselected 非空时不再弹文件对话框，
+    /// 供"未连接设备、先选文件再按扩展名分派"的场景复用。
+    void loadBetaCalibration(const std::filesystem::path &preselected = {});
     /// 选一个目录标定包（ini + encoder_angle + spot_slope），解析后写回聚合 CSV 并立即生效。
     void updateCalibTableFromDirectory();
     /// 切换原始点云水平角的解算方案：Beta（查表+面起始角）/ Alpha（编码盘差分+帧中点基准）。

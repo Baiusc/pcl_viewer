@@ -2075,17 +2075,22 @@ void ViewerApp::updateModelDependentUi()
     ui_.setVisible(roiButtonIndex_, fl6532);
 }
 
-void ViewerApp::loadBetaCalibration()
+void ViewerApp::loadBetaCalibration(const std::filesystem::path &preselected)
 {
-    const auto files = FileDialogService::openFiles();
-    if (files.empty())
+    std::filesystem::path source = preselected;
+    if (source.empty())
     {
-        logUi("Select Calib", "用户取消或未选择文件", false);
-        return;
+        const auto files = FileDialogService::openFiles();
+        if (files.empty())
+        {
+            logUi("Select Calib", "用户取消或未选择文件", false);
+            return;
+        }
+        source = files.front();
     }
 
     std::string copyError;
-    const auto stored = importCalibrationFile(files.front(), copyError);
+    const auto stored = importCalibrationFile(source, copyError);
     if (stored.empty())
     {
         logUi("Select Calib", "复制标定表失败: " + copyError, false);
@@ -2097,15 +2102,15 @@ void ViewerApp::loadBetaCalibration()
     {
         std::error_code sameEc;
         const bool inPlace = std::filesystem::exists(stored, sameEc) &&
-                             std::filesystem::equivalent(files.front(), stored, sameEc);
+                             std::filesystem::equivalent(source, stored, sameEc);
         std::ostringstream where;
         if (inPlace)
         {
-            where << "标定表源: " << files.front().string() << "（已在标定目录，直接加载）";
+            where << "标定表源: " << source.string() << "（已在标定目录，直接加载）";
         }
         else
         {
-            where << "标定表源: " << files.front().string() << " -> 复制到 " << stored.string()
+            where << "标定表源: " << source.string() << " -> 复制到 " << stored.string()
                   << "（运行时加载副本）";
         }
         logUi("Select Calib", where.str());
@@ -2166,6 +2171,11 @@ void ViewerApp::updateCalibTableFromDirectory()
         logUi("Update Calib", "目录标定解析失败: " + error, false);
         return;
     }
+    // 目录里若有 time_intervals.txt（每格实测耗时 us），会把细角度从固定 1701us
+    // 改为按格折算；这里明确告诉用户这次到底用上了没有。
+    logUi("Update Calib", calibration->hasTimeIntervals()
+                              ? "已读取 time_intervals.txt（每格实测耗时，单位 us）"
+                              : "目录里没有可用的 time_intervals.txt，细角度退回名义 1701us");
 
     std::error_code ec;
     if (!std::filesystem::exists(directory / "spot_slope_map.csv", ec) &&
@@ -2310,13 +2320,38 @@ void ViewerApp::loadLiveCalibration()
         return;
     }
 
+    // 未连接设备时 activeModel_ 是 Unknown，不能凭它猜格式：先选文件，再按扩展名分派。
+    // 否则选 .csv 会被当成 6532 的 bin 解析，报"长度不符，预期 270360 B"。
+    std::filesystem::path preselected;
     if (activeModel_ == RadarModel::Unknown)
     {
-        logUi("Select Calib", "尚未连接雷达，按 6532 固态雷达的 bin 格式加载");
+        const auto picked = FileDialogService::openFiles();
+        if (picked.empty())
+        {
+            logUi("Select Calib", "用户取消或未选择文件", false);
+            return;
+        }
+        preselected = picked.front();
+        const std::string ext = preselected.extension().string();
+        if (ext == ".csv" || ext == ".CSV")
+        {
+            logUi("Select Calib", "未连接设备，按所选 .csv 走 CS96 聚合标定表");
+            loadBetaCalibration(preselected);
+            return;
+        }
+        logUi("Select Calib", "未连接设备，按所选 " + ext + " 走 6532 固态标定");
     }
 
     logUi("Select Calib", "打开标定表选择对话框");
-    const auto files = FileDialogService::openFiles();
+    std::vector<std::filesystem::path> files;
+    if (preselected.empty())
+    {
+        files = FileDialogService::openFiles();
+    }
+    else
+    {
+        files.push_back(preselected);
+    }
     if (files.empty())
     {
         logUi("Select Calib", "用户取消或未选择文件", false);

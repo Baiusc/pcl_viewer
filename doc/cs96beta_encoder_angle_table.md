@@ -73,6 +73,50 @@ angle[240] = 360
 **不能**用 `angle[i] = i × 360/240`：那只在刻度绝对均匀时成立。实测每格角度标准差
 0.0454°、最大偏离 0.26°，在 10m 处对应横向 `10 × tan(0.26°) ≈ 4.5cm` 的错位。
 
+### 3.1 细角度也用实测耗时（2026-11-13 起）
+
+粗刻度查表只解决"格与格之间"的不均匀；**一格内部**（`realAngle` 0~4095）原来固定用
+`0.0009°/count`（≈1.53°/1700count）线性折算，等于假设每格耗时都是 1700us。转速或个别格子
+耗时有偏差时，整格都会被推歪。
+
+现在把实测耗时接到 `apply()` 的 Beta 分支（`Cs96BetaCalibration.cpp`）：
+
+```
+angle_cur    = encoderAngle_[scale]
+angle_next   = (scale < 240) ? encoderAngle_[scale+1] : 360°
+angle_spacing= angle_next - angle_cur
+
+interval     = timeIntervals_[scale]            // time_intervals.txt，us
+realPart     = realAngle / interval * angle_spacing
+realPart     = clamp(realPart, ±1.05×angle_spacing)
+hc           = angle_cur + realPart - startingAngle_[face]
+omega        = hc × 2 + omega0
+```
+
+要点：
+
+| 项 | 说明 |
+|---|---|
+| `scale=240` 边界 | 原实现先取 `encoderAngle_[scale+1]` 再判 `>240`，`scale=240` 时是 `[241]` **越界读**；现在先判 `scale < lastScale`，末格取 360° |
+| 跨零/脏值 | `angle_next <= angle_cur` 时退化为 `angle_cur + 360/240`，避免负 spacing |
+| 超限处理 | 原实现 `realPart > 1.53×2` 时**无条件赋 +1.53**，负向偏差会被翻成正；现在 `std::clamp(±1.05×spacing)` |
+| 缺表兜底 | 没有 `time_intervals.txt` 时 `timeIntervalUs()` 返回名义 1701us，行为与旧版一致 |
+| 数据来源 | 所选标定目录下的 `time_intervals.txt`，每行一个 us 值，**240 个**（文件末行常无换行，`wc -l` 会少算 1） |
+| 兼容 | 也接受 241 行（首行是 FPGA t0，按中位数一半判定后丢弃）、239 行（末格用均值补） |
+
+**落到聚合表**：新增 section `time_interval`，240 行，单位 us。
+
+```
+time_interval,,0,1735.7301,,,,,
+time_interval,,239,1664.3219,,,,,
+```
+
+`Update Calib` 会读所选目录下的 `time_intervals.txt` 并写进聚合表；找不到时日志会明确提示
+"细角度退回名义 1701us"。`Select Calib` 加载聚合表时按 `time_interval` 段恢复。
+
+**自检**：`data/param/cs96beta_calib_data/cs96beta_calibration.csv` 里
+`grep -c '^time_interval,'` 应为 **240**。
+
 ## 4. 脚本
 
 `tools/encoder_time_to_angle.py`（纯标准库）：
