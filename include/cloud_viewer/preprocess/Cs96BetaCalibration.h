@@ -173,6 +173,10 @@ private:
     std::array<std::vector<std::pair<float, float>>, 4> spotSlope_;
 
     std::vector<ReflectivityRow> reflectivityRows_;
+
+    /// 聚合 CSV 里本类不解析的 section 原始行（vcsel_index / light_intensity 等）。
+    /// 重新导出时原样写回，否则「用目录更新一次」就会把这些段落整段丢掉。
+    std::vector<std::string> passthroughRows_;
     std::map<int, std::vector<ReflectivityRow>> reflectivityByPixel_;
 };
 

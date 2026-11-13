@@ -2092,6 +2092,25 @@ void ViewerApp::loadBetaCalibration()
         return;
     }
 
+    // 用户选的是源文件，实际加载的是复制后的副本（运行时不依赖原始路径）。
+    // 两处都打出来：否则"选的是 data/param、日志却显示 build/calib"会让人以为没生效。
+    {
+        std::error_code sameEc;
+        const bool inPlace = std::filesystem::exists(stored, sameEc) &&
+                             std::filesystem::equivalent(files.front(), stored, sameEc);
+        std::ostringstream where;
+        if (inPlace)
+        {
+            where << "标定表源: " << files.front().string() << "（已在标定目录，直接加载）";
+        }
+        else
+        {
+            where << "标定表源: " << files.front().string() << " -> 复制到 " << stored.string()
+                  << "（运行时加载副本）";
+        }
+        logUi("Select Calib", where.str());
+    }
+
     auto calibration = std::make_shared<Cs96BetaCalibration>();
     std::string error;
     if (!calibration->load(stored, error))
@@ -2156,19 +2175,51 @@ void ViewerApp::updateCalibTableFromDirectory()
               false);
     }
 
-    const auto target = executableDirectory() / "calib" / "cs96beta_calibration.csv";
-    std::filesystem::create_directories(target.parent_path(), ec);
+    // 写回"用户选的那个目录"：Update Calib 的语义就是"用这个目录里的散表重算聚合表"。
+    // 以前硬编码成 exe/calib，导致在 data/param 里更新永远看不到变化。
+    const auto primaryTarget = directory / "cs96beta_calibration.csv";
+    const auto runtimeTarget = executableDirectory() / "calib" / "cs96beta_calibration.csv";
+    std::filesystem::create_directories(primaryTarget.parent_path(), ec);
 
-    // 以现有表为基底：目录包里没有的部分（反射率、角度曲线）继续沿用，
+    // 以所选目录里现有的聚合表为基底：目录包里没有的部分（反射率、角度曲线）继续沿用，
     // 否则一次"更新"就会把没提供的 section 整段清空。
     Cs96BetaCalibration previous;
-    if (std::filesystem::exists(target, ec))
+    std::filesystem::path basePath;
+    if (std::filesystem::exists(primaryTarget, ec))
+    {
+        basePath = primaryTarget;
+    }
+    else if (std::filesystem::exists(runtimeTarget, ec))
+    {
+        basePath = runtimeTarget;
+    }
+    if (!basePath.empty())
     {
         std::string ignored;
-        previous.load(target, ignored);
+        previous.load(basePath, ignored);
     }
 
-    if (!calibration->exportUnifiedCsv(target, error, previous.loaded() ? &previous : nullptr))
+    // 覆盖前先备份：标定表是现场实测数据，不能只靠记忆回滚。
+    if (std::filesystem::exists(primaryTarget, ec))
+    {
+        const auto stamp =
+            std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+        const auto backup = primaryTarget.string() + ".bak." + stamp;
+        std::error_code backupEc;
+        std::filesystem::copy_file(primaryTarget, backup,
+                                   std::filesystem::copy_options::overwrite_existing, backupEc);
+        if (backupEc)
+        {
+            logUi("Update Calib", "备份旧表失败（继续写入）: " + backupEc.message(), false);
+        }
+        else
+        {
+            logUi("Update Calib", "旧表已备份: " + backup);
+        }
+    }
+
+    if (!calibration->exportUnifiedCsv(primaryTarget, error,
+                                       previous.loaded() ? &previous : nullptr))
     {
         logUi("Update Calib", "导出聚合表失败: " + error, false);
         return;
@@ -2176,10 +2227,28 @@ void ViewerApp::updateCalibTableFromDirectory()
 
     // 立刻回读校验：宁可这次不生效，也不要让写坏的表覆盖掉原来好用的表。
     Cs96BetaCalibration verify;
-    if (!verify.load(target, error))
+    if (!verify.load(primaryTarget, error))
     {
         logUi("Update Calib", "回读校验失败（文件已写入但未启用）: " + error, false);
         return;
+    }
+
+    // 同步到运行时默认路径（exe/calib），否则下次启动加载的还是旧表。
+    bool synced = false;
+    if (primaryTarget != runtimeTarget)
+    {
+        std::filesystem::create_directories(runtimeTarget.parent_path(), ec);
+        std::error_code copyEc;
+        std::filesystem::copy_file(primaryTarget, runtimeTarget,
+                                   std::filesystem::copy_options::overwrite_existing, copyEc);
+        synced = !copyEc;
+        if (copyEc)
+        {
+            logUi("Update Calib",
+                  "同步到 " + runtimeTarget.string() + " 失败: " + copyEc.message() +
+                      "（本次会话已生效）",
+                  false);
+        }
     }
 
     betaCalibration_ = calibration;
@@ -2192,9 +2261,13 @@ void ViewerApp::updateCalibTableFromDirectory()
 
     const auto &starts = betaCalibration_->startingAngles();
     std::ostringstream detail;
-    detail << "已更新 " << target.string() << " (" << verify.lineCount() << "x"
+    detail << "已重算 " << primaryTarget.string() << " (" << verify.lineCount() << "x"
            << verify.slotCount() << ") start=" << starts[0] << "," << starts[1] << ","
            << starts[2] << "," << starts[3];
+    if (synced)
+    {
+        detail << "；已同步到 " << runtimeTarget.string();
+    }
     logUi("Update Calib", detail.str());
     controlState_ = "CS96 Beta calibration updated from " + directory.filename().string();
     updateHud();

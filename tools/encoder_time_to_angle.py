@@ -54,7 +54,7 @@ NOMINAL_INTERVAL_US = 1.0e6 / SCALES_PER_REV / 2.5   # 1666.7us（2.5 圈/秒）
 INPUT_PATH = "./tools/intervals.txt"          # 每行一个刻度时间间隔（240 行）
 OUTPUT_PATH = "./tools/enc.csv"          # 输出 csv 路径；None 则只打印统计
 UNIT_SCALE = 1.0                      # 乘到每个数上的系数（1 = 输入已是 us）
-FIRST_IS_OFFSET = True               # 首行是 FPGA 的 t0 偏移而非完整间隔时设 True
+FIRST_IS_OFFSET = False               # 首行是 FPGA 的 t0 偏移而非完整间隔时设 True
 COMPARE_CSV = None                    # 参考角度表路径（如 ys_encoder_angle.csv）；None 不对比
 # =================================================================
 

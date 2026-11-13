@@ -568,7 +568,12 @@ bool Cs96BetaCalibration::parseUnifiedCsv(const std::filesystem::path &path, std
                                               std::strtof(fields[4].c_str(), nullptr));
             }
         }
-        // vcsel_index / light_intensity 等仅保存于 CSV，暂不参与几何。
+        else
+        {
+            // vcsel_index / light_intensity 等暂不参与几何，但要原样保留，
+            // 否则用目录重算聚合表时会把这几段整段删掉。
+            passthroughRows_.push_back(line);
+        }
     }
 
     if (std::any_of(angles.begin(), angles.end(), [](float a) { return !std::isfinite(a); }))
@@ -900,10 +905,22 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
         float hc = omega0_;
         if (slot != 0)
         {
-            // 计算 码盘水平角
+            // 计算 码盘机械转角
             // const float encoderPart = 360.f/240 * scale ;                 // debug 若不查表
             const float encoderPart = encoderAngle_[scale];                 // 码盘一圈360°分成 240 个刻度 编码器查表
-            const float realPart = 0.0009f * static_cast<float>(realAngle); // 计时估算的细角度 1.53°/1700 = 0.0009
+            // float realPart = 0.0009f * static_cast<float>(realAngle); // 计时估算的细角度 1.53°/1700 = 0.0009
+            const float angle_cur = encoderAngle_[scale];
+            float angle_next = encoderAngle_[scale + 1];
+            if(scale+1>240)
+            {
+                angle_next = 360.0f;  // 处理最后一个刻度 TODO
+            }
+            const float angle_spacing = angle_next - angle_cur;
+            float realPart = realAngle / 1701.0 * angle_spacing; // planB 用真实刻度角度算 细角度
+            if (std::abs(realPart) > 1.53f * 2)
+            {
+                realPart = 1.53f; // 限制最大细角度为 1.53° TODO
+            }
             const float startPart = startingAngle_[face];                   // 本面起始角
 
             hc = encoderPart + realPart - startPart;
@@ -925,7 +942,7 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
         // spot_slope_map 缺失时设备端原样返回，等价于关闭本项。
         if (slot != 0 && options.spotSlope)
         {
-            omegaDeg = spotSlopeCorrection(omegaDeg, face);
+            // omegaDeg = spotSlopeCorrection(omegaDeg, face);
         }
     }
 
@@ -1159,6 +1176,15 @@ bool Cs96BetaCalibration::exportUnifiedCsv(const std::filesystem::path &path, st
             out << "spot_slope,," << (face + 1) << "," << number(entry.first) << ","
                 << number(entry.second) << ",,,,\n";
         }
+    }
+
+    // 本类不解析的 section（vcsel_index / light_intensity 等）原样写回。
+    // 本次解析到的优先，否则沿用 base 的；都没有就什么都不写。
+    const auto &passthrough =
+        (!passthroughRows_.empty() || base == nullptr) ? passthroughRows_ : base->passthroughRows_;
+    for (const auto &row : passthrough)
+    {
+        out << row << "\n";
     }
 
     out.flush();
