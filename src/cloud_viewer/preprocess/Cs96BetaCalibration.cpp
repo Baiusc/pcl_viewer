@@ -855,7 +855,7 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     //   hc    = encoder[scale] + 0.0009·real - starting[face]，wrap 到 ±180
     //   omega = hc·2 + omega0
     // 编码器表与面起始角属结构参数（PA 实测、非逐线修正），任何开关下都保留。
-    const int scale = static_cast<int>((mirrorAngle >> 12) & 0xFF); // 8位 0-256 0-240
+    const int scale = static_cast<int>((mirrorAngle >> 12) & 0xFF); // 8位 0-256 0-240(避免末尾取不到)
     const int realAngle = static_cast<int>(mirrorAngle & 0xFFF); // 0-4095 0-1700 12位
     if (slot != 0 && scale >= static_cast<int>(encoderAngle_.size())) return;
 
