@@ -260,7 +260,9 @@ r = velocitylight * (ft >> 1) * g_distance_factor[pixel] + g_delta_distance_inde
 
 - `g_encoder_angle` 来自 `ys_encoder_angle.csv`（`scale,angle`，241 行，0~360），
   不是 `spot_slope_map.csv`。这张表来自**光学光条标定**；刻度时间测量（FPGA `(n,cnt)`）
-  是独立验证手段，两者不能互相替代，详见 `doc/cs96beta_encoder_angle_table.md`。
+  先用 FPGA 的码盘耗时表（`time_intervals.txt`）按时间比例算**初版**，再用**光条 CV 标定**
+  修正成**终版**；初版不能直接上线（实测最大差 0.62°）。详见
+  `doc/cs96beta_encoder_angle_table.md`。
 - `frame_id` 就是面号（0~3），**每帧一个面**。
 - 设备日志实测每面起始角（`start=`）：
 

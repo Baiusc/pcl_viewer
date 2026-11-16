@@ -22,6 +22,9 @@
 | 在线 Mock 推流（`mock_replay`） | 完成 |
 | 真实雷达 SDK 接入 | 未接入（需厂商 SDK） |
 | 6532 legacy 标定模块 | 接口完成，默认不自动应用 |
+| CS96 Beta 转镜实时点云（UDP 50007，96×800） | 完成 |
+| CS96 Beta 角度标定（码盘耗时 + 光条表 + 聚合表） | 完成 |
+| CS96 Beta 设备搜索 / 连接 / 工作模式切换（SSH） | 完成 |
 
 ## 目录结构
 
@@ -235,6 +238,60 @@ ctest --test-dir build-lite --output-on-failure
 本轮构建和 4 项 CTest 通过；雷达连接返回 `No route to host`，设备切换 ACK、实机 Range/LZ4
 显示及墙面标定效果仍待实机联调。本地测试不作为真实设备效果的证明。
 
+## CS96 Beta 转镜雷达（96×800）
+
+与 6532 固态雷达并列的另一条链路，走 `BetaUdpStream`（UDP 50007）。
+
+| 项 | 说明 |
+|---|---|
+| 设备发现 | UDP 55000 广播 + ARP/MAC 扫描；已知 IP 会先 probe |
+| 输出模式 | `work_mode` 0 直方图 / 1 原始点云（1561B 包）/ 2 真实点云（1266B 包，设备已算好 xyz） |
+| 一帧 | **96×800 = 76800 点，FOV 120°**，一帧一个面，4 面轮转（**不是** 360° 环视） |
+| 坐标 | 真实点云用设备 xyz（右手系）；原始点云水平角取反，呈现左手系（slot0 最左、slot799 最右） |
+| 标定 | `Select Calib` 载入聚合 CSV；`Update Calib` 用目录散表重算聚合表（写回所选目录并同步到 `build/calib`） |
+| 帧率自检 | `CV_LIVE_FPS=1` 每 2 秒输出窗口帧率与 `gap_max`；`CV_FACE_TRACE=1` 打印面号轮转 |
+
+### 角度标定流程（四步）
+
+```text
+① FPGA 测每格耗时          → time_intervals.txt（240 个 us）
+② 按累计时间比例分 360°    → ys_encoder_angle.csv（初版）→ 写入雷达 ARM flash
+③ 光条 CV 标定             → ys_encoder_angle.csv（终版，更精准）
+④ omega = 终版粗刻度表 + 每格耗时折算细角度 − 面起始角，再 ×2 + omega0
+```
+
+第 ④ 步的面起始角来自 `ys_calibration.ini`：`angle_face_N`（粗刻度，1 格 = 1.5°）
+与 `side_angular_offset`（1/256 格 ≈ 0.0059°）。
+
+**注意**：第 ② 步时间换算出的表只是**初版**，上线前必须过第 ③ 步光条修正；
+两者实测最大差 0.62°，直接用初版覆盖会把机械-光学差灌进水平角。
+完整原理、实测数据与代码位置见 `doc/cs96beta_encoder_angle_table.md`。
+
+### 标定文件
+
+`data/param/cs96beta_calib_data/`：
+
+| 文件 | 用途 |
+|---|---|
+| `ys_calibration.ini` | `u` / `omega0` / `theta` / `dist_max` / 逐线 `omega_delta`、`d_delta`、`a`；四面 `angle_face_N`、`side_angular_offset` |
+| `ys_encoder_angle.csv` | **终版**粗刻度角度表（scale 0~240，241 行） |
+| `time_intervals.txt` | 每格实测耗时（us，240 个，末行常无换行） |
+| `spot_slope_map.csv` | FPGA 旋转角修正曲线（可选） |
+| `reflectivity_map.csv` | 反射率查表（可选） |
+| `cs96beta_calibration.csv` | 以上聚合成的单文件表，`Select Calib` 用它 |
+
+### 相关环境变量
+
+| 变量 | 说明 |
+|---|---|
+| `CV_BETA_IP` | 目标雷达 IP |
+| `CV_BETA_PORT` | 本机接收端口（默认 50007） |
+| `CV_BETA_WORK_MODE` | 连接前把设备切到 0/1/2 |
+| `CV_BETA_CALIB` | 指定标定表路径，覆盖默认查找顺序 |
+| `CV_LIVE_FPS` | 每 2 秒输出帧率 / `gap_max` / 分阶段耗时 |
+| `CV_FACE_TRACE` | 打印发布的面号，验证四面轮转 |
+| `CV_ANGLE_PROBE` | 打印首末 slot 的水平角与坐标，验证左手系方向 |
+
 ## 与设计文档的偏差记录
 
 1. **PCL 组件**：当前环境 `libpcl_visualization` / `libpcl_io` 依赖已不存在的 Boost 1.71，
@@ -244,6 +301,7 @@ ctest --test-dir build-lite --output-on-failure
 3. **UI**：按设计不引入 Qt/ImGui，使用 VTK 2D `vtkTextActor` 面板与键盘交互；
    文本使用 ASCII，避免中文字体打包问题。
 4. **标定**：默认不自动应用；`Legacy6532Calibration` 需显式配置 `calib_data.bin` 才处理 raw 数据。
+   CS96 Beta 是另一套（聚合 CSV + 码盘耗时表），见上文「CS96 Beta 转镜雷达」。
 5. **LOD**：`RenderRequest.maxPoints` 已支持确定性抽样，但尚未接入相机运动触发。
 
 ## 样本验证

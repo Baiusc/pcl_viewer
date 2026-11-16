@@ -194,6 +194,8 @@ bool Cs96BetaCalibration::finalizeGeometry(std::string &error)
     //                            256.0f * 360.0f / kPaCountsPerRevolution;
     // }
     // 拆分上式  便于调试
+    // sideAngularOffset_[1] += 20; 
+    // sideAngularOffset_[2] += 40;
     for (int face = 0; face < kFaces; ++face)
     {
         const float stdEncode_ = standardEncoder_[face];    // 第 0-3 面转镜的起始发光粗刻度 取值范围 0-240
@@ -202,7 +204,6 @@ bool Cs96BetaCalibration::finalizeGeometry(std::string &error)
         const float offsetAngle = sideOffset / 256.f * 1.5f; // 4面零位角 细角度
         startingAngle_[face] = roughAngle + offsetAngle;
     }
-    // startingAngle_[0] -= 20.0f;
     // 俯仰角：与下位机 CalculateTheta 一致（像素倒序映射）。
     const float step = (thetaMax_ - thetaMin_) / static_cast<float>(linesV_);
     for (int i = linesV_ - 1, j = 0; i >= 0; --i, ++j)

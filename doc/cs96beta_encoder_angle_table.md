@@ -1,42 +1,74 @@
-# CS96 Beta 编码器角度表：采集、换算与应用
+# CS96 Beta 角度标定：从码盘计时到 omega
 
-> `ys_encoder_angle.csv` 描述"码盘每个粗刻度实际对应多少度"。它有**两条独立的获取路径**：
-> **光学光条标定**（现网表就用这个）和 **刻度时间测量**（独立验证）。两者大多数刻度
-> 吻合到 0.02° 以内，但在 164~169、227~229 等刻度段差 0.3~0.66°，**不能互相替代**。
+> 角度不是一次算出来的，是**三步递进 + 一步合成**：
+> FPGA 测码盘耗时 → 时间换算得到**初版**角度表 → 光条 CV 修正成**终版**表 →
+> 用终版表 + 耗时表 + 面起始参数算 `omega`。
+>
+> 关键点：**时间表只能给"相对关系"，给不了"绝对光路角"**。所以第 ② 步产出的表是初值，
+> 必须再经第 ③ 步光学修正才上线。
 
 ---
 
-## 1. 两条路子，别混
+## 1. 四步流程总览
 
-| | 光学光条标定 | 刻度时间测量 |
+| 步骤 | 输入 | 动作 | 输出 | 执行方 |
+|---|---|---|---|---|
+| **① 码盘计时** | 转镜实际转动 | FPGA 逐刻度记 `(n, cnt)`，多圈平均 | `time_intervals.txt`（240 个 us） | FPGA + 上位机 |
+| **② 时间→角度** | `time_intervals.txt` | 按累计时间比例分 360°，得**初版**角度表 | `ys_encoder_angle.csv`（初版）→ 写入雷达 **ARM flash** | 上位机 + ARM |
+| **③ 光条标定** | 初版表 + 转镜停在刻度位发光 | CV 测真实光路角，逐格修正 | `ys_encoder_angle.csv`（**终版**） | 标定台 |
+| **④ 解算 omega** | 终版表 + `time_intervals.txt` + `ys_calibration.ini` | 粗刻度查表 + 细角度按耗时折算 − 面起始角 | `omega`（水平角） | ARM / PC（同构） |
+
+```text
+FPGA 逐刻度计时 ──► time_intervals.txt ──┬──► ② 按时间比例分 360° ──► 初版 angle 表 ──► ARM flash
+                                        │                                  │
+                                        │                          ③ 光条 CV 逐格修正
+                                        │                                  │
+                                        │                                  ▼
+                                        │                          终版 ys_encoder_angle.csv
+                                        │                                  │
+                                        └──────────────┬───────────────────┘
+                                                       ▼
+                    ④ omega = f(终版 angle 表, 每格耗时, standard_encoder, side_angular_offset)
+```
+
+## 2. 为什么必须是两步：时间表只反映机械转角
+
+| | 码盘计时（①②） | 光条标定（③） |
 |---|---|---|
-| 怎么做 | 转镜停在每个粗刻度位置发光，用相机/光条测实际光路角 | FPGA 记 `(n, cnt)`，多圈平均相邻刻度耗时，按时间比例分 360° |
-| 得到什么 | 每格**绝对光学角** | 每格**相对时间**，需换算 |
-| 现网 `ys_encoder_angle.csv` | ✅ **就是它** | ❌ 不是 |
-| 强项 | 直接、可追溯到光路 | 不出光、可长时间无人值守重复测 |
-| 弱项 | 依赖标定台与光条判读 | 只反映机械转角，不含光路/装配误差 |
+| 测到什么 | **机械**转角的时间比例 | **光路出射角** |
+| 含光学误差 | 否（面形、装配偏心、镜面倾斜都测不到） | 是 |
+| 能否直接上线 | 能，但精度有限（初版） | 能（终版） |
+| 成本 | 不出光、可长时间无人值守重复测 | 依赖标定台与光条判读 |
 
-**实证（不猜）**：把 `ys_encoder_angle.csv` 与 xlsx sheet2 的两列做逐点比对：
+**实证（不猜）**：把现网 `ys_encoder_angle.csv` 与 xlsx sheet2 的两列逐点比对：
 
-```
-以「光条测算」为基准:
-现有 csv vs 光条                 max=+0.0000°  rms=0.0000°   ← 逐位一致
-新表(49圈时间) vs 光条           max=-0.6242°  rms=0.1797°
-以「刻度时间测算」为基准:
-现有 csv vs 时间列               max=+0.6572°  rms=0.1358°
+```text
+现网 csv    vs 光条列   max=+0.0000°  rms=0.0000°    ← 终版表与光条标定逐位一致
+49圈时间表  vs 光条列   max=-0.6242°  rms=0.1797°    ← 初版与终版差多少
+现网 csv    vs 时间列   max=+0.6572°  rms=0.1358°    ← 同一差值的另一侧看
 ```
 
-**结论：现网表 100% 来自光学光条标定**，时间测算是另一条线。任何"用时间数据重算一张表
-覆盖现网表"的做法都必须先做分段比对，否则会把 0.6° 的偏差灌进水平角。
+所以 **0.62° 不是"两条路线打架"，而是第 ③ 步修正掉的量**：
 
-## 2. 时间数据长什么样
+| 项 | 数值 |
+|---|---|
+| 差 > 0.05° 的刻度 | 107 / 241 |
+| 差值范围 | −0.2903 ~ +0.6572 |
+| 差 > 0.3° 的刻度段 | **164~169**、**227~229** |
+| 吻合 < 0.02° 的刻度段 | 0~22、50~61 等 |
+
+**分段吻合、分段分歧**——吻合的段说明机械与光路一致；分歧 0.3~0.6° 的段，通常是转镜面形 /
+装配偏心在该角度上的贡献。若现场点云在这些方位出现黑缝或错位，优先查这几段的机械与光学状态，
+不要去改时间数据。
+
+## 3. ① 码盘计时：time_intervals.txt 怎么来的
 
 采集方案（PPT slide 6）：
 
-```
+```text
 FPGA  ：每个粗刻度输出 (n, cnt)，n = 0~239，cnt = 相对 0 刻度的时间计数
 ARM   ：透传 (n, cnt) 到上位机
-上位机：转成 (Θ, t) 算瞬时转速；Θ 由标定算法（光学表）提供
+上位机：转成 (Θ, t) 算瞬时转速；Θ 由标定算法（当前角度表）提供
 ```
 
 上位机对多圈同一刻度的间隔取平均，得到 `Δt[0..239]`：
@@ -48,23 +80,24 @@ ARM   ：透传 (n, cnt) 到上位机
 多圈平均是必须的：同一刻度跨圈波动只有 `2us/1703.7us = 0.117%`（PPT slide 8），
 转速本身很稳，剩下的差异才是**码盘刻度不均匀**——那正是要测的量。
 
-### 241 行 = 1 个 t0 + 240 个间隔
+### 行数：241 行 = 1 个 t0 + 240 个间隔
 
 | 位置 | 含义 | 典型值 |
 |---|---|---|
 | 第 1 个 | FPGA 的 `t0`：首个刻度相对计数起点的时间，**不是一整格** | ~266us |
 | 第 2~241 个 | 相邻粗刻度时间间隔 `Δt[0..239]` | 1469~1808us，均值 ~1701us |
 
-转换时必须丢掉第一行，否则整表多一格。
+> 现场落盘的 `time_intervals.txt` 常常只有 240 个值且**末行无换行**，`wc -l` 会少算 1
+> （显示 239）。解析器两者都接受。
 
 > 纵轴标注的 `(1/125)` 实测与 PPT 的 us 口径一致，按 **us** 处理。若上游给的是时钟计数，
 > 用脚本 `--unit-scale` 换算（125MHz → 1 计数 = 0.008us）。
 
-## 3. 时间 → 角度
+## 4. ② 时间 → 角度：生成初版表
 
 转镜匀速，**转过时间 ∝ 转过角度**，按累计时间比例分配 360°：
 
-```
+```text
 angle[0]   = 0
 angle[i]   = 360 × Σ Δt[0..i-1] / Σ Δt[0..239]      (i = 1..240)
 angle[240] = 360
@@ -73,59 +106,105 @@ angle[240] = 360
 **不能**用 `angle[i] = i × 360/240`：那只在刻度绝对均匀时成立。实测每格角度标准差
 0.0454°、最大偏离 0.26°，在 10m 处对应横向 `10 × tan(0.26°) ≈ 4.5cm` 的错位。
 
-### 3.1 细角度也用实测耗时（2026-11-13 起）
+这一步的产物烧进雷达 **ARM flash**，让设备端先有一套可用角度表；随后第 ③ 步再把它修正成终版。
 
-粗刻度查表只解决"格与格之间"的不均匀；**一格内部**（`realAngle` 0~4095）原来固定用
-`0.0009°/count`（≈1.53°/1700count）线性折算，等于假设每格耗时都是 1700us。转速或个别格子
-耗时有偏差时，整格都会被推歪。
+## 5. ③ 光条 CV 修正：得到终版表
 
-现在把实测耗时接到 `apply()` 的 Beta 分支（`Cs96BetaCalibration.cpp`）：
+- 转镜依次停在每个粗刻度位置发光，用相机/光条测**真实光路出射角**；
+- 逐格替换/修正初版值，得到终版 `ys_encoder_angle.csv`；
+- 终版表同时下发到两端：
 
+```text
+设备端 /etc/ys_encoder_angle.csv          （源：lidar_sdk/you_see_arm/conf/）
+PC 端   data/param/cs96beta_calib_data/   （解析：Cs96BetaCalibration.cpp:parseEncoderAngle）
 ```
-angle_cur    = encoderAngle_[scale]
-angle_next   = (scale < 240) ? encoderAngle_[scale+1] : 360°
+
+两端 md5 必须一致（历史值 `4b7d7493…`），否则设备推流与 PC 解算会按不同表算角度。
+
+`doc/薄款雷达1_码盘角度测算0225.xlsx` 的 sheet2 就是这一步的验收表：
+「角度（光条测算）」vs「角度（刻度时间测算）」逐点对差。差异大的段落要人工复核，
+不要简单取平均。
+
+## 6. ④ 解算 omega：三段合成
+
+### 6.1 面起始角（来自 `ys_calibration.ini`）
+
+```text
+startingAngle[face] = standardEncoder[face] × (360/240) + sideAngularOffset[face] × (360/240/256)
+                    = standardEncoder[face] × 1.5°   + sideAngularOffset[face] × 0.005859°
+```
+
+| 参数 | 含义 | 单位 | 实测值 |
+|---|---|---|---|
+| `angle_face_N` / `standard_encoder` | 第 N 面起始发光的粗刻度 | 1 格 = 1.5° | 22 / 82 / 142 / 202 |
+| `side_angular_offset` | 面间细调（相对第 0 面） | 1/256 格 ≈ 0.0059° | 见 ini |
+| 结果 | 四面间隔约 90° | 度 | 33.13 / 123.00 / 213.18 / 303.19 |
+
+### 6.2 粗刻度 + 细角度 → `omega`
+
+```text
+angle_cur    = encoderAngle[scale]                                  // 终版表
+angle_next   = (scale < 240) ? encoderAngle[scale + 1] : 360°
 angle_spacing= angle_next - angle_cur
 
-interval     = timeIntervals_[scale]            // time_intervals.txt，us
-realPart     = realAngle / interval * angle_spacing
-realPart     = clamp(realPart, ±1.05×angle_spacing)
-hc           = angle_cur + realPart - startingAngle_[face]
-omega        = hc × 2 + omega0
+interval     = timeIntervals[scale]                                 // ① 的产物，us
+realPart     = realAngle / interval × angle_spacing                 // 细角度
+realPart     = clamp(realPart, ±1.05 × angle_spacing)
+
+hc           = angle_cur + realPart - startingAngle[face]           // wrap 到 ±180
+omega        = hc × 2 + omega0                                      // ×2：镜面反射放大一倍
 ```
 
-要点：
+- `realAngle`：本格内的计时计数（12 位）；
+- `× 2`：镜面绕竖直轴转 θ，反射光线偏 2θ；
+- `omega0 = -60°`：单面 120° 视场相对光路中心的偏移；
+- `timeIntervals` 在这里**第二次派上用场**：① 用它生成初版粗刻度表，④ 用它把格内计时折算成角度。
 
-| 项 | 说明 |
+### 6.3 缺省与兜底
+
+| 情况 | 行为 |
 |---|---|
-| `scale=240` 边界 | 原实现先取 `encoderAngle_[scale+1]` 再判 `>240`，`scale=240` 时是 `[241]` **越界读**；现在先判 `scale < lastScale`，末格取 360° |
-| 跨零/脏值 | `angle_next <= angle_cur` 时退化为 `angle_cur + 360/240`，避免负 spacing |
-| 超限处理 | 原实现 `realPart > 1.53×2` 时**无条件赋 +1.53**，负向偏差会被翻成正；现在 `std::clamp(±1.05×spacing)` |
-| 缺表兜底 | 没有 `time_intervals.txt` 时 `timeIntervalUs()` 返回名义 1701us，行为与旧版一致 |
-| 数据来源 | 所选标定目录下的 `time_intervals.txt`，每行一个 us 值，**240 个**（文件末行常无换行，`wc -l` 会少算 1） |
-| 兼容 | 也接受 241 行（首行是 FPGA t0，按中位数一半判定后丢弃）、239 行（末格用均值补） |
+| 没有 `time_intervals.txt` | `timeIntervalUs()` 返回名义 1701us，等价旧实现 |
+| `scale = 240`（末格） | 取 360° 收尾；旧实现先取 `[scale+1]` 再判边界，会越界读 |
+| `angle_next ≤ angle_cur` | 退化为 `angle_cur + 360/240`，避免负 spacing |
+| `realPart` 超限 | `clamp(±1.05×spacing)`；旧实现无条件赋 `+1.53`，会把负偏差翻成正 |
 
-**落到聚合表**：新增 section `time_interval`，240 行，单位 us。
+### 6.4 落在聚合表里的样子
 
-```
+`Update Calib` 从所选目录读 `time_intervals.txt`，写进聚合表：
+
+```csv
 time_interval,,0,1735.7301,,,,,
 time_interval,,239,1664.3219,,,,,
 ```
 
-`Update Calib` 会读所选目录下的 `time_intervals.txt` 并写进聚合表；找不到时日志会明确提示
-"细角度退回名义 1701us"。`Select Calib` 加载聚合表时按 `time_interval` 段恢复。
+`Select Calib` 加载聚合表时按 `time_interval` 段恢复。自检：
+`grep -c '^time_interval,' data/param/cs96beta_calib_data/cs96beta_calibration.csv` 应为 **240**。
 
-**自检**：`data/param/cs96beta_calib_data/cs96beta_calibration.csv` 里
-`grep -c '^time_interval,'` 应为 **240**。
+## 7. 代码位置
 
-## 4. 脚本
+```text
+PC：parseEncoderAngle (Cs96BetaCalibration.cpp) → encoderAngle_[241]     ← ③ 终版表
+    parseTimeIntervals (同文件)                 → timeIntervals_[240]    ← ① 耗时表
+    finalizeGeometry                            → startingAngle_[4]      ← 6.1 面起始角
+    paAngle()   : encoderAngle[scale] + 0.0009×realAngle  → PA 绝对角（仅判面用）
+    faceByPa()  : 按 PA 落在哪个 90° 区间判面（不受四项标定开关影响）
+    apply()     : 6.2 的完整链条 → omega
+设备：get_horizontal_corners()（ys_algo_horizontal_corners.c）用同一张表，PC 端是复刻
+```
 
-`tools/encoder_time_to_angle.py`（纯标准库）：
+> `paAngle()` 里的 `0.0009°/count` 是**判面专用**的粗精度近似，不参与点云几何；
+> 点云细角度走 6.2 的 `realAngle / interval × spacing`。两者不要混用。
+
+## 8. 脚本
+
+`tools/encoder_time_to_angle.py`（纯标准库），用于 ②：
 
 ```bash
-# 240 个间隔 → csv
+# 240 个间隔 → 初版 csv
 python3 tools/encoder_time_to_angle.py intervals.txt -o ys_encoder_angle.csv
 
-# 241 行原始数据（首行是 t0）→ csv，并与现网表逐点比对
+# 241 行原始数据（首行是 t0）→ csv，并与终版表逐点比对
 python3 tools/encoder_time_to_angle.py raw241.txt --first-is-offset \
     --compare data/param/cs96beta_calib_data/ys_encoder_angle.csv \
     -o /tmp/ys_encoder_angle_time.csv
@@ -134,20 +213,20 @@ python3 tools/encoder_time_to_angle.py raw241.txt --first-is-offset \
 python3 tools/encoder_time_to_angle.py ticks.txt --unit-scale 0.008 -o enc.csv
 ```
 
-用 `.218` 的 49 圈数据实跑：
+用 `.218` 的 49 圈数据实跑（得到的是**初版**，与终版有 0.62° 差属正常）：
 
-```
+```text
 间隔个数          : 240
 单圈总时间        : 408316.0 us  (408.316 ms)
 平均每格间隔      : 1701.32 us  (理论 1666.7 us)
 折合转速          : 146.95 rpm  (2.449 圈/秒)
 间隔偏离均值      : RMS 51.52 us, max 231.84 us (13.627%)
 每格角度          : 均值 1.5000°  标准差 0.0454°  范围 [1.2956, 1.5947]  (理想 1.5000°)
-对比参考表        : 241 点, 最大偏差 0.6242°, RMS 0.1797°
-最大偏差位置      : scale=169 本次 253.7940° 参考 254.4182°
+对比终版表        : 241 点, 最大偏差 0.6242°, RMS 0.1797°
+最大偏差位置      : scale=169 初版 253.7940° 终版 254.4182°
 ```
 
-自洽性检查都过：
+自洽性检查：
 
 | 指标 | 本次 49 圈 | 参考 | 判读 |
 |---|---|---|---|
@@ -156,75 +235,34 @@ python3 tools/encoder_time_to_angle.py ticks.txt --unit-scale 0.008 -o enc.csv
 | 每格角度标准差 | **0.0454°** | PPT 0.046~0.066° | 同量级 |
 | 每格角度范围 | 1.2956~1.5947° | PPT 最大偏差 0.223° | 一致 |
 
-**说明方法本身没问题，但结果表和现网表不是一回事。**
-
-## 5. 为什么和现网表差 0.62°
-
-把 xlsx sheet2 的「光条测算 − 刻度时间测算」逐点统计：
-
-| 项 | 数值 |
-|---|---|
-| 差值 > 0.05° 的刻度数 | 107 / 241 |
-| 差值范围 | −0.2903 ~ +0.6572 |
-| 差 > 0.3° 的刻度段 | **164~169**、**227~229** |
-| 吻合 < 0.02° 的刻度段 | 0~22、50~61 等 |
-
-**分段吻合、分段分歧**，说明不是"某个方法整体错了"，而是某些刻度段两条路线看到的东西不同：
-
-- 时间测量只看**机械转角**；
-- 光条标定看**光路出射角**，包含转镜面形、装配偏心、镜面倾斜等光学偏差。
-
-在 164~169、227~229 这些段，机械转角和光路角差到 0.5° 量级——如果现场点云在这些方位
-出现"黑缝/错位"，就该优先怀疑这几段的光学/机械状态，而不是去改时间数据。
-
-## 6. 落地与应用链条
-
-```
-【光学】光条标定 ──► ys_encoder_angle.csv ──┬──► 设备端 /etc/ys_encoder_angle.csv
-                                            └──► PC 端 data/param/cs96beta_calib_data/
-【时间】FPGA (n,cnt) ──► 多圈平均 ──► 脚本 ──► 对比/兜底（不直接上线）
-                                                    │
-                    ┌───────────────────────────────┘
-                    ▼
-        PC：parseEncoderAngle (Cs96BetaCalibration.cpp:328) → encoderAngle_[241]
-            paAngle()  : encoderAngle_[scale] + 0.0009×realAngle  → PA 绝对角
-            faceByPa() : 按 PA 落在哪个 90° 区间判面（不受四项标定开关影响）
-            apply()    : hc = encoderAngle_[scale] + 0.0009×realAngle − startingAngle_[face]
-                         omega = hc×2 + omega0
-        设备：get_horizontal_corners() 用同一张表（ys_algo_horizontal_corners.c）
-```
-
-两端同一张表：`data/param/cs96beta_calib_data/ys_encoder_angle.csv` 与
-`lidar_sdk/you_see_arm/conf/ys_encoder_angle.csv` 的 md5 相同（`4b7d7493…`）。
-
-注意 `0.0009°/count` 是**细角度**（`realAngle` 0~4095），与粗刻度表分工：
-粗刻度查表消除码盘不均匀，细角度用线性近似。
-
-## 7. 坑
+## 9. 坑
 
 1. **241 ≠ 240**：241 = 1 个 t0 + 240 个间隔，不丢首行会报"需要 240 个间隔"。
-2. **别拿时间表直接覆盖现网表**：与光学表差 0.62°，要先按 §5 分段比对。
+2. **初版 ≠ 终版**：时间换算出的表只能当 ② 的交付物，上线前必须过 ③ 光条修正；
+   直接覆盖终版会把 0.62° 的机械-光学差灌进水平角。
 3. **必须覆盖 scale 0~240 全部**：`parseEncoderAngle` 用 `NaN` 初始化 + `any_of` 检查，
    少一格就"编码器角度表必须包含 scale 0~240"，整张标定表加载失败 → 推流正常但判面全错。
 4. **angle 必须 0~360 且 scale 不重复**：代码逐项校验，越界即整表失败。
 5. **单调递增**：`faceByPa` 依赖此性质，手改值时别破坏。
-6. **换雷达要重测**：表是单台码盘的实测特性，`.218` / `.221` 各测各的。
+6. **两端同表**：设备 `/etc/ys_encoder_angle.csv` 与 PC `data/param/...` 的 md5 必须一致。
+7. **换雷达要重测**：表是单台码盘的实测特性，`.218` / `.221` 各测各的，不能串用。
 
-## 8. 与"左右晃动"的关系
+## 10. 与"左右晃动"的关系
 
 PPT slide 3/5 的结论：细分角度范围内光条左右跳动，原因是
 
 1. 相邻整数刻度线对应的发光角度差不均匀（不是理想值；两条整数刻度线 = 3°，即每粗刻度 1.5°）；
 2. 转速不均匀（实测 0.117%，可忽略）。
 
-这张表的作用就是消除第 1 项：把"理想 1.5°/格"换成"实测角度/格"，让码盘刻度误差不进入水平角。
+第 ②③ 步解决第 1 项：把"理想 1.5°/格"换成"实测角度/格"。
 不做这步，误差会直接进点云——表现为同一面内相邻 slot 角度间隔忽大忽小，也就是竖直黑缝和左右晃动。
 
-## 9. 相关文档
+## 11. 相关文档
 
 | 文档 | 关系 |
 |---|---|
-| `doc/薄款雷达点云左右晃动原因分析及解决措施.pptx` | 现象、转速测试方案、结论（本表的动机） |
-| `doc/薄款雷达1_码盘角度测算0225.xlsx` | sheet1 四面原始角度；sheet2 光条 vs 时间测算逐点对比 |
-| `doc/cs96beta_pa_angle_analysis.md` | 拿到 `encoderAngle_` 之后的角度链条（PA → 判面 → omega） |
-| `tools/encoder_time_to_angle.py` | 时间数据换算脚本 |
+| `doc/薄款雷达点云左右晃动原因分析及解决措施.pptx` | 现象、转速测试方案、结论（本流程的动机） |
+| `doc/薄款雷达1_码盘角度测算0225.xlsx` | sheet1 四面原始角度；sheet2 光条 vs 时间测算逐点对比（③ 的验收表） |
+| `doc/cs96beta_pa_angle_analysis.md` | 拿到角度表之后的角度链条（PA → 判面 → omega 细节） |
+| `tools/encoder_time_to_angle.py` | ② 的换算脚本 |
+| `README.md` | 快速上手与按钮说明 |
