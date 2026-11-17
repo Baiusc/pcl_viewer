@@ -124,7 +124,8 @@ bool writePerFacePackage(const std::filesystem::path &dir, std::string &error)
             std::snprintf(buffer, sizeof(buffer), "%d,%.9f\n", i, table[i]);
             csv << buffer;
         }
-        std::snprintf(buffer, sizeof(buffer), "%d,%.9f\n", kScales, table[0] + 360.0f);
+        // 回绕行：刻度 240 就是刻度 0，直接复制第 0 行（标定端不再 +360°）
+        std::snprintf(buffer, sizeof(buffer), "%d,%.9f\n", kScales, table[0]);
         csv << buffer;
     }
     return true;
@@ -165,7 +166,7 @@ int main()
         return 1;
     }
 
-    check("detect_per_face", perFace.anchorPerFace(), "表值含负数/超 360°");
+    check("detect_per_face", perFace.anchorPerFace(), "表值含负数");
 
     // 固定回波：line=32、ft=60000、slot=400；第 4 面起爆刻度 202（第 3 面，从 0 计）
     const int line = 32;

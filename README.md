@@ -270,9 +270,9 @@ ctest --test-dir build-lite --output-on-failure
 | 布局 | 表值范围 | 本面起始角取法 |
 |---|---|---|
 | **绝对表**（旧，`anchor_per_face=false`） | `0~360°` 单调递增 | `startingAngles()` = `angle_face_N × 1.5° + side_angular_offset × 1.5°/256` |
-| **每面锚定表**（新，`anchor_per_face=true`） | 每个面段各自从 `-30°` 起算，故**含负数**、第 240 行回绕行 `> 360°` | 直接取该面起始刻度在表里的值（细调已折进表值） |
+| **每面锚定表**（新，`anchor_per_face=true`） | 每个面段各自从 `-30°` 起算，故**含负数**；第 240 行回绕行与第 0 行相同（刻度 240 ≡ 0） | 直接取该面起始刻度在表里的值（细调已折进表值） |
 
-`Cs96BetaCalibration::load()` 按表值范围自动判定：出现负数或 `> 360°` 即认定为每面锚定表
+`Cs96BetaCalibration::load()` 按表值范围自动判定：出现负数即认定为每面锚定表（早期产出里 `> 360°` 的回绕行也判为每面锚定）
 （`anchorPerFace() == true`），也提供 `setAnchorPerFace()` 手动覆盖。
 两种布局下 `hc` 的物理含义一致（相对本面起爆点的机械转角），因此 `omega = hc×2 + omega0` 不变；
 判面用的 `paAngle()` 在每面锚定表下会自动加回 `dialBase[face]` 还原成码盘绝对角。

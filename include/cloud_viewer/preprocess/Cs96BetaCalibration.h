@@ -24,7 +24,7 @@
  *   1) 绝对表（旧）：scale 0~240 -> 0~360° 码盘机械角，单调递增；
  *      本面起点角 = startingAngle[face]（ini 的 angle_face_N + side_angular_offset 细调）。
  *   2) 每面锚定表（20261117 起，标定端 anchor_per_face=true）：每面从锚点（默认 -30°机械/-60°视场）
- *      重新起算，表值可负、回绕行可超过 360°，因此四个面段互不连续；
+ *      重新起算，表值可负、四个面段互不连续；第 240 行回绕行与第 0 行相同（刻度 240 ≡ 刻度 0）；
  *      本面起点角 = 该面起始刻度在表里的值 tableStart[face]（细调已折算进表值）。
  *   两种布局下 hc 的物理含义相同（相对本面起爆点的机械转角），故 omega 公式不变。
  *   绝对角 = 表值 + dialBase[face]（仅每面锚定表需要，用于 paAngle() 还原 PA 判面）。
@@ -136,7 +136,8 @@ public:
     const std::array<float, 4> &startingAngles() const { return startingAngle_; }
 
     /// 编码器表是否为"每面锚定"布局。
-    /// load() 时自动判定：表里出现负数或 >360° 的回绕行 → true（即标定端 anchor_per_face=true）。
+    /// load() 时自动判定：表里出现负数 → true（即标定端 anchor_per_face=true）；
+    /// 早期产出的表回绕行是"第 0 行 + 360°"，出现 >360° 的值同样判 true。
     /// 该布局下每个面的表段都从 anchorStartMechDeg()（默认 -30°）起算，四个面段互不连续。
     bool anchorPerFace() const { return anchorPerFace_; }
 

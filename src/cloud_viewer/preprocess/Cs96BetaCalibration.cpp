@@ -205,7 +205,8 @@ bool Cs96BetaCalibration::finalizeGeometry(std::string &error)
         startingAngle_[face] = roughAngle + offsetAngle;
     }
     // 编码器表布局判定（20261117）：标定端 anchor_per_face=true 时，每个面段都从锚点
-    // （默认 -30° 机械）重新起算，表值可负、第 240 行回绕行可超过 360°，据此自动识别。
+    // （默认 -30° 机械）重新起算，表值必含负数，据此自动识别；早期产出的回绕行是
+    // "第 0 行 + 360°"，出现 >360° 的值也判 true（现行版本回绕行与第 0 行相同）。
     anchorPerFace_ = std::any_of(encoderAngle_.begin(), encoderAngle_.end(),
                                  [](float a)
                                  { return a < -0.5f || a > 360.5f; });
@@ -420,7 +421,8 @@ bool Cs96BetaCalibration::parseEncoderAngle(const std::filesystem::path &path, s
         char comma;
         float angle;
         if (!(row >> scale >> comma >> angle) || comma != ',') continue;
-        // 每面锚定表（20261117）允许负数与 >360° 的回绕行，这里只排除明显非法的量级；
+        // 每面锚定表（20261117）允许负数（回绕行与第 0 行相同，早期版本可能 +360°），
+        // 这里只排除明显非法的量级；
         // 表布局由 finalizeGeometry() 按值的范围自动判定。
         if (scale < 0 || scale > 240 || !std::isfinite(angle) ||
             angle < -720.0f || angle > 720.0f || std::isfinite(angles[scale]))
@@ -1099,7 +1101,7 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
             const float nominalStep = 360.0f / static_cast<float>(kScalesPerRev);
             float angle_next = (scale < lastScale) ? encoderAngle_[scale + 1] : encoderPart + nominalStep;
             // 兜底：每面锚定表在面边界处会跳变（下一面段重新从锚点起算），
-            // 第 240 行回绕行也可能比末行大 360°，两者都不能当成本格角差，退化为名义一格。
+            // 早期版本的回绕行还可能比末行大 360°，两者都不能当成本格角差，退化为名义一格。
             const float step = angle_next - encoderPart;
             if (!(step > 0.0f) || step > 3.0f * nominalStep)
             {
