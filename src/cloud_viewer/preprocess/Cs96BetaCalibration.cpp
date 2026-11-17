@@ -204,6 +204,13 @@ bool Cs96BetaCalibration::finalizeGeometry(std::string &error)
         const float offsetAngle = sideOffset / 256.f * 1.5f; // 4面零位角 细角度
         startingAngle_[face] = roughAngle + offsetAngle;
     }
+    // 编码器表布局判定（20261117）：标定端 anchor_per_face=true 时，每个面段都从锚点
+    // （默认 -30° 机械）重新起算，表值可负、第 240 行回绕行可超过 360°，据此自动识别。
+    anchorPerFace_ = std::any_of(encoderAngle_.begin(), encoderAngle_.end(),
+                                 [](float a)
+                                 { return a < -0.5f || a > 360.5f; });
+    refreshAnchorDerived();
+
     // 俯仰角：与下位机 CalculateTheta 一致（像素倒序映射）。
     const float step = (thetaMax_ - thetaMin_) / static_cast<float>(linesV_);
     for (int i = linesV_ - 1, j = 0; i >= 0; --i, ++j)
@@ -337,6 +344,64 @@ bool Cs96BetaCalibration::parseIni(const std::filesystem::path &path, std::strin
     return true;
 }
 
+void Cs96BetaCalibration::refreshAnchorDerived()
+{
+    tableStart_.fill(0.0f);
+    dialBase_.fill(0.0f);
+    if (encoderAngle_.empty())
+    {
+        return;
+    }
+
+    const int last = static_cast<int>(encoderAngle_.size()) - 1;
+    for (int face = 0; face < kFaces; ++face)
+    {
+        const auto index = static_cast<std::size_t>(face);
+        int tick = static_cast<int>(std::lround(standardEncoder_[index]));
+        tick = std::clamp(tick, 0, last);
+        // 每面锚定表：本面起爆点就是起始刻度在表里的值（细调已折算进表值）
+        tableStart_[index] = encoderAngle_[static_cast<std::size_t>(tick)];
+        // 绝对角 = 表值 + dialBase；锚点是机械角常量（默认 -30°），
+        // 与 ini 的起始角（码盘绝对角系）相差正好一个锚点。
+        dialBase_[index] = startingAngle_[index] - anchorStartMechDeg_;
+    }
+}
+
+int Cs96BetaCalibration::faceOfScale(int scale) const
+{
+    // 按 standardEncoder 分段，环形取"最近的前一个面起点"。
+    int bestFace = 0;
+    int bestDelta = kScalesPerRev;
+    for (int face = 0; face < kFaces; ++face)
+    {
+        const int start = static_cast<int>(
+            std::lround(standardEncoder_[static_cast<std::size_t>(face)]));
+        int delta = (scale - start) % kScalesPerRev;
+        if (delta < 0)
+        {
+            delta += kScalesPerRev;
+        }
+        if (delta < bestDelta)
+        {
+            bestDelta = delta;
+            bestFace = face;
+        }
+    }
+    return bestFace;
+}
+
+void Cs96BetaCalibration::setAnchorPerFace(bool on)
+{
+    anchorPerFace_ = on;
+    refreshAnchorDerived();
+}
+
+void Cs96BetaCalibration::setAnchorStartMechDeg(float deg)
+{
+    anchorStartMechDeg_ = deg;
+    refreshAnchorDerived();
+}
+
 bool Cs96BetaCalibration::parseEncoderAngle(const std::filesystem::path &path, std::string &error)
 {
     std::ifstream input(path);
@@ -355,8 +420,10 @@ bool Cs96BetaCalibration::parseEncoderAngle(const std::filesystem::path &path, s
         char comma;
         float angle;
         if (!(row >> scale >> comma >> angle) || comma != ',') continue;
+        // 每面锚定表（20261117）允许负数与 >360° 的回绕行，这里只排除明显非法的量级；
+        // 表布局由 finalizeGeometry() 按值的范围自动判定。
         if (scale < 0 || scale > 240 || !std::isfinite(angle) ||
-            angle < 0.0f || angle > 360.0f || std::isfinite(angles[scale]))
+            angle < -720.0f || angle > 720.0f || std::isfinite(angles[scale]))
         {
             error = "编码器角度表含无效或重复 scale";
             return false;
@@ -891,6 +958,11 @@ float Cs96BetaCalibration::paAngle(int scale, int realAngle) const
     float angle = (scale >= 0 && scale < static_cast<int>(encoderAngle_.size()))
                       ? encoderAngle_[static_cast<std::size_t>(scale)]
                       : static_cast<float>(scale) * (360.0f / kPaCountsPerRevolution);
+    if (anchorPerFace_ && !encoderAngle_.empty())
+    {
+        // 每面锚定表是表面局部角，判面用的 PA 需要还原成码盘绝对角
+        angle += dialBase_[static_cast<std::size_t>(faceOfScale(scale))];
+    }
     angle += 0.0009f * static_cast<float>(realAngle);
     while (angle < 0.0f) angle += 360.0f;
     while (angle >= 360.0f) angle -= 360.0f;
@@ -1024,11 +1096,14 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
             // 下一格角度。必须先判边界再取下标：encoderAngle_ 只有 241 项，
             // scale=240 时取 [241] 是越界（原实现把边界判断写在了取值之后）。
             const int lastScale = static_cast<int>(encoderAngle_.size()) - 1;
-            float angle_next = (scale < lastScale) ? encoderAngle_[scale + 1] : 360.0f;
-            if (angle_next <= encoderPart)
+            const float nominalStep = 360.0f / static_cast<float>(kScalesPerRev);
+            float angle_next = (scale < lastScale) ? encoderAngle_[scale + 1] : encoderPart + nominalStep;
+            // 兜底：每面锚定表在面边界处会跳变（下一面段重新从锚点起算），
+            // 第 240 行回绕行也可能比末行大 360°，两者都不能当成本格角差，退化为名义一格。
+            const float step = angle_next - encoderPart;
+            if (!(step > 0.0f) || step > 3.0f * nominalStep)
             {
-                // 跨零或脏值兜底：退化为均匀分布的一格。
-                angle_next = encoderPart + 360.0f / static_cast<float>(kScalesPerRev);
+                angle_next = encoderPart + nominalStep;
             }
             const float angle_spacing = angle_next - encoderPart;
 
@@ -1059,7 +1134,10 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
                 }
             }
             realPart = std::clamp(realPart, -fineLimit, fineLimit);
-            const float startPart = startingAngle_[face]; // 本面起始角
+            // 本面起爆点：绝对表用 ini 的起始角；每面锚定表的细调已折进表值，直接取表中该刻度的值
+            const float startPart = anchorPerFace_
+                                        ? tableStart_[static_cast<std::size_t>(face)]
+                                        : startingAngle_[static_cast<std::size_t>(face)];
 
             hc = encoderPart + realPart - startPart;
             // wrap 到 [-180, 180]

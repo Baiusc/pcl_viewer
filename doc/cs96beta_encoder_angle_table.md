@@ -140,6 +140,9 @@ startingAngle[face] = standardEncoder[face] × (360/240) + sideAngularOffset[fac
 | `side_angular_offset` | 面间细调（相对第 0 面） | 1/256 格 ≈ 0.0059° | 见 ini |
 | 结果 | 四面间隔约 90° | 度 | 33.13 / 123.00 / 213.18 / 303.19 |
 
+> 上表是**绝对表**（`anchor_per_face=false`）的取法；每面锚定表（20261117 起，`anchor_per_face=true`）
+> 不再用这条公式，而是直接取表值，见 6.5。
+
 ### 6.2 粗刻度 + 细角度 → `omega`
 
 ```text
@@ -180,6 +183,33 @@ time_interval,,239,1664.3219,,,,,
 
 `Select Calib` 加载聚合表时按 `time_interval` 段恢复。自检：
 `grep -c '^time_interval,' data/param/cs96beta_calib_data/cs96beta_calibration.csv` 应为 **240**。
+
+### 6.5 每面锚定表（`anchor_per_face=true`，20261117 起）
+
+光斑模式的按刻度开火与点云模式的按时间开火，都保证在同一刻度起爆，因此标定端把"**真实起爆角**"
+锚定成固定绝对值（机械 -30° / 视场 -60°），四个面各自重算一段，表因此变成四段锯齿：
+
+```text
+真实起爆角 = 粗刻度表值 + side_angular_offset × (1.5 / 256)
+⇒ 粗刻度表值 = -30° - side_angular_offset × 1.5/256      // 标定端 anchor_start_mech_angle - 细调
+⇒ 表值(尺度 s) = 该值 + Σ(相邻刻度实测机械增量)            // 不发光刻度按 0° 或 1.5° 递推补全
+```
+
+以 `side3 = 33`、`angle_face_4 = 202` 为例：`202 → -30° - 33×0.005859° = -30.193359°`，
+固件加回细调后起爆角仍为 `-30.000000°`。整表 240 行 + 1 行回绕行（第 0 行 + 360°），
+所以第 240 行的值会大于 360°。
+
+解算侧（`Cs96BetaCalibration`）的适配：
+
+| 量 | 绝对表 | 每面锚定表 |
+|---|---|---|
+| 本面起始角 | `startingAngles()`（ini 公式） | 起始刻度在表里的值 `tableStart[face]` |
+| `hc` | `表值 + 细角度 - 面起始角` | 同左，但面起始角换成表值 ⇒ 起爆处 `hc = 0` |
+| `omega` | `hc×2 + omega0` | 不变（两种表下 `hc` 含义相同） |
+| `paAngle()` 判面 | 表值即绝对角 | 表值 + `dialBase[face]`（= `startingAngle[face] - 锚点`）还原绝对角 |
+
+表布局在 `load()` 时按数值范围自动判定：**出现负数或 >360° 的回绕行**即认定每面锚定表
+（`anchorPerFace()`），也可用 `setAnchorPerFace()` 手动覆盖。
 
 ## 7. 代码位置
 

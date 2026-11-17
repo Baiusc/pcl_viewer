@@ -17,8 +17,17 @@
  *   r     = kLightSpeed * (ft >> 1) * a[pixel] + d_delta[pixel]
  *   theta = (line - u) * (theta_max - theta_min) / lines_v + theta_tilt
  *   face  = 接收层按帧起始 PA 判定并锁定的面号
- *   hc    = encoder_angle[scale] + 0.0009 * real_angle - starting_angle[face]
+ *   hc    = encoder_angle[scale] + 0.0009 * real_angle - 本面起点角
  *   omega = wrap180(hc) * 2 + omega0 + omega_delta[pixel]
+ *
+ * encoder_angle 支持两种布局，load() 时按表值范围自动判定（见 anchorPerFace()）：
+ *   1) 绝对表（旧）：scale 0~240 -> 0~360° 码盘机械角，单调递增；
+ *      本面起点角 = startingAngle[face]（ini 的 angle_face_N + side_angular_offset 细调）。
+ *   2) 每面锚定表（20261117 起，标定端 anchor_per_face=true）：每面从锚点（默认 -30°机械/-60°视场）
+ *      重新起算，表值可负、回绕行可超过 360°，因此四个面段互不连续；
+ *      本面起点角 = 该面起始刻度在表里的值 tableStart[face]（细调已折算进表值）。
+ *   两种布局下 hc 的物理含义相同（相对本面起爆点的机械转角），故 omega 公式不变。
+ *   绝对角 = 表值 + dialBase[face]（仅每面锚定表需要，用于 paAngle() 还原 PA 判面）。
  *
  * 注意：单面视场只有约 120°，omega 落在 [-60, 60]，不含面间 90° 偏移。
  * 关闭标定时由 BetaUdpStream 走纯几何分支（不调用本类的 apply），
@@ -126,6 +135,18 @@ public:
 
     const std::array<float, 4> &startingAngles() const { return startingAngle_; }
 
+    /// 编码器表是否为"每面锚定"布局。
+    /// load() 时自动判定：表里出现负数或 >360° 的回绕行 → true（即标定端 anchor_per_face=true）。
+    /// 该布局下每个面的表段都从 anchorStartMechDeg()（默认 -30°）起算，四个面段互不连续。
+    bool anchorPerFace() const { return anchorPerFace_; }
+
+    /// 手动覆盖自动判定（调试/对照用）。会同步重算 tableStart / dialBase 派生量。
+    void setAnchorPerFace(bool on);
+
+    /// 每面锚定表使用的机械锚点（度），必须与标定端的 anchor_start_mech_angle 一致，默认 -30°。
+    float anchorStartMechDeg() const { return anchorStartMechDeg_; }
+    void setAnchorStartMechDeg(float deg);
+
     /// 是否加载了每格实测耗时（time_intervals.txt）。
     /// false 时 apply() 的细角度退回名义间隔 kNominalIntervalUs。
     bool hasTimeIntervals() const { return !timeIntervals_.empty(); }
@@ -137,6 +158,14 @@ public:
     int faceByPa(float paAngleDeg) const;
 
 private:
+    /// 由 startingAngle_ / standardEncoder_ / encoderAngle_ 派生每面锚定表的两个量：
+    ///   tableStart[face] = 该面起始刻度在表里的值（每面锚定表下即本面起爆点）
+    ///   dialBase[face]   = 绝对角 - 表值，用于 paAngle() 还原 PA 判面用的码盘绝对角
+    void refreshAnchorDerived();
+
+    /// 刻度落在哪个面段（按 standardEncoder_ 分段，环形取最近的前一个起点）。
+    int faceOfScale(int scale) const;
+
     bool parseIni(const std::filesystem::path &path, std::string &error);
     bool parseEncoderAngle(const std::filesystem::path &path, std::string &error);
     /// 读取 time_intervals.txt：每个粗刻度到下一个刻度的实测耗时（us，240 项）。
@@ -176,6 +205,14 @@ private:
     std::array<float, 4> standardEncoder_{};
     std::array<float, 4> sideAngularOffset_{};
     std::vector<float> encoderAngle_; // 241，含 scale=240 边界
+    /// 编码器表布局：true = 每面锚定表（表值为表面局部角，见 anchorPerFace()）。
+    bool anchorPerFace_ = false;
+    /// 每面锚定表的机械锚点（度），标定端 anchor_start_mech_angle 的镜像。
+    float anchorStartMechDeg_ = -30.0f;
+    /// 每面起始刻度在表里的值（每面锚定表下 = 本面起爆点，细调已折算在内）。
+    std::array<float, 4> tableStart_{};
+    /// 绝对角与表值之差：绝对角 = encoderAngle_[scale] + dialBase_[face]。
+    std::array<float, 4> dialBase_{};
 
     /// 每个粗刻度到下一个刻度的实测耗时（us，240 项，scale 0..239）。
     /// 来自 time_intervals.txt；为空时 apply() 退回 kNominalIntervalUs。

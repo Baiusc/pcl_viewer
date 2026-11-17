@@ -1157,7 +1157,8 @@ void ViewerApp::connectBeta(const std::string &ip)
             detail << modelLabel << " 标定已加载: " << source.string()
                    << " (" << betaCalibration_->lineCount() << "x" << betaCalibration_->slotCount()
                    << ") start=" << starts[0] << "," << starts[1] << "," << starts[2] << ","
-                   << starts[3];
+                   << starts[3] << " 编码器表="
+                   << (betaCalibration_->anchorPerFace() ? "每面锚定(-30°)" : "绝对角");
             logUi("Calib", detail.str());
         }
         else
@@ -2141,7 +2142,8 @@ void ViewerApp::loadBetaCalibration(const std::filesystem::path &preselected)
     const auto &starts = betaCalibration_->startingAngles();
     std::ostringstream detail;
     detail << "CS96 Beta 标定已加载: " << stored.string()
-           << " start=" << starts[0] << "," << starts[1] << "," << starts[2] << "," << starts[3];
+           << " start=" << starts[0] << "," << starts[1] << "," << starts[2] << "," << starts[3]
+           << " 编码器表=" << (betaCalibration_->anchorPerFace() ? "每面锚定(-30°)" : "绝对角");
     logUi("Select Calib", detail.str());
     updateHud();
     renderer_.render();
@@ -2273,7 +2275,8 @@ void ViewerApp::updateCalibTableFromDirectory()
     std::ostringstream detail;
     detail << "已重算 " << primaryTarget.string() << " (" << verify.lineCount() << "x"
            << verify.slotCount() << ") start=" << starts[0] << "," << starts[1] << ","
-           << starts[2] << "," << starts[3];
+           << starts[2] << "," << starts[3] << " 编码器表="
+           << (betaCalibration_->anchorPerFace() ? "每面锚定(-30°)" : "绝对角");
     if (synced)
     {
         detail << "；已同步到 " << runtimeTarget.string();

@@ -29,8 +29,13 @@ mirror_angle (20 bit)
 pa_angle = encoder_angle[scale] + 0.0009 × real_angle
 ```
 
-`encoder_angle` 来自 `ys_encoder_angle.csv`（`scale,angle`，241 行，0~360°），
+`encoder_angle` 来自 `ys_encoder_angle.csv`（`scale,angle`，241 行），
 是**整圈绝对角度表**，不是 `spot_slope_map.csv`。
+
+> 20261117 起标定端支持 `anchor_per_face=true`：表值改为**每面锚定的表面局部角**
+> （每面段从机械 -30° 起算，含负数，第 240 行回绕行 > 360°）。此时上面的公式仍成立，
+> 但 `Cs96BetaCalibration::paAngle()` 会先加回 `dialBase[face]` 把局部角还原成码盘绝对角再算 PA；
+> 表布局在 `load()` 时按数值范围自动识别（见 `doc/cs96beta_encoder_angle_table.md` 的 6.5）。
 
 > 这张表不是图纸算的，是**实测**的，分两步：先由 FPGA 的码盘耗时表
 > （`time_intervals.txt`）按时间比例算出**初版**，再用**光条 CV 标定**逐格修正成**终版**。

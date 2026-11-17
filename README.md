@@ -263,6 +263,21 @@ ctest --test-dir build-lite --output-on-failure
 第 ④ 步的面起始角来自 `ys_calibration.ini`：`angle_face_N`（粗刻度，1 格 = 1.5°）
 与 `side_angular_offset`（1/256 格 ≈ 0.0059°）。
 
+#### 码盘表的两种布局（20261117 起自动识别）
+
+标定端（`LightSpotSlope` / `measure_light_spot`）新增 `anchor_per_face` 选项，产出两种表：
+
+| 布局 | 表值范围 | 本面起始角取法 |
+|---|---|---|
+| **绝对表**（旧，`anchor_per_face=false`） | `0~360°` 单调递增 | `startingAngles()` = `angle_face_N × 1.5° + side_angular_offset × 1.5°/256` |
+| **每面锚定表**（新，`anchor_per_face=true`） | 每个面段各自从 `-30°` 起算，故**含负数**、第 240 行回绕行 `> 360°` | 直接取该面起始刻度在表里的值（细调已折进表值） |
+
+`Cs96BetaCalibration::load()` 按表值范围自动判定：出现负数或 `> 360°` 即认定为每面锚定表
+（`anchorPerFace() == true`），也提供 `setAnchorPerFace()` 手动覆盖。
+两种布局下 `hc` 的物理含义一致（相对本面起爆点的机械转角），因此 `omega = hc×2 + omega0` 不变；
+判面用的 `paAngle()` 在每面锚定表下会自动加回 `dialBase[face]` 还原成码盘绝对角。
+界面日志（`Calib` / `Select Calib` / `Update Calib`）会打印 `编码器表=每面锚定(-30°)` 或 `绝对角`。
+
 **注意**：第 ② 步时间换算出的表只是**初版**，上线前必须过第 ③ 步光条修正；
 两者实测最大差 0.62°，直接用初版覆盖会把机械-光学差灌进水平角。
 完整原理、实测数据与代码位置见 `doc/cs96beta_encoder_angle_table.md`。

@@ -3,7 +3,7 @@
 
 输入（默认 data/param/cs96beta_calib_data）：
     ys_calibration.ini      参数、4 个面角、96 线水平角/距离修正、编码器粗值
-    ys_encoder_angle.csv    scale 0~240 -> 机械绝对角
+    ys_encoder_angle.csv    scale 0~240 -> 机械角（绝对角，或每面锚定的表面局部角，可含负数）
     reflectivity_map.csv    (pixel, distance) -> 5 档参考反射率
     spot_slope_map.csv      按面的角度旋转曲线
 
@@ -19,7 +19,8 @@
     horizontal_angular_offset  index=线号(0~95), value0=水平角修正(度)
     zero_distance_offset       index=线号(0~95), value0=零点偏移(cm)
     distance_factor            index=线号(0~95), value0=距离系数
-    encoder_angle              index=scale(0~240), value0=机械角(度)
+    encoder_angle              index=scale(0~240), value0=机械角(度)：
+                               绝对表 0~360 单调；anchor_per_face 表每面段从 -30° 起算（含负数）
     reflectivity               index=pixel, value0=distance, value1..5=reflectance_0..4
     spot_slope                 index=面号(1~4), value0=角度, value1=修正量
 
