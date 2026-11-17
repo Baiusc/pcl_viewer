@@ -254,7 +254,7 @@ ctest --test-dir build-lite --output-on-failure
 ### 角度标定流程（四步）
 
 ```text
-① FPGA 测每格耗时          → time_intervals.txt（240 个 us）
+① FPGA 测每格耗时          → time_intervals.txt（240 个 us） (20261117 此步为可选项 实际可以不做此步 取1701固定值)
 ② 按累计时间比例分 360°    → ys_encoder_angle.csv（初版）→ 写入雷达 ARM flash
 ③ 光条 CV 标定             → ys_encoder_angle.csv（终版，更精准）
 ④ omega = 终版粗刻度表 + 每格耗时折算细角度 − 面起始角，再 ×2 + omega0

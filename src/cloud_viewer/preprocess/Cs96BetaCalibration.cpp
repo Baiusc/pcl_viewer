@@ -1037,8 +1037,9 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
             const float interval = timeIntervalUs(scale);
             const float interval_prev = timeIntervalUs(scale - 1);
             const float interval_next = timeIntervalUs(scale + 1);
-
-            float realPart = realAngle / interval * angle_spacing;
+            
+            // float realPart = realAngle / 1701.f * angle_spacing;  // planB 计算细角度时，不去查interval_time.txt时间表，按1701固定值来
+            float realPart = realAngle / interval * angle_spacing; // planA 计算细角度时，查interval_time.txt时间表，按实际耗时来
 
             const float fineLimit = angle_spacing * 1.05f;
             // 细角度不应超过一格：超了说明该格计时/角度表不可信，钳到边界。
@@ -1048,7 +1049,7 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
                 realPart = std::clamp(raw, -fineLimit, fineLimit);
 
                 static int lastScale = std::numeric_limits<int>::min(); // 保证首帧必打
-                if ( 0 && scale != lastScale)
+                if ( 0 && scale != lastScale) // 仅 debug 时打印
                 {
                     lastScale = scale;
                     std::fprintf(stderr,
