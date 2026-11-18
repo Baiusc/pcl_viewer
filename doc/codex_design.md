@@ -1207,14 +1207,14 @@ IFramePreprocessor
 **验收：**
 
 ```text
-cmake -S . -B build-lite -DCMAKE_BUILD_TYPE=Debug
-cmake --build build-lite
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
 ```
 
 Windows 使用 vcpkg toolchain 配置后：
 
 ```text
-cmake --build build-lite --config Debug
+cmake --build build --config Debug
 ```
 
 两平台均编译成功；空窗口可关闭；默认 target 不链接地面修复、聚类和标定算法。
@@ -1239,7 +1239,7 @@ cmake --build build-lite --config Debug
 **验收：**
 
 ```text
-ctest --test-dir build-lite -C Debug -R "frame|mapping" --output-on-failure
+ctest --test-dir build -C Debug -R "frame|mapping" --output-on-failure
 ```
 
 至少验证：
@@ -1329,7 +1329,7 @@ cloud_viewer --open <file1> <file2>
 **验收：**
 
 ```text
-ctest --test-dir build-lite -C Debug -R color --output-on-failure
+ctest --test-dir build -C Debug -R color --output-on-failure
 ```
 
 覆盖最小/最大/常量/NaN/缺失/越界；运行时切换所有可用字段。不存在的字段显示不可用，不生成假数据。

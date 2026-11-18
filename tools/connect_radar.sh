@@ -36,4 +36,4 @@ sudo timeout 3 tcpdump -i "${IFACE}" -nn "host ${RADAR_IP} and udp" 2>/dev/null 
 echo
 echo "完成。启动 cloud_viewer 后点击 Connect Radar；"
 echo "若雷达不在 ${RADAR_IP}，用 CV_RADAR_IP 覆盖："
-echo "  CV_RADAR_IP=${RADAR_IP} ./build-lite/cloud_viewer"
+echo "  CV_RADAR_IP=${RADAR_IP} ./build/cloud_viewer"

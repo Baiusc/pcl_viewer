@@ -248,6 +248,15 @@ void Cs96BetaCalibration::warnEncoderSegments() const
     constexpr float kStepTolerance = 1.0f;                      // 单步容差
     const float nominalSpan = kNominalStep * static_cast<float>(kScalesPerFace - 1);
 
+    // 第 4 面段会跨过 240，索引要落在 0..240 上而不是提前取模：
+    //   - 绝对角表：第 240 行 = 第 0 行 + 360°，用它才能得到正常的 1.5° 步长；
+    //   - 每面锚定表：第 240 行 = 第 0 行的值，同样连续。
+    // 若提前 % 240，绝对角表会算出 359° -> 0° 的 -359° 假跳变。
+    auto tickIndex = [](int t)
+    {
+        return t <= kScalesPerRev ? t : t - kScalesPerRev;
+    };
+
     for (int face = 0; face < kFaces; ++face)
     {
         int begin = static_cast<int>(
@@ -259,10 +268,20 @@ void Cs96BetaCalibration::warnEncoderSegments() const
         int worstTick = -1;
         for (int k = 1; k < kScalesPerFace; ++k)
         {
-            const int prev = (begin + k - 1) % kScalesPerRev;
-            const int cur = (begin + k) % kScalesPerRev;
-            const float step = encoderAngle_[static_cast<std::size_t>(cur)] -
-                               encoderAngle_[static_cast<std::size_t>(prev)];
+            const int prev = tickIndex(begin + k - 1);
+            const int cur = tickIndex(begin + k);
+            float step = encoderAngle_[static_cast<std::size_t>(cur)] -
+                         encoderAngle_[static_cast<std::size_t>(prev)];
+            // 兜底：个别旧表的回绕行写成"与第 0 行相同"，239 -> 240 会得到 -359°，
+            // 这里取环形最短差，两种写法都能还原成"每格实际转过的角度"。
+            while (step > 180.0f)
+            {
+                step -= 360.0f;
+            }
+            while (step < -180.0f)
+            {
+                step += 360.0f;
+            }
             span += step;
             if (std::fabs(step) > std::fabs(worstStep))
             {

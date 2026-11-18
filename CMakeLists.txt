@@ -87,17 +87,19 @@ add_library(cv_stream STATIC
     src/cloud_viewer/stream/UdpRadarStream.cpp
 )
 target_include_directories(cv_stream PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-# 只链接 RANGE 核心源文件，不引入算法工程的 main、离线标定器和全局构建选项。
-set(CLOUD_VIEWER_RANGE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../algo_solid_lidar" CACHE PATH "RANGE API 工程目录")
+# RANGE(FL6532) 协议解析：两个源文件已内置到 src/third_party/range6532/，
+# 不再依赖同级的 algo_solid_lidar 工程（原先只借用它的两个源文件 + include）。
+# 若上游 range6532_protocol / range6532_pipeline 有改动，需要手动同步这 4 个文件。
+set(CV_RANGE6532_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/range6532")
 find_path(CV_LZ4_INCLUDE lz4frame.h)
 find_library(CV_LZ4_LIBRARY NAMES lz4)
 if(NOT CV_LZ4_INCLUDE OR NOT CV_LZ4_LIBRARY)
     message(FATAL_ERROR "在线 RANGE LZ4 解析需要 lz4frame.h 和 liblz4")
 endif()
 add_library(cv_range6532 STATIC
-    ${CLOUD_VIEWER_RANGE_ROOT}/src/range6532_pipeline.cpp
-    ${CLOUD_VIEWER_RANGE_ROOT}/src/range6532_protocol.cpp)
-target_include_directories(cv_range6532 PUBLIC ${CLOUD_VIEWER_RANGE_ROOT}/include)
+    ${CV_RANGE6532_DIR}/range6532_pipeline.cpp
+    ${CV_RANGE6532_DIR}/range6532_protocol.cpp)
+target_include_directories(cv_range6532 PUBLIC ${CV_RANGE6532_DIR})
 target_sources(cv_stream PRIVATE src/cloud_viewer/stream/RangeStreamDecoder.cpp
     src/cloud_viewer/stream/RadarControl.cpp)
 target_include_directories(cv_stream PRIVATE ${CV_LZ4_INCLUDE})

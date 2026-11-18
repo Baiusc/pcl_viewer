@@ -60,9 +60,9 @@ tests/                            # core / io / color 测试
 ```bash
 sudo apt install build-essential cmake libeigen3-dev
 # PCL / VTK 需按系统版本安装；本仓库在 PCL 1.14 + VTK 9.4 下验证。
-cmake -S . -B build-lite -DCMAKE_BUILD_TYPE=Release
-cmake --build build-lite -j
-ctest --test-dir build-lite --output-on-failure
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+ctest --test-dir build --output-on-failure
 ```
 
 依赖处理策略（`cmake/ViewerDependencies.cmake`）：
@@ -82,9 +82,9 @@ ctest --test-dir build-lite --output-on-failure
 3. 配置：
 
 ```bat
-cmake -S . -B build-lite -G "Visual Studio 17 2022" -A x64 ^
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 ^
   -DCMAKE_PREFIX_PATH="<PCL_ROOT>;<VTK_ROOT>"
-cmake --build build-lite --config Release
+cmake --build build --config Release
 ```
 
 ## 运行
@@ -155,7 +155,7 @@ is_tail_pt / is_valid / timestamp / 固定色`。
 
 ## 在线雷达连接（6532）
 
-直接运行 `./build-lite/cloud_viewer`，通过第二排按钮操作，无需命令行参数。
+直接运行 `./build/cloud_viewer`，通过第二排按钮操作，无需命令行参数。
 
 | 按钮 | 行为 |
 |---|---|
@@ -190,8 +190,9 @@ Range LZ4 v1 → 分包组装 → LZ4F 解压 → 各 push 独立逆转置 → R
 
 - Cloud 保留原有单位缩放；ROI0 为 128×192，ROI1 为 48×192，物理行 16..63。
   乱序帧尾不触发残帧显示，重复像素不重复计数，缓存最多 8 帧。原有通用 `0x01` 点云仍兼容。
-- Range API 来自同级 `../algo_solid_lidar`，仅编译 protocol/pipeline 两个源文件，
-  不引入其 main 或离线标定器；可用 CMake `CLOUD_VIEWER_RANGE_ROOT` 更换位置。
+- Range API 的 protocol/pipeline 两个源文件**已内置**在 `src/third_party/range6532/`，
+  本项目不再依赖同级的 `../algo_solid_lidar` 工程（那套工程带 main 和离线标定器，只借用过这两个文件）。
+  上游若改了这两个文件，需要手动同步这 4 个文件（2 cpp + 2 h）。
   ROI1 由连续四个批次的 subframe 0..3 组成完整帧，接收和显示频率可能低于 ROI0。
 - LZ4 分包按 `(frame_id, sub_frame_idx)` 缓存，缺包不提交，限制缓存和解压长度。
   当前接入版本为 14B 分包头 + 首包 72B 元数据（16B 帧描述 + 4×14B ROI 描述）。
@@ -220,7 +221,7 @@ APP 不保存设备密码、不自动通过 SSH 重启设备。
 | CV_STREAM_MODE | cloud | 设为 range 可只选择接收解析器，不发送设备切换命令 |
 | CV_CALIB_BIN | 空 | 可选本机标定文件路径；加载后仍默认关闭本地标定 |
 
-默认不自动连接；`./build-lite/cloud_viewer --source udp` 可启动后直接监听。
+默认不自动连接；`./build/cloud_viewer --source udp` 可启动后直接监听。
 若设备输出与所选模式不同，接收器不把另一种模式当作当前模式解析。
 
 ### 构建与自测
@@ -228,9 +229,9 @@ APP 不保存设备密码、不自动通过 SSH 重启设备。
 新增依赖是 LZ4 开发库（Linux 通常为 `liblz4-dev`），同时保留原有 PCL/VTK 依赖。
 
 ```bash
-cmake -S . -B build-lite
-cmake --build build-lite -j2
-ctest --test-dir build-lite --output-on-failure
+cmake -S . -B build
+cmake --build build -j2
+ctest --test-dir build --output-on-failure
 ```
 
 `online_range_and_calibration` 自造 ROI0/ROI1 原始记录、LZ4 分包和标定表，

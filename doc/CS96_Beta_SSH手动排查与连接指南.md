@@ -88,10 +88,10 @@ done
 
 ```bash
 # 不同批次雷达的 MAC 前缀可能不同，可配多个（逗号分隔）；设为空串则列出全部邻居
-CV_RADAR_MAC_PREFIX='98:03:8a,e0:be:03' ./build-lite/cloud_viewer
+CV_RADAR_MAC_PREFIX='98:03:8a,e0:be:03' ./build/cloud_viewer
 
 # 跳过广播、直接扫描，用于排障
-CV_FORCE_SCAN=1 ./build-lite/cloud_viewer
+CV_FORCE_SCAN=1 ./build/cloud_viewer
 ```
 
 实测参考：一个含 105 台邻居的网段，扫描耗时约 5～7 秒；`98:03:8a` 命中 1 台（即本机接的 CS96 Beta），`e0:be:03` 命中 10 台但全部 `no-ssh`，说明 SSH 探测能有效把"同类 FPGA 设备"和"真雷达"区分开。
@@ -455,14 +455,14 @@ sudo timeout 12 tcpdump -i "$IFACE" -nn -c 10 \
 ```bash
 # [本机]
 cd /media/baiusc/DATA11/Repositories/ReposLidar/pcl_viewer || exit 1
-./build-lite/cloud_viewer
+./build/cloud_viewer
 ```
 
 在界面点击 **Search Device**，或使用 **Connect Beta IP** 输入雷达 IP。也可从终端直接指定目标并启用统计：
 
 ```bash
 # [本机] DEVICE、DATA_PORT 需沿用第 1 节实际值。
-CV_BETA_IP="$DEVICE" CV_BETA_PORT="$DATA_PORT" CV_BETA_DEBUG=1 ./build-lite/cloud_viewer
+CV_BETA_IP="$DEVICE" CV_BETA_PORT="$DATA_PORT" CV_BETA_DEBUG=1 ./build/cloud_viewer
 ```
 
 检查 `Beta Target`、`Radar Live` 以及 `[beta] recv/parsed/timeouts/frames`。仅有截图文件或 `pidof` 不等于收到有效点云；要同时确认设备模式、来源 IP、包格式和有效点数。

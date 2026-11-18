@@ -8,16 +8,16 @@
 C++17 + CMake，UI 是自绘 `UiOverlay`（VTK），**没有 Qt / ImGui**。
 
 ```bash
-cmake -S . -B build-lite -DCMAKE_BUILD_TYPE=Debug
-cmake --build build-lite -j4
-ctest --test-dir build-lite --output-on-failure
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j4
+ctest --test-dir build --output-on-failure
 ```
 
 无交互验证（真机跑一遍并截图）：
 
 ```bash
 DISPLAY=:0 CV_BETA_IP=10.42.0.222 CV_SCREENSHOT_WAIT_MS=10000 \
-  ./build-lite/cloud_viewer --screenshot /tmp/x.png
+  ./build/cloud_viewer --screenshot /tmp/x.png
 ```
 
 ## 2. 硬约束
@@ -89,7 +89,7 @@ DISPLAY=:0 CV_BETA_IP=10.42.0.221 CV_LIVE_FPS=1 timeout 24 ./build-rel/cloud_vie
 
 ```bash
 # 每帧打印发布的面号
-DISPLAY=:0 CV_BETA_IP=10.42.0.221 CV_FACE_TRACE=1 timeout 16 ./build-lite/cloud_viewer 2>&1 | grep '\[face\]'
+DISPLAY=:0 CV_BETA_IP=10.42.0.221 CV_FACE_TRACE=1 timeout 16 ./build/cloud_viewer 2>&1 | grep '\[face\]'
 ```
 
 正常输出是面号 `0→1→2→3→0` 严格轮转、`frame=` 连续递增：
@@ -128,7 +128,7 @@ VTK 是右手系，两种点云的处理**不同**：
 验证：
 
 ```bash
-CV_ANGLE_PROBE=1 ./build-lite/cloud_viewer 2>&1 | grep '\[probe\]'
+CV_ANGLE_PROBE=1 ./build/cloud_viewer 2>&1 | grep '\[probe\]'
 # [probe] slot=2   omega=60.96  y=0.224     ← slot 小：y>0
 # [probe] slot=799 omega=-56.07 y=-3.873    ← slot 大：y<0
 ```

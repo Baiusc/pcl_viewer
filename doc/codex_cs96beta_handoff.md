@@ -22,21 +22,21 @@
 - 构建：
 
 ```bash
-cmake -S . -B build-lite -DCMAKE_BUILD_TYPE=Debug
-cmake --build build-lite -j4
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j4
 ```
 
 - 运行（交互）：
 
 ```bash
-./build-lite/cloud_viewer
+./build/cloud_viewer
 ```
 
 - 运行（无人值守截图，便于回归）：
 
 ```bash
 CV_BETA_IP=10.42.0.218 CV_SCREENSHOT_WAIT_MS=10000 \
-  ./build-lite/cloud_viewer --screenshot /tmp/beta.png
+  ./build/cloud_viewer --screenshot /tmp/beta.png
 ```
 
 - 调试开关：
@@ -446,7 +446,7 @@ slot 大（slot 799）  → omega ≈ −56° → y < 0 → 显示在右
 **验证方法**：
 
 ```bash
-DISPLAY=:0 CV_BETA_IP=10.42.0.218 CV_ANGLE_PROBE=1 timeout 20 ./build-lite/cloud_viewer 2>&1 | grep '\[probe\]'
+DISPLAY=:0 CV_BETA_IP=10.42.0.218 CV_ANGLE_PROBE=1 timeout 20 ./build/cloud_viewer 2>&1 | grep '\[probe\]'
 ```
 
 ```
@@ -478,7 +478,7 @@ DISPLAY=:0 CV_BETA_IP=10.42.0.218 CV_ANGLE_PROBE=1 timeout 20 ./build-lite/cloud
    - `PclVtkRenderer::upsert()` 每帧新建 vtkPoints/PolyData/Mapper 并逐点 `SetPoint`（改为复用整条管线，直接写底层 `vtkFloatArray` / `vtkUnsignedCharArray`，拓扑数组预生成后按点数截断）。
    验证方式：HUD 首行是渲染 FPS，拖动时应接近刷新率，松手后回落到点云帧率。
 8. **原始点云帧率**：曾低到 0.2~5 fps，原因叠加：
-   - **Debug 构建**（`build-lite`）下逐点 `apply()` 慢数倍，接收线程跟不上 → UDP 丢包 97%；
+   - **Debug 构建**（`build`）下逐点 `apply()` 慢数倍，接收线程跟不上 → UDP 丢包 97%；
    - `rebuildDerivedFields` 每帧为 30 万点填 **13 个标量场**（400 万次写入 + 15MB 分配）
      → 改为按需只生成当前颜色源（`makeFrame(..., colorSource_)`）；
    - `applyIncomingFrame` 每帧 `renderer_.remove` + `scene_.add`，**id 变化导致渲染层缓存失效**、
@@ -608,16 +608,16 @@ hc   = hc × 2 − 60                            // 镜面 ×2，omega0 = −60
 - 提交前保证：
 
 ```bash
-cmake --build build-lite -j4
-./build-lite/tests/cv_test_core
-./build-lite/tests/cv_test_beta_stream
+cmake --build build -j4
+./build/tests/cv_test_core
+./build/tests/cv_test_beta_stream
 ```
 
 均通过，并用真实设备截图验证：
 
 ```bash
 CV_BETA_IP=10.42.0.218 CV_SCREENSHOT_WAIT_MS=12000 \
-  ./build-lite/cloud_viewer --screenshot /tmp/beta_after.png
+  ./build/cloud_viewer --screenshot /tmp/beta_after.png
 ```
 
 - 在回复中说明：
