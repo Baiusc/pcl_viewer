@@ -180,6 +180,10 @@ private:
     bool parseUnifiedCsv(const std::filesystem::path &path, std::string &error);
     /// 校验尺寸并派生面起始角、逐线俯仰角。
     bool finalizeGeometry(std::string &error);
+    /// 加载期自检：每面 60 格的名义跨度是 88.5°（59 步 × 1.5°），
+    /// 实测跨度或单步明显偏离就打警告。刻度错位（漏检光条后顺延）
+    /// 不会让加载失败，只会让该面点云被拉伸，只能靠这里暴露出来。
+    void warnEncoderSegments() const;
 
     bool loaded_ = false;
     std::filesystem::path directory_;

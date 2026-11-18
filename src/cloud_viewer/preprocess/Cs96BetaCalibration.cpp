@@ -15,6 +15,9 @@ namespace cloud_viewer
 namespace
 {
 
+int realangle_last_debug = -1;
+int scale_last_debug = -1;
+
 constexpr float kLightSpeed = 299792458.0f * 1e-12f; // 米/皮秒
 constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
 // ys_decode_cs96_beta.c: CS96_BETA_PA_COUNTS_PER_REVOLUTION。
@@ -227,8 +230,63 @@ bool Cs96BetaCalibration::finalizeGeometry(std::string &error)
                   { return a.first < b.first; });
     }
 
+    warnEncoderSegments();
+
     loaded_ = true;
     return true;
+}
+
+void Cs96BetaCalibration::warnEncoderSegments() const
+{
+    if (encoderAngle_.size() <= static_cast<std::size_t>(kScalesPerRev))
+    {
+        return;
+    }
+    constexpr int kScalesPerFace = kScalesPerRev / kFaces;      // 60 格/面
+    constexpr float kNominalStep = 360.0f / kScalesPerRev;      // 1.5°/格
+    constexpr float kSpanTolerance = 2.0f;                      // 段跨度容差
+    constexpr float kStepTolerance = 1.0f;                      // 单步容差
+    const float nominalSpan = kNominalStep * static_cast<float>(kScalesPerFace - 1);
+
+    for (int face = 0; face < kFaces; ++face)
+    {
+        int begin = static_cast<int>(
+            std::lround(standardEncoder_[static_cast<std::size_t>(face)]));
+        begin = ((begin % kScalesPerRev) + kScalesPerRev) % kScalesPerRev;
+
+        float span = 0.0f;
+        float worstStep = 0.0f;
+        int worstTick = -1;
+        for (int k = 1; k < kScalesPerFace; ++k)
+        {
+            const int prev = (begin + k - 1) % kScalesPerRev;
+            const int cur = (begin + k) % kScalesPerRev;
+            const float step = encoderAngle_[static_cast<std::size_t>(cur)] -
+                               encoderAngle_[static_cast<std::size_t>(prev)];
+            span += step;
+            if (std::fabs(step) > std::fabs(worstStep))
+            {
+                worstStep = step;
+                worstTick = cur;
+            }
+        }
+
+        if (std::fabs(span - nominalSpan) > kSpanTolerance)
+        {
+            std::fprintf(stderr,
+                         "[calib] WARN 第 %d 面（scale %d~%d）跨度 %.2f°，名义 %.2f°，"
+                         "偏 %+.2f°：该面点云会被整体拉伸/压缩，请重标或修表\n",
+                         face + 1, begin, (begin + kScalesPerFace - 1) % kScalesPerRev,
+                         span, nominalSpan, span - nominalSpan);
+        }
+        if (worstTick >= 0 && std::fabs(worstStep - kNominalStep) > kStepTolerance)
+        {
+            std::fprintf(stderr,
+                         "[calib] WARN 第 %d 面 scale %d 步长 %.2f°（名义 %.2f°），"
+                         "疑似光条漏检后刻度顺延错位\n",
+                         face + 1, worstTick, worstStep, kNominalStep);
+        }
+    }
 }
 
 bool Cs96BetaCalibration::parseIni(const std::filesystem::path &path, std::string &error)
@@ -1090,6 +1148,11 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     {
         // ── Beta 方案（ys_algo_horizontal_corners.c:111-127）────────────────
         // slot0 为同步标记，严格保留设备的 omega0 -> *2 + omega0 分支。
+        //
+        // 基准角恒为 omega0_，每面锚定表只作用在下面 hc 的 startPart：
+        // 减掉该面表值后，每面起点都归零，等于已经把"每面起始角"折进去了。
+        // 不要把 tableStart_ 当基准角 —— 表值是**机械**锚点（≈ -30°），
+        // 而 omegaDeg 是光路角（hc 已 ×2），直接替换会让整面偏约 -30°。
         float hc = omega0_;
         if (slot != 0)
         {
@@ -1115,8 +1178,8 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
             const float interval_prev = timeIntervalUs(scale - 1);
             const float interval_next = timeIntervalUs(scale + 1);
             
-            // float realPart = realAngle / 1701.f * angle_spacing;  // planB 计算细角度时，不去查interval_time.txt时间表，按1701固定值来
-            float realPart = realAngle / interval * angle_spacing; // planA 计算细角度时，查interval_time.txt时间表，按实际耗时来
+            float realPart = realAngle / 1701.f * angle_spacing;  // planB 计算细角度时，不去查interval_time.txt时间表，按1701固定值来
+            // float realPart = realAngle / interval * angle_spacing; // planA 计算细角度时，查interval_time.txt时间表，按实际耗时来
 
             const float fineLimit = angle_spacing * 1.05f;
             // 细角度不应超过一格：超了说明该格计时/角度表不可信，钳到边界。
@@ -1142,6 +1205,24 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
                                         : startingAngle_[static_cast<std::size_t>(face)];
 
             hc = encoderPart + realPart - startPart;
+
+            // 仅 debug调试 用 20261118 发现按时间开火时的 每面的首个 slot的 realAngle 相对 side0_angular_offset 会统一延后约 35 微秒 是正常现象
+            // 一个slot实际发13次光，记录的是第8次发光的时间，所以大概是和初始角度相差了36.5us左右
+            // if( slot <= 40 && realangle_last_debug != realAngle)
+            // {
+            //     realangle_last_debug = realAngle;
+            // }
+            // if (slot <= 40 && scale != scale_last_debug)
+            // {
+            //     scale_last_debug = scale;
+            //     if (scale == 24 || scale == 84 || scale == 144 || scale == 204)
+            //     {
+            //         int realAngle_256 = static_cast<int>(realAngle * 256.f / 1701.f);
+            //         int realAngle_240 = static_cast<int>(realAngle * 240.f / 1701.f);
+            //         int debug = 1;
+            //     }
+            // }
+
             // wrap 到 [-180, 180]
             if (hc > 180.0f)
             {
@@ -1151,9 +1232,23 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
             {
                 hc += 360.0f; // 尚未转过起始角，等价于绕一整圈后到达
             }
+
+            // 调试探针：CV_OMEGA_TRACE=1 时打印中间量，
+            // 用来核对四个面是否落在同一角度区间（out 应为 -60 ~ +60）。
+            static const bool traceOmega = std::getenv("CV_OMEGA_TRACE") != nullptr;
+            static std::atomic<int> traceCount{0};
+            if (traceOmega && pixel == 48 && (slot <= 2 || slot == 799) &&
+                traceCount.fetch_add(1) < 60)
+            {
+                std::fprintf(stderr,
+                             "[omega] face=%d slot=%u scale=%d real=%d enc=%.3f start=%.3f hc=%.3f out=%.3f\n",
+                             face, static_cast<unsigned>(slot), scale, realAngle,
+                             encoderPart, startPart, hc, hc * 2.0f + omega0_);
+            }
         }
         // 机械旋转角转换成光学扫描角
         omegaDeg = hc * 2.0f + omega0_;
+        // omegaDeg = hc * 2.0f + tableStart_[face] * 2.0f;
 
         // FPGA 旋转角标定 —— ys_algo_horizontal_corners.c 在同一位置调用
         // get_beta_spot_slope()，入参正是"已乘 2 加 omega0"的水平角。
