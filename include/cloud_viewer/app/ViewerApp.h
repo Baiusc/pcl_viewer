@@ -178,7 +178,7 @@ private:
     std::size_t calibrationButtonIndex_ = 0;
     std::size_t angleSchemeButtonIndex_ = 0;
     std::size_t searchButtonIndex_ = 0;
-    std::size_t startBetaButtonIndex_ = 0;
+    std::size_t restartBetaButtonIndex_ = 0;
     std::size_t firstDeviceButtonIndex_ = 0;
     std::size_t faceButtonIndices_[4] = {0, 0, 0, 0};
     std::size_t faceAllButtonIndex_ = 0;
@@ -191,7 +191,7 @@ private:
     std::unique_ptr<DeviceDiscovery> discovery_;
     std::vector<DiscoveredDevice> discoveredDevices_;
     std::string radarIpOverride_;
-    /// 最近一次操作的目标设备（连接或点 Start you_see 时更新）。
+    /// 最近一次操作的目标设备（连接或点 Restart you_see 时更新）。
     std::string lastDeviceIp_;
     /// 记录并持久化目标设备，供下次搜索与 Connect 复用。
     void rememberDevice(const std::string &ip);
@@ -221,7 +221,8 @@ private:
     void connectBeta(const std::string &ip);
     void connectBetaManual();
     /// 通过 SSH 检查并在需要时启动设备端 you_see。
-    void startBetaProcess();
+    /// 重启设备端 you_see：先 kill 已有进程，再拉起，最后用 pidof 校验。
+    void restartBetaProcess();
     void switchBetaMode();
     static bool applyBetaWorkMode(const std::string &ip, int mode, std::string &message);
     static std::string betaSshPassword();

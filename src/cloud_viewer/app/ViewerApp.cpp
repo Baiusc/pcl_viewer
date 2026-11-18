@@ -339,9 +339,9 @@ void ViewerApp::setupInteraction()
                   });
     ui_.addButton("Connect Beta IP", 0.010, 0.735, 0.220, kButtonHeight,
                   [this] { connectBetaManual(); });
-    startBetaButtonIndex_ = ui_.size();
-    ui_.addButton("Start you_see", 0.240, 0.735, 0.200, kButtonHeight,
-                  [this] { startBetaProcess(); });
+    restartBetaButtonIndex_ = ui_.size();
+    ui_.addButton("Restart you_see", 0.240, 0.735, 0.200, kButtonHeight,
+                  [this] { restartBetaProcess(); });
 
     // 动态设备按钮从该索引开始，刷新时只移除这一段，避免误删固定按钮。
     firstDeviceButtonIndex_ = ui_.size();
@@ -767,45 +767,58 @@ static bool ensureSshReady(const std::string &ip, std::string &message)
     return false;
 }
 
-/// 在设备上检查并启动 you_see。只启动进程，不修改任何配置。
-static bool startBetaProcessOn(const std::string &ip, const std::string &password,
-                               const std::string &knownHosts, std::string &message)
+/// 重启设备上的 you_see：先 kill 已有进程，再拉起，最后用 pidof 校验。
+/// 只动进程，不修改任何配置；日志基线只用于失败时回显本次新增的错误行。
+static bool restartBetaProcessOn(const std::string &ip, const std::string &password,
+                                 const std::string &knownHosts, std::string &message)
 {
     const std::string script = R"SH(set -eu
-if pidof you_see >/dev/null; then
-  echo ALREADY_RUNNING=$(pidof you_see)
-  exit 0
-fi
 log=/var/log/ys.log
 before=0
 if [ -f "$log" ]; then before=$(wc -l < "$log"); fi
+old=$(pidof you_see || true)
+if [ -n "$old" ]; then
+  kill -9 $old || true
+  # 等进程真正退出：刚被 kill 时串口/采集句柄可能还没释放，
+  # 立刻拉起常报设备忙并静默退出。
+  sleep 2
+  left=$(pidof you_see || true)
+  if [ -n "$left" ]; then
+    kill -9 $left || true
+    sleep 1
+  fi
+fi
 setsid sh -c 'cd /root && exec ./you_see >>/tmp/you_stdout.log 2>&1' </dev/null >/dev/null 2>&1 &
 sleep 4
 pid=$(pidof you_see || true)
 if [ -z "$pid" ]; then
-  echo START_FAILED
+  echo RESTART_FAILED
   if [ -f "$log" ]; then
     tail -n +$((before + 1)) "$log" 2>/dev/null | grep -E "不匹配|load config fail|FATAL" | head -n 2 || true
   fi
   exit 1
 fi
-echo STARTED=$pid
+if [ -n "$old" ]; then
+  echo RESTARTED="$old->$pid"
+else
+  echo STARTED=$pid
+fi
 )SH";
 
     std::string output;
     runBetaSsh(ip, password, knownHosts, script, "", output);
 
-    if (output.find("ALREADY_RUNNING=") != std::string::npos)
+    if (output.find("RESTARTED=") != std::string::npos)
     {
-        message = "设备端 you_see 已在运行（" + ip + "）";
+        message = "已重启设备端 you_see（" + ip + "，旧 pid 已终止）";
         return true;
     }
     if (output.find("STARTED=") != std::string::npos)
     {
-        message = "已启动设备端 you_see（" + ip + "）";
+        message = "设备端 you_see 原本未运行，已启动（" + ip + "）";
         return true;
     }
-    message = "启动 you_see 失败: " + betaSshFailureReason(output);
+    message = "重启 you_see 失败: " + betaSshFailureReason(output);
     return false;
 }
 
@@ -1411,7 +1424,7 @@ void ViewerApp::searchDevices()
     renderer_.render();
 }
 
-void ViewerApp::startBetaProcess()
+void ViewerApp::restartBetaProcess()
 {
     // 目标优先级：最近操作的设备 > 当前连接的设备 > 搜索结果第一台。
     std::string ip = lastDeviceIp_;
@@ -1425,14 +1438,14 @@ void ViewerApp::startBetaProcess()
     }
     if (ip.empty())
     {
-        logUi("Start you_see", "请先 Search 或连接一台设备", false);
+        logUi("Restart you_see", "请先 Search 或连接一台设备", false);
         return;
     }
 
     const std::string password = betaSshPassword();
     if (password.empty())
     {
-        logUi("Start you_see",
+        logUi("Restart you_see",
               "未配置 Beta SSH 密码（CV_BETA_SSH_PASS 或 ~/.config/cloud_viewer/beta_ssh.conf）",
               false);
         return;
@@ -1441,33 +1454,33 @@ void ViewerApp::startBetaProcess()
     std::string keyFileMessage;
     if (!ensureKnownHostsReady(knownHosts, keyFileMessage))
     {
-        logUi("Start you_see", keyFileMessage, false);
+        logUi("Restart you_see", keyFileMessage, false);
         return;
     }
 
     // 先确认 SSH 可用；关闭时用设备自带 web 接口打开，再执行启动。
-    logUi("Start you_see", "检查 " + ip + " 的 SSH 服务");
+    logUi("Restart you_see", "检查 " + ip + " 的 SSH 服务");
     updateHud();
     renderer_.render();
 
     std::string sshMessage;
     if (!ensureSshReady(ip, sshMessage))
     {
-        logUi("Start you_see", sshMessage, false);
+        logUi("Restart you_see", sshMessage, false);
         updateHud();
         renderer_.render();
         return;
     }
-    logUi("Start you_see", sshMessage);
+    logUi("Restart you_see", sshMessage);
 
     std::string message;
-    const bool ok = startBetaProcessOn(ip, password, knownHosts, message);
+    const bool ok = restartBetaProcessOn(ip, password, knownHosts, message);
     lastDeviceIp_ = ip;
-    logUi("Start you_see", message, ok);
-    // 只有本次真正拉起进程时才提示等待；已在运行时不必再等。
-    if (ok && message.find("已启动") != std::string::npos)
+    logUi("Restart you_see", message, ok);
+    // 重启或首次启动都要经过"拉起 + 4 秒校验"的窗口，设备开始广播还要再等几秒。
+    if (ok)
     {
-        logUi("Start you_see", "稍等约 3 秒再点 Search，设备开始广播后即可连接");
+        logUi("Restart you_see", "稍等约 3 秒再点 Search，设备开始广播后即可连接");
     }
     updateHud();
     renderer_.render();
@@ -2070,7 +2083,7 @@ void ViewerApp::updateModelDependentUi()
     ui_.setVisible(faceAllButtonIndex_, beta);
 
     // Start you_see 只服务 CS96 Beta；未连接时保留可见，便于先拉起设备再连接。
-    ui_.setVisible(startBetaButtonIndex_, !fl6532);
+    ui_.setVisible(restartBetaButtonIndex_, !fl6532);
 
     // ROI 分档是 6532 专有概念。
     ui_.setVisible(roiButtonIndex_, fl6532);
@@ -3455,11 +3468,11 @@ int ViewerApp::run(const std::vector<std::string> &files, double fps,
         searchDevices();
     }
 
-    // 自动化验证：直接对指定 IP 执行一次"启动 you_see"。
+    // 自动化验证：直接对指定 IP 执行一次"重启 you_see"。
     if (const char *startIp = std::getenv("CV_START_BETA_IP"))
     {
         lastDeviceIp_ = startIp;
-        startBetaProcess();
+        restartBetaProcess();
     }
 
     if (const char *betaIp = std::getenv("CV_BETA_IP"))

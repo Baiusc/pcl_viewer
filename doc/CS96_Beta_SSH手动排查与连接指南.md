@@ -96,20 +96,34 @@ CV_FORCE_SCAN=1 ./build-lite/cloud_viewer
 
 实测参考：一个含 105 台邻居的网段，扫描耗时约 5～7 秒；`98:03:8a` 命中 1 台（即本机接的 CS96 Beta），`e0:be:03` 命中 10 台但全部 `no-ssh`，说明 SSH 探测能有效把"同类 FPGA 设备"和"真雷达"区分开。
 
-### 2.2 独立的"Start you_see"按钮
+### 2.2 独立的"Restart you_see"按钮
 
-工具栏第二行的 **Start you_see** 对当前目标设备（最近连接/最近操作的那台，没有则取搜索结果第一台）**按顺序做三件事**：
+工具栏第二行的 **Restart you_see** 对当前目标设备（最近连接/最近操作的那台，没有则取搜索结果第一台）**按顺序做三件事**：
 
 1. **检查 SSH**：TCP 22 可连就直接进入下一步。
 2. **SSH 关闭时自动开启**：向设备自带 web 接口发 `POST /cgi-bin/set_ssh.cgi`（body `enable=true`），该 CGI 内部执行 `S50sshd start`；随后轮询 22 端口，最多等 10 秒。
-3. **启动 you_see**（只启动进程，不改任何配置）：
+3. **重启 you_see**（先 kill 已有进程再拉起，不改任何配置）：
 
 ```sh
-if pidof you_see >/dev/null; then echo ALREADY_RUNNING; else
-  setsid sh -c 'cd /root && exec ./you_see >>/tmp/you_stdout.log 2>&1' </dev/null >/dev/null 2>&1 &
-  sleep 4; pidof you_see || echo START_FAILED
+old=$(pidof you_see || true)
+if [ -n "$old" ]; then
+  kill -9 $old
+  sleep 2                      # 等串口/采集句柄释放
+  left=$(pidof you_see || true)
+  [ -z "$left" ] || { kill -9 $left; sleep 1; }
 fi
+setsid sh -c 'cd /root && exec ./you_see >>/tmp/you_stdout.log 2>&1' </dev/null >/dev/null 2>&1 &
+sleep 4
+pid=$(pidof you_see || true)
+[ -n "$pid" ] || echo RESTART_FAILED
 ```
+
+为什么必须"先杀后启"：改过 `/etc/ys_conf.ini`、换过 `work_mode`、或设备端进程卡在旧配置上时，
+旧逻辑（`pidof` 有输出就算"已在运行"、直接跳过）不会让新配置生效。重启能保证进程用当前
+配置文件重新初始化。
+
+`sleep 2` 不能省：刚被 `kill -9` 时串口/采集句柄可能还没释放，立刻拉起常报设备忙并静默退出，
+表面是 `RESTART_FAILED` 但日志里没有明显错误行。
 
 之所以能远程开启 SSH，是因为设备的 `/www` 由 **lighttpd 独立提供**，不依赖 sshd；`set_ssh.cgi` 的核心逻辑就是：
 
@@ -118,23 +132,34 @@ if [ "$SERVICE_STATUS" = "true" ]; then
     sed -i "s/#start/start/g" /etc/init.d/S50sshd && /etc/init.d/S50sshd start
 ```
 
-实测（先把设备 22 端口关掉再点按钮）：
+实测（10.42.0.221，22 端口正常时走"已就绪"分支）：
 
 ```
-[ui] Start you_see OK | 检查 10.42.0.222 的 SSH 服务
-[ui] Start you_see OK | SSH 未开放，已通过设备 web 接口开启（10.42.0.222）
-[ui] Start you_see OK | 已启动设备端 you_see（10.42.0.222）
+[ui] Restart you_see OK | 检查 10.42.0.221 的 SSH 服务
+[ui] Restart you_see OK | SSH 已就绪（10.42.0.221）
+[ui] Restart you_see OK | 已重启设备端 you_see（10.42.0.221，旧 pid 已终止）
+[ui] Restart you_see OK | 稍等约 3 秒再点 Search，设备开始广播后即可连接
+```
+
+SSH 关闭时点按钮会先自动开启再重启，第 2 行变成：
+
+```
+[ui] Restart you_see OK | SSH 未开放，已通过设备 web 接口开启（10.42.0.221）
 ```
 
 如果 web 接口本身也不可达（设备刚上电、lighttpd 还没起），会明确提示"请稍后再试或重新上电"，不会静默失败。日志的三种终态：
 
 ```
-[ui] Start you_see OK   | 设备端 you_see 已在运行（10.42.0.222）
-[ui] Start you_see OK   | 已启动设备端 you_see（10.42.0.222）
-[ui] Start you_see FAILED | 启动 you_see 失败: <设备日志中的真实原因>
+[ui] Restart you_see OK     | 已重启设备端 you_see（10.42.0.221，旧 pid 已终止）
+[ui] Restart you_see OK     | 设备端 you_see 原本未运行，已启动（10.42.0.221）
+[ui] Restart you_see FAILED | 重启 you_see 失败: <设备日志中的真实原因>
 ```
 
 失败原因会从设备 `/var/log/ys.log` 里带回关键行，例如固件不支持当前 `work_mode`（见 4.2）。
+
+**重启会中断推流约 5~8 秒**（2 秒等句柄释放 + 4 秒拉起校验）。实测设备端 pid 由 `2163` → `2567`，
+重新连接后 `Radar Live` 首帧 76800 点、稳定 10 fps。校验通过后再点 **Search**，
+等设备重新广播即可连接。
 
 也可用手动入口 **Connect Beta IP** 输入已确认地址。手动入口只绕过广播发现，不会使关闭的服务、错误的推流地址或不兼容的固件自动变正常。
 
@@ -482,7 +507,7 @@ sync && umount /mnt/mtdblock2
 
 | 现象 | 首先核对 |
 |---|---|
-| **设备重启后突然搜不到，但 ping 通** | `you_see` 未运行（开机不自启）。Search 会自动扫描兜底，选中设备后点 **Start you_see** 即可；手工判别见 2.1 与 4.1。 |
+| **设备重启后突然搜不到，但 ping 通** | `you_see` 未运行（开机不自启）。Search 会自动扫描兜底，选中设备后点 **Restart you_see** 即可（进程没在跑时会直接拉起）；手工判别见 2.1 与 4.1。 |
 | ping 通，Search 无结果 | UDP 55000 抓包、`you_see` 是否运行、广播端口与网络过滤；已知 IP 可走手动入口。 |
 | 重启后点云又推到旧电脑 | `/etc/ys_conf.ini` 被 `install.sh` 覆盖回出厂值，见 4.3。 |
 | 改 `work_mode` 后进程立刻退出 | 与 `mode` 所选驱动不匹配，见 4.2。 |
