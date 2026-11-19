@@ -1079,7 +1079,7 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
 {
     point.pixel_idx = static_cast<std::uint16_t>(pixel);
     point.slot_idx = slot;
-    if (slot > 1)
+    if (slot == 0)
     {
         int kdebug = 1;
     }
@@ -1104,10 +1104,15 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     point.x = point.y = point.z = std::numeric_limits<float>::quiet_NaN();
     point.r = 0.0f;
     point.is_valid = false;
-    if (ft <= 16 || face < 0 || face >= kFaces)
+    if (ft <= 16 ) // 若 前沿值 无效 ，则直接丢弃。
     {
-        point.is_valid = false;
+        point.is_valid = false; 
         return;
+    }
+    if (face < 0 || face >= kFaces) // 若 面号 越界，则直接丢弃。
+    {
+        point.is_valid = false; 
+        // return;
     }
 
     const int index = std::clamp(pixel, 0, linesV_ - 1);
@@ -1116,7 +1121,7 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     //   r = c·(ft >> 1)·a[pixel] + d_delta[pixel]
     // 关闭 distanceCorrection 等价于 a = 1、d_delta = 0。
     float r = kLightSpeed * static_cast<float>(ft >> 1);
-    if (options.distanceCorrection || 1)  // debug 可选 || 1 一直开
+    if (options.distanceCorrection )  // debug 可选 || 1 一直开
     {
         r = r * aFactor_[index] + dDelta_[index]; // 设备端直接按米相加（ys_decode_common.c）
     }
@@ -1172,7 +1177,8 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
         // 减掉该面表值后，每面起点都归零，等于已经把"每面起始角"折进去了。
         // 不要把 tableStart_ 当基准角 —— 表值是**机械**锚点（≈ -30°），
         // 而 omegaDeg 是光路角（hc 已 ×2），直接替换会让整面偏约 -30°。
-        float hc = omega0_;
+        float hc = slot == 0 ? 0 : omega0_;
+        // float hc = slot == 0 ? 0 : tableStart_[face] * 2.0f;
         if (slot != 0)
         {
             // 码盘机械粗刻度角度（查表，消除刻度不均匀）

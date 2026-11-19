@@ -44,7 +44,8 @@ inline float pitchDegrees(int line, int lines, int centerLine = -1)
     const int u = centerLine >= 0 ? centerLine : (lines - 1) / 2;
     return static_cast<float>((line - u) * (20.0 / lines) - 2.5);
 }
-
+// ft 是往返 皮秒时间 前沿值
+constexpr std::uint32_t kBlindZoneTicks = 7;   // > 7 ps 视为盲区外（约 1 m）
 constexpr std::size_t kCartesianHead = 18;
 constexpr std::size_t kCartesianPoint = 13;
 constexpr std::size_t kOriginHead = 9;
@@ -220,8 +221,12 @@ bool parseOrigin(const std::uint8_t *data, ParsedPacket &packet,
         packet.face = static_cast<int>(packet.frame % 4);
     }
     // slot0 为同步包，实测 PA 恒为 0；只用帧起始窗口内首个有效 PA 判面。
+    if(packet.index == 0)
+    {
+        int debugk =1;
+    }
     // 中途接入（前 10% slot 全丢）不猜测该帧，等待下一帧；后续绝不逐 slot 重新判面。
-    if (packet.face < 0 && packet.index > 0 && packet.index <= slots / 10)
+    if (packet.face < 0 && packet.index > 0 && packet.index <= slots )
     {
         // 判面只依赖整圈编码器表（PA 实测的结构参数），不受四项标定开关影响。
         if (calibration != nullptr && calibration->loaded())
@@ -235,6 +240,11 @@ bool parseOrigin(const std::uint8_t *data, ParsedPacket &packet,
             packet.face = BetaUdpStream::faceFromPa(mirrorAngle);
         }
     }
+    else
+    {
+        // debug
+        // packet.face = -1;
+    }
 
     const std::uint8_t *pixels = data + kOriginHead + kOriginSlotHead;
     for (int i = 0; i < lines; ++i)
@@ -243,18 +253,25 @@ bool parseOrigin(const std::uint8_t *data, ParsedPacket &packet,
         const int line = lines - 1 - i;
         const std::uint8_t *raw = pixels + static_cast<std::size_t>(i) * kOriginPixel;
 
-        const std::uint32_t ft0 = readLe24(raw);
-        const std::uint16_t pk0 = readLe16(raw + 6);
-        const std::uint32_t ft1 = readLe24(raw + 8);
-        const std::uint16_t pk1 = readLe16(raw + 14);
-
-        const bool ok0 = ft0 > 16;
-        const bool ok1 = ft1 > 16;
+        const std::uint32_t ft0 = readLe24(raw); // 第一个回波 的前沿值
+        const std::uint16_t pk0 = readLe16(raw + 6);   // 第一个回波 的峰值
+        const std::uint32_t ft1 = readLe24(raw + 8); // 第二个回波 的前沿值
+        const std::uint16_t pk1 = readLe16(raw + 14); // 第二个回波 的峰值
+        
+        // const bool ok0 = ft0 > 16 && pk0 > 16 && ft0 > kBlindZoneTicks; // 第一个回波有效，且不在盲区内
+        // const bool ok1 = ft1 > 16 && pk1 > 16 && ft1 > kBlindZoneTicks; // 第二个回波有效，且不在盲区内
+        const bool ok0 = ft0 > 16 && pk0 > 16 ; // 第一个回波有效
+        const bool ok1 = ft1 > 16 && pk1 > 16 ; // 第二个回波有效
         std::uint32_t ft = 0;
         std::uint16_t peak = 0;
-        if (ok0 && ok1)
+        // if (ok0 && ok1) // 两个回波都有效，取峰值大的那个。
+        // {
+        //     if (pk1 > pk0) { ft = ft1; peak = pk1; }
+        //     else { ft = ft0; peak = pk0; }
+        // }
+        if (ok0 && ok1) // 两个回波都有效，取ft大的那个。
         {
-            if (pk1 > pk0) { ft = ft1; peak = pk1; }
+            if (ft1 > ft0) { ft = ft1; peak = pk1; }
             else { ft = ft0; peak = pk0; }
         }
         else if (ok0)
@@ -272,6 +289,11 @@ bool parseOrigin(const std::uint8_t *data, ParsedPacket &packet,
         if (calibration != nullptr && calibration->loaded())
         {
             // 结构参数始终生效，四项标定由 options 逐项控制。
+            if(packet.face<0 || packet.face>=4)
+            {
+                // point.is_valid = false;
+                // continue;
+            }
             calibration->apply(line, ft, mirrorAngle, packet.index, peak, packet.face, options,
                                point);
             continue;
