@@ -162,6 +162,9 @@ add_executable(cloud_viewer
 target_link_libraries(cloud_viewer PRIVATE
     cv_app cv_render cv_io cv_stream cv_preprocess cv_core viewer_deps)
 
+# 必须显式 autoinit VTK 模块，否则窗口创建不出后端实例（见 ViewerDependencies.cmake 说明）。
+cv_enable_vtk_autoinit(cloud_viewer)
+
 if(WIN32)
     # 将运行时 DLL 复制到输出目录，避免手动配置 PATH。
     add_custom_command(TARGET cloud_viewer POST_BUILD

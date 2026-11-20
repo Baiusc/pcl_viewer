@@ -61,7 +61,9 @@ tests/                            # core / io / color 测试
 sudo apt install build-essential cmake libeigen3-dev
 # PCL / VTK 需按系统版本安装；本仓库在 PCL 1.14 + VTK 9.4 下验证。
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j
+cmake --build build --config Debug -- -j$(nproc)
 ctest --test-dir build --output-on-failure
 ```
 

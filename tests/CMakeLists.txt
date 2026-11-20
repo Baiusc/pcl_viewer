@@ -28,6 +28,7 @@ add_test(NAME device_broadcast_parse COMMAND cv_test_discovery)
 
 add_executable(cv_test_ui_overlay test_ui_overlay.cpp)
 target_link_libraries(cv_test_ui_overlay PRIVATE cv_render cv_core viewer_deps)
+cv_enable_vtk_autoinit(cv_test_ui_overlay)
 add_test(NAME ui_button_hit_log COMMAND cv_test_ui_overlay)
 
 add_executable(cv_test_online test_online.cpp)

@@ -1123,6 +1123,11 @@ void Cs96BetaCalibration::apply(int pixel, std::uint32_t ft, std::uint32_t mirro
     float r = kLightSpeed * static_cast<float>(ft >> 1);
     if (options.distanceCorrection )  // debug 可选 || 1 一直开
     {
+        // r = r - 5.8f; // 仅debug对比用
+        // if(pixel >= 24 && pixel <= 47)
+        // {
+        //     r = r + 0.1f; // 仅debug对比用
+        // }
         r = r * aFactor_[index] + dDelta_[index]; // 设备端直接按米相加（ys_decode_common.c）
     }
 
