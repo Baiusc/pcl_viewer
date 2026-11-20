@@ -1,6 +1,7 @@
 #include "cloud_viewer/stream/DeviceDiscovery.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -13,6 +14,7 @@
 #include <set>
 #include <sstream>
 #include <thread>
+#include <vector>
 
 #ifndef _WIN32
 #include <arpa/inet.h>
@@ -24,6 +26,14 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+#else
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#include <ipifcons.h> // IF_TYPE_SOFTWARE_LOOPBACK / IfOperStatusUp
 #endif
 
 namespace cloud_viewer
@@ -38,6 +48,36 @@ std::uint64_t nowMs()
             std::chrono::steady_clock::now().time_since_epoch())
             .count());
 }
+
+#ifdef _WIN32
+/// Winsock 只需初始化一次；UDP 监听、探测与 SendARP 都依赖它。
+void ensureWinsock()
+{
+    static std::once_flag initialized;
+    std::call_once(initialized, []() {
+        WSADATA data{};
+        ::WSAStartup(MAKEWORD(2, 2), &data);
+    });
+}
+
+/// SendARP 返回的 MAC 转成与 Linux 一致的 "aa:bb:cc:dd:ee:ff"。
+std::string macToString(const unsigned char *bytes)
+{
+    static const char *kHex = "0123456789abcdef";
+    std::string text;
+    text.reserve(17);
+    for (int i = 0; i < 6; ++i)
+    {
+        if (i > 0)
+        {
+            text.push_back(':');
+        }
+        text.push_back(kHex[(bytes[i] >> 4) & 0x0F]);
+        text.push_back(kHex[bytes[i] & 0x0F]);
+    }
+    return text;
+}
+#endif
 
 std::uint16_t readLe16(const std::uint8_t *data)
 {
@@ -71,7 +111,65 @@ std::string classifyModel(const std::string &serial)
 std::vector<std::string> localSubnetPrefixes()
 {
     std::vector<std::string> prefixes;
-#ifndef _WIN32
+#ifdef _WIN32
+    ensureWinsock();
+    // GetAdaptersAddresses 需要先给定缓冲区，不够时会返回 ERROR_BUFFER_OVERFLOW 并回填所需大小。
+    ULONG size = 16 * 1024;
+    std::vector<unsigned char> buffer(size, 0);
+    auto *addrs = reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buffer.data());
+    const ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    ULONG status = ::GetAdaptersAddresses(AF_INET, flags, nullptr, addrs, &size);
+    if (status == ERROR_BUFFER_OVERFLOW)
+    {
+        buffer.assign(size, 0);
+        addrs = reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buffer.data());
+        status = ::GetAdaptersAddresses(AF_INET, flags, nullptr, addrs, &size);
+    }
+    if (status != NO_ERROR)
+    {
+        return prefixes;
+    }
+
+    std::set<std::string> seen;
+    for (IP_ADAPTER_ADDRESSES *adapter = addrs; adapter != nullptr; adapter = adapter->Next)
+    {
+        if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK || adapter->OperStatus != IfOperStatusUp)
+        {
+            continue;
+        }
+        for (IP_ADAPTER_UNICAST_ADDRESS *unicast = adapter->FirstUnicastAddress; unicast != nullptr;
+             unicast = unicast->Next)
+        {
+            if (unicast->Address.lpSockaddr == nullptr ||
+                unicast->Address.lpSockaddr->sa_family != AF_INET)
+            {
+                continue;
+            }
+            // 只扫 /24：更宽的网段要探测的地址数量不可控。
+            if (unicast->OnLinkPrefixLength != 24)
+            {
+                continue;
+            }
+            const auto *address = reinterpret_cast<const sockaddr_in *>(unicast->Address.lpSockaddr);
+            char text[INET_ADDRSTRLEN] = {0};
+            if (::inet_ntop(AF_INET, &address->sin_addr, text, sizeof(text)) == nullptr)
+            {
+                continue;
+            }
+            const std::string value(text);
+            const auto dot = value.find_last_of('.');
+            if (dot == std::string::npos)
+            {
+                continue;
+            }
+            const std::string prefix = value.substr(0, dot);
+            if (seen.insert(prefix).second)
+            {
+                prefixes.push_back(prefix);
+            }
+        }
+    }
+#else
     ifaddrs *list = nullptr;
     if (::getifaddrs(&list) != 0)
     {
@@ -115,6 +213,74 @@ std::vector<std::string> localSubnetPrefixes()
 #endif
     return prefixes;
 }
+
+#ifdef _WIN32
+/// 对本机 /24 网段做一轮 SendARP 扫描，返回 (ip, mac)。
+/// SendARP 走二层解析、不经过防火墙，适合作为「广播被拦截」时的兜底发现手段。
+std::vector<std::pair<std::string, std::string>>
+sendArpSweep(const std::vector<std::string> &subnets)
+{
+    std::vector<std::string> targets;
+    for (const std::string &subnet : subnets)
+    {
+        for (int host = 1; host <= 254; ++host)
+        {
+            targets.push_back(subnet + "." + std::to_string(host));
+        }
+    }
+
+    std::vector<std::pair<std::string, std::string>> rows;
+    if (targets.empty())
+    {
+        return rows;
+    }
+
+    std::mutex mutex;
+    std::atomic<std::size_t> next{0};
+    // 并发度 32：ARP 请求本身很快，避免 254 个地址串行等待。
+    const std::size_t workerCount = std::min<std::size_t>(32, targets.size());
+    std::vector<std::thread> workers;
+    workers.reserve(workerCount);
+    for (std::size_t i = 0; i < workerCount; ++i)
+    {
+        workers.emplace_back([&]() {
+            while (true)
+            {
+                const std::size_t index = next.fetch_add(1);
+                if (index >= targets.size())
+                {
+                    break;
+                }
+                const std::string &ip = targets[index];
+                in_addr address{};
+                if (::inet_pton(AF_INET, ip.c_str(), &address) != 1)
+                {
+                    continue;
+                }
+                ULONG mac[2] = {0, 0};
+                ULONG length = sizeof(mac);
+                if (::SendARP(address.s_addr, 0, mac, &length) != NO_ERROR || length < 6)
+                {
+                    continue;
+                }
+                const auto *bytes = reinterpret_cast<const unsigned char *>(mac);
+                const std::string macText = macToString(bytes);
+                if (macText == "00:00:00:00:00:00")
+                {
+                    continue;
+                }
+                std::lock_guard<std::mutex> lock(mutex);
+                rows.emplace_back(ip, macText);
+            }
+        });
+    }
+    for (auto &worker : workers)
+    {
+        worker.join();
+    }
+    return rows;
+}
+#endif
 
 /// 非阻塞 connect，判断目标 TCP 端口是否能建立连接。
 bool tcpPortOpenImpl(const std::string &ip, std::uint16_t port, int timeoutMs)
@@ -166,10 +332,56 @@ bool tcpPortOpenImpl(const std::string &ip, std::uint16_t port, int timeoutMs)
     ::close(fd);
     return open;
 #else
-    (void)ip;
-    (void)port;
-    (void)timeoutMs;
-    return false;
+    // Windows：非阻塞 connect + select，语义与 Linux 分支一致。
+    ensureWinsock();
+    SOCKET fd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd == INVALID_SOCKET)
+    {
+        return false;
+    }
+    u_long nonBlocking = 1;
+    ::ioctlsocket(fd, FIONBIO, &nonBlocking);
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = ::htons(port);
+    if (::inet_pton(AF_INET, ip.c_str(), &address.sin_addr) != 1)
+    {
+        ::closesocket(fd);
+        return false;
+    }
+
+    bool open = false;
+    if (::connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0)
+    {
+        open = true;
+    }
+    else if (::WSAGetLastError() == WSAEWOULDBLOCK)
+    {
+        fd_set writable;
+        fd_set failed;
+        FD_ZERO(&writable);
+        FD_ZERO(&failed);
+        FD_SET(fd, &writable);
+        FD_SET(fd, &failed);
+        timeval timeout{};
+        timeout.tv_sec = timeoutMs / 1000;
+        timeout.tv_usec = (timeoutMs % 1000) * 1000;
+        // Windows 下 select 的第一个参数被忽略，传 0 即可。
+        if (::select(0, nullptr, &writable, &failed, &timeout) > 0 && FD_ISSET(fd, &writable) &&
+            !FD_ISSET(fd, &failed))
+        {
+            int error = 0;
+            int length = sizeof(error);
+            if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, reinterpret_cast<char *>(&error), &length) == 0 &&
+                error == 0)
+            {
+                open = true;
+            }
+        }
+    }
+    ::closesocket(fd);
+    return open;
 #endif
 }
 
@@ -255,6 +467,74 @@ struct DeviceDiscovery::Impl
         std::lock_guard<std::mutex> lock(mutex);
         active = false;
 #else
+        // Windows：Winsock 版广播监听。绑定 INADDR_ANY 才能收到 255.255.255.255 与子网广播；
+        // 注意入站 UDP 受防火墙约束，第一次运行需允许该程序（或放行 UDP 55000）。
+        ensureWinsock();
+        SOCKET sock = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        if (sock == INVALID_SOCKET)
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            active = false;
+            return;
+        }
+
+        int reuse = 1;
+        ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&reuse),
+                     sizeof(reuse));
+
+        DWORD timeout = 300; // 300ms，便于及时退出
+        ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&timeout),
+                     sizeof(timeout));
+
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_ANY);
+        address.sin_port = htons(port);
+
+        if (::bind(sock, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == SOCKET_ERROR)
+        {
+            ::closesocket(sock);
+            std::lock_guard<std::mutex> lock(mutex);
+            active = false;
+            return;
+        }
+
+        std::uint8_t buffer[2048];
+        while (true)
+        {
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                if (stopRequested)
+                {
+                    break;
+                }
+            }
+
+            sockaddr_in from{};
+            int fromLength = sizeof(from);
+            const int received = ::recvfrom(sock, reinterpret_cast<char *>(buffer), sizeof(buffer), 0,
+                                            reinterpret_cast<sockaddr *>(&from), &fromLength);
+            if (received <= 0)
+            {
+                continue;
+            }
+
+            DiscoveredDevice device;
+            if (!parseBroadcast(buffer, static_cast<std::size_t>(received), device))
+            {
+                continue;
+            }
+
+            char ipText[INET_ADDRSTRLEN] = {0};
+            ::inet_ntop(AF_INET, &from.sin_addr, ipText, sizeof(ipText));
+            device.ip = ipText;
+            device.lastSeenMs = nowMs();
+
+            std::lock_guard<std::mutex> lock(mutex);
+            devices[device.ip] = device;
+        }
+
+        ::closesocket(sock);
         std::lock_guard<std::mutex> lock(mutex);
         active = false;
 #endif
@@ -482,6 +762,7 @@ std::vector<DiscoveredDevice> DeviceDiscovery::scanSubnet(const std::string &mac
         return devices;
     }
 
+    std::vector<std::pair<std::string, std::string>> rows;
 #ifndef _WIN32
     // ping 只为让内核发出 ARP 请求；ICMP 被防火墙挡住也不影响邻居表，故不检查返回码。
     for (const std::string &subnet : subnets)
@@ -494,12 +775,16 @@ std::vector<DiscoveredDevice> DeviceDiscovery::scanSubnet(const std::string &mac
             ::pclose(pipe);
         }
     }
-#endif
 
     std::ifstream arp("/proc/net/arp");
     const std::string text((std::istreambuf_iterator<char>(arp)),
                            std::istreambuf_iterator<char>());
-    const auto rows = parseArpTable(text);
+    rows = parseArpTable(text);
+#else
+    // Windows：/proc 不存在，且防火墙会丢弃入站广播；用 SendARP 直接取二层 MAC，
+    // 既不受防火墙影响，也不需要先 ping 一遍。
+    rows = sendArpSweep(subnets);
+#endif
 
     for (const auto &row : rows)
     {

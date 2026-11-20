@@ -106,7 +106,8 @@ target_include_directories(cv_stream PRIVATE ${CV_LZ4_INCLUDE})
 find_package(Threads REQUIRED)
 target_link_libraries(cv_stream PUBLIC cv_core cv_range6532 ${CV_LZ4_LIBRARY} Threads::Threads)
 if(WIN32)
-    target_link_libraries(cv_stream PUBLIC ws2_32)
+    # ws2_32: Winsock；iphlpapi: GetAdaptersAddresses / SendARP（设备发现的本机网段枚举与二三层探测）
+    target_link_libraries(cv_stream PUBLIC ws2_32 iphlpapi)
 endif()
 
 foreach(_sdk_option ALPHA_SDK BETA_SDK FL6031_SDK FL6532_SDK)
@@ -182,6 +183,7 @@ if(CLOUD_VIEWER_BUILD_LEGACY)
     add_executable(PCL_VIEWER_LEGACY ${LEGACY_SOURCES})
     target_include_directories(PCL_VIEWER_LEGACY PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_link_libraries(PCL_VIEWER_LEGACY PRIVATE viewer_deps)
+    cv_enable_vtk_autoinit(PCL_VIEWER_LEGACY)
     set_target_properties(PCL_VIEWER_LEGACY PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 endif()
 

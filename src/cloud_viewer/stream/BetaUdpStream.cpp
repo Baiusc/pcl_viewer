@@ -20,6 +20,12 @@
 #include <unistd.h>
 #endif
 
+// -std=c++17 会定义 __STRICT_ANSI__，MinGW 的 math.h 因而隐藏 M_PI。
+// 与 point_type.cpp 保持一致，在缺省时补上（不使用 CMake 全局宏）。
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 namespace cloud_viewer
 {
 namespace

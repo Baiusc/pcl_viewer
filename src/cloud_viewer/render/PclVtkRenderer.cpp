@@ -1,6 +1,8 @@
 #include "cloud_viewer/render/PclVtkRenderer.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <iostream>
 
 #include <vtkActor.h>
 #include <vtkCamera.h>
@@ -19,6 +21,9 @@
 #include <vtkRenderWindowInteractor.h>
 #include <vtkSphereSource.h>
 #include <vtkUnsignedCharArray.h>
+#ifdef _WIN32
+#include <vtkWin32RenderWindowInteractor.h>
+#endif
 
 namespace cloud_viewer
 {
@@ -33,11 +38,37 @@ bool PclVtkRenderer::initialize(int width, int height)
     window_->AddRenderer(renderer_);
     window_->SetSize(width, height);
 
+    // MSYS2/MinGW 版 VTK 未自动注册 Win32 平台工厂，基类 vtkRenderWindowInteractor::New()
+    // 会返回空实现，其 Start() 立即返回，导致窗口一闪而过。Windows 下必须显式实例化
+    // vtkWin32RenderWindowInteractor 才能进入真正的消息循环。
+#ifdef _WIN32
+    vtkSmartPointer<vtkWin32RenderWindowInteractor> win32Interactor =
+        vtkSmartPointer<vtkWin32RenderWindowInteractor>::New();
+    interactor_ = win32Interactor;
+#else
     interactor_ = vtkSmartPointer<vtkRenderWindowInteractor>::New();
+#endif
     interactor_->SetRenderWindow(window_);
 
     auto style = vtkSmartPointer<vtkInteractorStyleTrackballCamera>::New();
     interactor_->SetInteractorStyle(style);
+
+    // 窗口自检：设置 CV_DEBUG_WINDOW=1 可输出渲染窗口/interactor 的实际类名与句柄。
+    // 若 class 不是 vtkWin32OpenGLRenderWindow，说明 vtk_module_autoinit 未生效
+    // （见 CMakeLists.txt），此时不会创建原生窗口，表现为“进程不退出、窗口不出现”。
+    if (std::getenv("CV_DEBUG_WINDOW"))
+    {
+        int *sz = window_->GetSize();
+        int *asz = window_->GetActualSize();
+        void *wid = window_->GetGenericWindowId();
+        std::cout << "[dbg] renderWindow class = " << window_->GetClassName()
+                  << " interactor = " << interactor_->GetClassName()
+                  << " winId=" << wid
+                  << " mapped=" << window_->GetMapped()
+                  << " size=" << (sz ? sz[0] : 0) << "x" << (sz ? sz[1] : 0)
+                  << " actual=" << (asz ? asz[0] : 0) << "x" << (asz ? asz[1] : 0)
+                  << std::endl;
+    }
 
     return true;
 }
