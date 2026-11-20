@@ -197,7 +197,7 @@ private:
     /// ys_calibration.ini 的 sat_peak_min，低于该峰值判为无效回波（设备端同规则）。
     std::uint16_t satPeakMin_ = 0;
     /// ys_calibration.ini 的 dist_max（米）：有效点的距离上限，不要再硬编码 200。
-    float distMax_ = 200.0f;
+    float distMax_ = 500.0f;
     float thetaMin_ = -10.0f;
     float thetaMax_ = 10.0f;
     float thetaTilt_ = -2.5f;
