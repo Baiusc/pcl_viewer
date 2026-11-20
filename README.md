@@ -119,6 +119,19 @@ cmake --build build-msys2 --target cloud_viewer -j 8
   `C:\Program Files\...` 会让 `export` 直接失败、`tail` 等命令丢失；用
   `bash --noprofile --norc <脚本>` 更稳。
 
+#### 打包便携版（拷到另一台 Windows 电脑）
+
+```bat
+powershell -ExecutionPolicy Bypass -File tools\pack-release.ps1
+```
+
+输出 `dist-release\`（暂存目录）和同级的 `cloud_viewer_rel.zip`（约 40 MB）。
+包内是 exe + 全部依赖 DLL + `calib\` + `plink.exe` + 启动器，目标机器不需要装
+PCL / VTK / VS / MSYS2。脚本会做依赖闭环自检：只要有一个非系统 DLL 不在包内就直接失败，
+避免拷到别的机器才发现在缺库。
+
+启动器与说明文案在 `deploy/`，改文案改那里，打包脚本会一并带上。
+
 ## 运行
 
 ### 默认启动（推荐）

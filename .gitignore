@@ -99,3 +99,5 @@ build-rel/
 build-msys2/
 .build-tmp/
 dist-msys2/
+# 发行打包暂存目录
+dist-release/

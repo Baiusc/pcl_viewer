@@ -1,0 +1,45 @@
+cloud_viewer Lite — Windows 便携版运行说明
+==========================================
+
+一、这个包是什么
+  纯运行时目录：exe + 全部依赖 DLL + 标定表 + plink。不需要装 PCL / VTK / VS / MSYS2。
+  目标系统：Windows 10 / 11 x64。
+
+二、首次使用（3 步）
+  1) 解压到本机磁盘，例如 D:\cloud_viewer_rel
+     ※ 不要直接放在网络盘或 VMware 共享盘里运行，读写慢且可能没有写权限。
+  2) 双击  首次使用_初始化.bat
+     作用：写入雷达 SSH 密码配置、尝试放行 UDP 55000/50007；
+     会弹 UAC 请点是（不加防火墙规则也能用，只是首次启动可能弹一次放行提示）。
+  3) 双击  启动cloud_viewer.bat
+
+三、连接雷达
+  - 电脑网卡与雷达要在同一网段（雷达默认 10.42.0.218，本机同网段且 24 位掩码）。
+  - 点  Search Device  →  列表里出现 "CS96 Beta <IP>"  →  点该条目连接。
+  - 连接成功依次会看到：
+        Beta Target OK      （核对 center_ip 与本机路由地址，需 SSH）
+        Calib OK            （加载 calib\cs96beta_calibration.csv）
+        Radar Live OK       （收到首帧，显示点数 76800）
+  - 雷达默认账户：root / 111（已写入 %USERPROFILE%\.config\cloud_viewer\beta_ssh.conf）
+
+四、常见问题
+  - 搜索不到设备
+      · 确认雷达已上电、网线直连或同交换机、本机 IP 同网段；
+      · 关掉 VPN / 虚拟网卡（VMware 的 VMnet 有时会抢默认路由）；
+      · 首次运行没点"允许访问"，可手动放行：以管理员运行
+        netsh advfirewall firewall add rule name="cloud_viewer UDP" dir=in action=allow protocol=UDP localport=55000,50007
+  - 能连上但没有点云
+      · 程序需要连一次设备才会把推流地址下发到雷达（Beta Target 那一步）；
+        若那步报 "未配置 Beta SSH 密码"，说明密码配置没生效，重跑 首次使用_初始化.bat。
+  - 想换标定表
+      · 直接把聚合表放到 calib\cs96beta_calibration.csv 覆盖即可；
+      · 或用界面上的 Update Calib 选一个标定包目录，程序会重算并回写 calib\。
+
+五、目录内容
+  cloud_viewer.exe          主程序
+  *.dll                     依赖（VTK / PCL / freetype / MinGW 运行时等，共 85 个）
+  calib\                    标定表
+  plink.exe                 SSH 客户端（Windows 自带 OpenSSH 无法非交互传密码）
+  cloud_viewer.ini          上次连接的设备、标定开关等本地配置
+  启动cloud_viewer.bat       带 UTF-8 控制台的启动器
+  首次使用_初始化.bat        一次性配置脚本
