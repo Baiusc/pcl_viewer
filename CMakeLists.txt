@@ -135,10 +135,11 @@ add_library(cv_platform STATIC
     src/cloud_viewer/platform/AppSettings.cpp
     src/cloud_viewer/platform/FileDialog.cpp
     src/cloud_viewer/platform/NetworkSetup.cpp
+    src/cloud_viewer/platform/ProcessRunner.cpp
     src/cloud_viewer/platform/RadarLauncher.cpp
 )
 target_include_directories(cv_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(cv_platform PUBLIC cv_core)
+target_link_libraries(cv_platform PUBLIC cv_core Threads::Threads)
 if(WIN32)
     target_link_libraries(cv_platform PUBLIC comdlg32 shell32 ole32)
 endif()

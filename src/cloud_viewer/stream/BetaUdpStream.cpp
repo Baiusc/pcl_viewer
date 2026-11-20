@@ -12,7 +12,13 @@
 #include <thread>
 #include <vector>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -30,6 +36,48 @@ namespace cloud_viewer
 {
 namespace
 {
+
+// ---- 平台相关的 UDP 细节 --------------------------------------------------
+// Linux 与 Winsock 的 socket 句柄类型、关闭函数、超时参数和 recvfrom 返回类型
+// 都不同；下面这层别名让接收循环本身只写一份。
+#ifdef _WIN32
+using cv_socket = SOCKET;
+using cv_socklen = int;
+using cv_recvlen = int;
+constexpr cv_socket kInvalidSocket = INVALID_SOCKET;
+
+inline void ensureWinsockReady()
+{
+    static std::once_flag initialized;
+    std::call_once(initialized, []() {
+        WSADATA data{};
+        ::WSAStartup(MAKEWORD(2, 2), &data);
+    });
+}
+inline int closeSocket(cv_socket sock) { return ::closesocket(sock); }
+inline void setReceiveTimeout(cv_socket sock, int milliseconds)
+{
+    // Winsock 的 SO_RCVTIMEO 只认 DWORD 毫秒，不是 timeval。
+    const DWORD value = static_cast<DWORD>(milliseconds);
+    ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+                 reinterpret_cast<const char *>(&value), sizeof(value));
+}
+#else
+using cv_socket = int;
+using cv_socklen = socklen_t;
+using cv_recvlen = ssize_t;
+constexpr cv_socket kInvalidSocket = -1;
+
+inline void ensureWinsockReady() {}
+inline int closeSocket(cv_socket sock) { return ::close(sock); }
+inline void setReceiveTimeout(cv_socket sock, int milliseconds)
+{
+    timeval timeout{};
+    timeout.tv_sec = milliseconds / 1000;
+    timeout.tv_usec = (milliseconds % 1000) * 1000;
+    ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+}
+#endif
 
 constexpr int kLines = 96;
 constexpr int kSlots = 800;
@@ -617,9 +665,9 @@ struct BetaUdpStream::Impl
 
     void loop()
     {
-#ifndef _WIN32
-        const int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
-        if (sock < 0)
+        ensureWinsockReady();
+        const cv_socket sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+        if (sock == kInvalidSocket)
         {
             std::lock_guard<std::mutex> lock(mutex);
             active = false;
@@ -627,33 +675,33 @@ struct BetaUdpStream::Impl
         }
 
         int reuse = 1;
-        ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+        ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
+                     reinterpret_cast<const char *>(&reuse), sizeof(reuse));
 
         // 设备以约 7800 包/秒推流，默认接收缓冲会大量丢包。
         int rcvbuf = 8 * 1024 * 1024;
-        ::setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+        ::setsockopt(sock, SOL_SOCKET, SO_RCVBUF,
+                     reinterpret_cast<const char *>(&rcvbuf), sizeof(rcvbuf));
 
-        timeval timeout{};
-        timeout.tv_sec = 0;
-        timeout.tv_usec = 200000;
-        ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        setReceiveTimeout(sock, 200);
 
         sockaddr_in address{};
         address.sin_family = AF_INET;
         address.sin_addr.s_addr = htonl(INADDR_ANY);
         address.sin_port = htons(config.localPort);
-        if (::bind(sock, reinterpret_cast<sockaddr *>(&address), sizeof(address)) < 0)
+        if (::bind(sock, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0)
         {
-            ::close(sock);
+            closeSocket(sock);
             std::lock_guard<std::mutex> lock(mutex);
             active = false;
             return;
         }
 
         in_addr expectedSource{};
-        if (inet_pton(AF_INET, config.radarIp.c_str(), &expectedSource) != 1)
+        expectedSource.s_addr = ::inet_addr(config.radarIp.c_str());
+        if (expectedSource.s_addr == INADDR_NONE)
         {
-            ::close(sock);
+            closeSocket(sock);
             std::lock_guard<std::mutex> lock(mutex);
             active = false;
             return;
@@ -723,9 +771,17 @@ struct BetaUdpStream::Impl
             }
 
             sockaddr_in from{};
-            socklen_t fromLength = sizeof(from);
-            const ssize_t received = ::recvfrom(sock, buffer.data(), buffer.size(), 0,
-                                                reinterpret_cast<sockaddr *>(&from), &fromLength);
+            cv_socklen fromLength = sizeof(from);
+#ifdef _WIN32
+            const cv_recvlen received = ::recvfrom(
+                sock, reinterpret_cast<char *>(buffer.data()),
+                static_cast<int>(buffer.size()), 0,
+                reinterpret_cast<sockaddr *>(&from), &fromLength);
+#else
+            const cv_recvlen received = ::recvfrom(
+                sock, buffer.data(), buffer.size(), 0,
+                reinterpret_cast<sockaddr *>(&from), &fromLength);
+#endif
             if (received <= 0)
             {
                 ++timeoutCount;
@@ -829,13 +885,9 @@ struct BetaUdpStream::Impl
             }
         }
 
-        ::close(sock);
+        closeSocket(sock);
         std::lock_guard<std::mutex> lock(mutex);
         active = false;
-#else
-        std::lock_guard<std::mutex> lock(mutex);
-        active = false;
-#endif
     }
 };
 
@@ -851,7 +903,7 @@ BetaUdpStream::~BetaUdpStream()
 bool BetaUdpStream::open(const Config &config, FrameSink sink, std::string &error)
 {
     stop();
-#ifndef _WIN32
+    (void)error;
     {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         impl_->config = config;
@@ -869,12 +921,6 @@ bool BetaUdpStream::open(const Config &config, FrameSink sink, std::string &erro
     }
     impl_->worker = std::thread([this] { impl_->loop(); });
     return true;
-#else
-    (void)config;
-    (void)sink;
-    error = "Windows 暂不支持 CS96 Beta 直连";
-    return false;
-#endif
 }
 
 void BetaUdpStream::stop()

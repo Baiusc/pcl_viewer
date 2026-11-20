@@ -95,3 +95,7 @@ data/
 python/*_round*.py
 lidar_sdk/
 build-rel/
+# Windows/MSYS2 本地构建与运行时部署目录（约 160MB，由 build-win-msys2.sh 重建）
+build-msys2/
+.build-tmp/
+dist-msys2/

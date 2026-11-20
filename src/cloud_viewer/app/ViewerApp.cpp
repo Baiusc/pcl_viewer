@@ -10,11 +10,18 @@
 #include <iostream>
 #include <sstream>
 #include <thread>
+#include <vector>
 
 #ifndef _WIN32
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#else
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #endif
 
 #include <vtkAxesActor.h>
@@ -36,6 +43,7 @@
 #include "cloud_viewer/platform/FileDialog.h"
 #include "cloud_viewer/platform/AppSettings.h"
 #include "cloud_viewer/platform/NetworkSetup.h"
+#include "cloud_viewer/platform/ProcessRunner.h"
 #include "cloud_viewer/platform/RadarLauncher.h"
 
 namespace cloud_viewer
@@ -89,9 +97,29 @@ private:
 vtkStandardNewMacro(SelectionStyle);
 
 // 读取内核到目标雷达的路由源地址；不会发送 UDP 包。
+// Windows 用同样的 connect + getsockname 技巧：UDP connect 不产生任何报文，
+// 只让协议栈选好出口网卡，因此能拿到"朝该雷达发包时会用的本机地址"。
 std::string betaRouteSource(const std::string &ip)
 {
-#ifndef _WIN32
+#ifdef _WIN32
+    WSADATA wsa{};
+    ::WSAStartup(MAKEWORD(2, 2), &wsa);
+    sockaddr_in remote{};
+    remote.sin_family = AF_INET;
+    remote.sin_port = htons(50007);
+    remote.sin_addr.s_addr = ::inet_addr(ip.c_str());
+    if (remote.sin_addr.s_addr == INADDR_NONE) return {};
+    const SOCKET fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd == INVALID_SOCKET) return {};
+    sockaddr_in local{};
+    int size = sizeof(local);
+    const bool ok = ::connect(fd, reinterpret_cast<sockaddr *>(&remote), sizeof(remote)) == 0 &&
+                    ::getsockname(fd, reinterpret_cast<sockaddr *>(&local), &size) == 0;
+    ::closesocket(fd);
+    if (!ok) return {};
+    const char *address = ::inet_ntoa(local.sin_addr);
+    return (address != nullptr) ? std::string(address) : std::string{};
+#else
     sockaddr_in remote{};
     remote.sin_family = AF_INET;
     remote.sin_port = htons(50007);
@@ -106,9 +134,6 @@ std::string betaRouteSource(const std::string &ip)
     char address[INET_ADDRSTRLEN]{};
     if (!ok || !inet_ntop(AF_INET, &local.sin_addr, address, sizeof(address))) return {};
     return address;
-#else
-    (void)ip;
-    return {};
 #endif
 }
 
@@ -513,6 +538,31 @@ ViewerApp::~ViewerApp()
 
 // ---- 设备 SSH：主机密钥（TOFU）与自动恢复 ---------------------------------
 
+/// 用户主目录：Linux 用 HOME，Windows 从 cmd.exe 启动时通常只有 USERPROFILE，
+/// 缺失时会让 known_hosts 与密码文件都定位不到，表现为"未配置 SSH 密码"。
+static std::string userHomeDirectory()
+{
+    const char *home = std::getenv("HOME");
+    if (home != nullptr && home[0] != '\0')
+    {
+        return home;
+    }
+#ifdef _WIN32
+    const char *profile = std::getenv("USERPROFILE");
+    if (profile != nullptr && profile[0] != '\0')
+    {
+        return profile;
+    }
+    const char *drive = std::getenv("HOMEDRIVE");
+    const char *path = std::getenv("HOMEPATH");
+    if (drive != nullptr && path != nullptr)
+    {
+        return std::string(drive) + path;
+    }
+#endif
+    return {};
+}
+
 /// 设备主机密钥文件；环境变量优先，默认 ~/.config/cloud_viewer/beta_known_hosts。
 static std::string betaKnownHostsPath()
 {
@@ -521,10 +571,10 @@ static std::string betaKnownHostsPath()
     {
         return configured;
     }
-    const char *home = std::getenv("HOME");
-    if (home != nullptr && home[0] != '\0')
+    const std::string home = userHomeDirectory();
+    if (!home.empty())
     {
-        return std::string(home) + "/.config/cloud_viewer/beta_known_hosts";
+        return home + "/.config/cloud_viewer/beta_known_hosts";
     }
     return {};
 }
@@ -556,7 +606,10 @@ static ShellOutput runShellCommand(const std::string &command)
 /// 主机密钥与本地记录不一致：通常意味着换了一台雷达，或设备重刷过固件。
 static bool hostKeyMismatch(const std::string &output)
 {
-    return output.find("REMOTE HOST IDENTIFICATION HAS CHANGED") != std::string::npos;
+    // Linux: OpenSSH 的告警；Windows: plink 的 -hostkey 不匹配提示。
+    return output.find("REMOTE HOST IDENTIFICATION HAS CHANGED") != std::string::npos ||
+           output.find("Host key not in manually configured list") != std::string::npos ||
+           output.find("POTENTIAL SECURITY BREACH") != std::string::npos;
 }
 
 /// 只删除该 IP 的旧条目，不影响其它主机；不放开全局校验。
@@ -574,10 +627,14 @@ static bool forgetHostKey(const std::string &ip, const std::string &knownHosts)
 static std::string betaSshFailureReason(const std::string &output)
 {
     if (hostKeyMismatch(output)) return "设备 SSH 主机密钥与本地记录冲突，自动更新信任失败";
-    if (output.find("Permission denied") != std::string::npos) return "SSH 密码错误";
+    if (output.find("Permission denied") != std::string::npos ||
+        output.find("Access denied") != std::string::npos ||
+        output.find("password was not accepted") != std::string::npos)
+        return "SSH 密码错误";
     if (output.find("Connection refused") != std::string::npos)
         return "设备 22 端口未开放（sshd 未运行）";
     if (output.find("Connection timed out") != std::string::npos ||
+        output.find("Network error") != std::string::npos ||
         output.find("No route to host") != std::string::npos)
         return "无法到达设备，检查网线与设备 IP";
     if (output.find("UNSUPPORTED_MODE=") != std::string::npos) return "设备 work_mode 不被支持";
@@ -623,11 +680,180 @@ static bool ensureKnownHostsReady(const std::string &knownHosts, std::string &me
     return true;
 }
 
+#ifdef _WIN32
+// ---- Windows：用 plink 完成非交互密码认证 --------------------------------
+// Windows 自带 OpenSSH 没有 sshpass 等价物，密码只能从控制台读，
+// 无法在 GUI/管道场景自动输入；plink（PuTTY）的 -pw + -hostkey 可以直接用。
+
+/// plink 可执行文件：环境变量优先，其次 exe 同目录，最后交给 PATH。
+static std::string plinkExecutable()
+{
+    if (const char *configured = std::getenv("CV_BETA_PLINK"))
+    {
+        if (configured[0] != '\0')
+        {
+            return configured;
+        }
+    }
+    std::error_code ec;
+    const auto exeDir = executableDirectory();
+    for (const char *name : {"plink.exe", "plink64.exe"})
+    {
+        const auto candidate = exeDir / name;
+        if (std::filesystem::exists(candidate, ec))
+        {
+            return candidate.string();
+        }
+    }
+    return "plink.exe";
+}
+
+/// 指纹锁定文件与 known_hosts 同目录；plink 的指纹不是 OpenSSH 格式，
+/// 单独存一个文件，避免把两种格式混写进同一个 known_hosts。
+static std::string plinkPinFile(const std::string &knownHosts)
+{
+    return knownHosts.empty() ? std::string{} : knownHosts + ".plink";
+}
+
+static std::string readPinnedFingerprint(const std::string &file, const std::string &ip)
+{
+    if (file.empty())
+    {
+        return {};
+    }
+    std::ifstream input(file);
+    std::string line;
+    while (std::getline(input, line))
+    {
+        const auto space = line.find(' ');
+        if (space == std::string::npos)
+        {
+            continue;
+        }
+        if (line.substr(0, space) == ip)
+        {
+            return line.substr(space + 1);
+        }
+    }
+    return {};
+}
+
+static void writePinnedFingerprint(const std::string &file, const std::string &ip,
+                                   const std::string &fingerprint)
+{
+    if (file.empty() || fingerprint.empty())
+    {
+        return;
+    }
+    std::vector<std::string> lines;
+    {
+        std::ifstream input(file);
+        std::string line;
+        while (std::getline(input, line))
+        {
+            const auto space = line.find(' ');
+            if (space == std::string::npos || line.substr(0, space) != ip)
+            {
+                lines.push_back(line);
+            }
+        }
+    }
+    lines.push_back(ip + " " + fingerprint);
+    std::error_code ec;
+    const auto directory = std::filesystem::path(file).parent_path();
+    if (!directory.empty())
+    {
+        std::filesystem::create_directories(directory, ec);
+    }
+    std::ofstream output(file, std::ios::trunc);
+    for (const std::string &line : lines)
+    {
+        output << line << "\n";
+    }
+}
+
+static std::string extractSha256Fingerprint(const std::string &text)
+{
+    const auto position = text.find("SHA256:");
+    if (position == std::string::npos)
+    {
+        return {};
+    }
+    std::size_t end = position;
+    while (end < text.size() &&
+           !std::isspace(static_cast<unsigned char>(text[end])))
+    {
+        ++end;
+    }
+    return text.substr(position, end - position);
+}
+
+/// 首次连接时读取设备主机密钥指纹：batch 模式下 plink 会先回显指纹再中止。
+static std::string fetchHostKeyFingerprint(const std::string &plink, const std::string &ip)
+{
+    const ProcessOutput probe = runProcessWithInput(
+        plink, {"-ssh", "-batch", "-P", "22", "-l", "root", ip, "true"}, "", 20000);
+    return extractSha256Fingerprint(probe.text);
+}
+#endif
+
 /// 在设备上执行脚本；主机密钥变更时更新信任并重试一次（新密钥仍会写回文件）。
 static bool runBetaSsh(const std::string &ip, const std::string &password,
                        const std::string &knownHosts, const std::string &script,
                        const std::string &remoteArgs, std::string &output)
 {
+#ifdef _WIN32
+    if (password.empty())
+    {
+        output = "未配置 Beta SSH 密码";
+        return false;
+    }
+    const std::string plink = plinkExecutable();
+    const std::string pinFile = plinkPinFile(knownHosts);
+    std::string fingerprint = readPinnedFingerprint(pinFile, ip);
+    if (fingerprint.empty())
+    {
+        fingerprint = fetchHostKeyFingerprint(plink, ip);
+        if (fingerprint.empty())
+        {
+            output = "无法获取设备主机密钥指纹：请确认设备 22 端口可达，且 plink.exe 位于程序目录或 PATH";
+            return false;
+        }
+        // 首次见到该设备时记录指纹（TOFU）；之后的变更会被 plink 拒绝。
+        writePinnedFingerprint(pinFile, ip, fingerprint);
+    }
+
+    auto invoke = [&](const std::string &hostKey)
+    {
+        const std::vector<std::string> args = {"-ssh", "-batch", "-P", "22", "-l", "root",
+                                               "-pw", password, "-hostkey", hostKey, ip,
+                                               "sh -s" + remoteArgs};
+        return runProcessWithInput(plink, args, script, 40000);
+    };
+
+    ProcessOutput run = invoke(fingerprint);
+    bool hostKeyChanged = false;
+    if (hostKeyMismatch(run.text))
+    {
+        const std::string refreshed = fetchHostKeyFingerprint(plink, ip);
+        if (!refreshed.empty())
+        {
+            writePinnedFingerprint(pinFile, ip, refreshed);
+            run = invoke(refreshed);
+            hostKeyChanged = true;
+        }
+    }
+    output = run.text;
+    if (hostKeyChanged)
+    {
+        output += "\n[HOST-KEY] 设备主机密钥已变更（换了雷达或设备重刷固件），已更新信任并自动重试";
+    }
+    if (run.timedOut)
+    {
+        output += "\nSSH 执行超时（40 秒）";
+    }
+    return run.exitCode == 0;
+#else
     auto build = [&](const char *policy)
     {
         return "printf '%s' " + shellQuote(script) + " | SSHPASS=" + shellQuote(password) +
@@ -654,6 +880,7 @@ static bool runBetaSsh(const std::string &ip, const std::string &password,
         output += "\n[HOST-KEY] 设备主机密钥已变更（换了雷达或设备重刷固件），已更新信任并自动重试";
     }
     return run.rc == 0;
+#endif
 }
 
 /// 极简 HTTP POST（不依赖 curl），用于调用设备自带 CGI。
@@ -1796,12 +2023,13 @@ std::string ViewerApp::betaSshPassword()
     }
 
     const char *home = std::getenv("HOME");
-    if (home == nullptr || home[0] == '\0')
+    if ((home == nullptr || home[0] == '\0') && userHomeDirectory().empty())
     {
         return {};
     }
-
-    std::ifstream input(std::string(home) + "/.config/cloud_viewer/beta_ssh.conf");
+    const std::string configPath =
+        userHomeDirectory() + "/.config/cloud_viewer/beta_ssh.conf";
+    std::ifstream input(configPath);
     std::string line;
     while (std::getline(input, line))
     {

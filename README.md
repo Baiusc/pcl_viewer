@@ -89,6 +89,36 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64 ^
 cmake --build build --config Release
 ```
 
+#### MSYS2 / MinGW64（当前验证路径，Windows 11 + PCL 1.14 + VTK 9.6）
+
+团队 VM 里的工具链是打包好的 MSYS2，自带 MinGW64 的 PCL / VTK / Eigen，无需另装
+Boost，配置会自动落到 `CLOUD_VIEWER_PCL_MODE=auto` 的「手动 PCL」分支。
+
+```bat
+REM 一次配置 + 编译（工具链在 C:\Repos_Win11_C\Toolchain\msys64）
+C:\Repos_Win11_C\Toolchain\msys64\usr\bin\bash.exe --noprofile --norc build-win-msys2.sh all
+```
+
+脚本做的事就是固定三件事，手工等价命令如下：
+
+```bat
+cmake -S . -B build-msys2 -G Ninja ^
+  -DCMAKE_BUILD_TYPE=Release ^
+  -DCMAKE_C_COMPILER="<MSYS2>/mingw64/bin/gcc.exe" ^
+  -DCMAKE_CXX_COMPILER="<MSYS2>/mingw64/bin/g++.exe" ^
+  -DVTK_DIR="<MSYS2>/mingw64/lib/cmake/vtk" ^
+  -DCLOUD_VIEWER_BUILD_TESTS=OFF
+cmake --build build-msys2 --target cloud_viewer -j 8
+```
+
+注意两点（都是踩过的坑）：
+
+- **工具链必须放在本地盘**。放在 VMware 共享盘（hgfs）时单文件读取约 110 ms，
+  一个编译单元要打开上千个头文件，全量编译会从约 2 分钟涨到 40 分钟以上。
+- **不要用 `bash -lc`**。登录 shell 会重新解析 Windows 的 `PATH`，含空格的
+  `C:\Program Files\...` 会让 `export` 直接失败、`tail` 等命令丢失；用
+  `bash --noprofile --norc <脚本>` 更稳。
+
 ## 运行
 
 ### 默认启动（推荐）

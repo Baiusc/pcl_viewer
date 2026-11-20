@@ -49,7 +49,15 @@ else()
 
     # 手动模式：按候选根目录探测 include/pcl-* 与 lib 位置（覆盖 MSYS2 / Linux / Windows 安装包）。
     if(WIN32)
-        set(_cv_pcl_roots "$ENV{PCL_ROOT}" "C:/Program Files/PCL 1.14.1")
+        # 从 C/CXX 编译器位置反推 MinGW 前缀（形如 <prefix>/bin/g++.exe），
+        # 这样工具链放在共享盘、C 盘或任意目录都能定位到同前缀下的 PCL/Eigen，
+        # 不再依赖 MSYS2 挂载点 /mingw64（原生 cmake.exe 会把它解析成 C:/mingw64）。
+        get_filename_component(_cv_cc_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        get_filename_component(_cv_mingw_prefix "${_cv_cc_dir}/.." ABSOLUTE)
+        set(_cv_pcl_roots
+            "$ENV{PCL_ROOT}"
+            "${_cv_mingw_prefix}"
+            "C:/Program Files/PCL 1.14.1")
     else()
         set(_cv_pcl_roots "$ENV{PCL_ROOT}" "/usr/local" "/usr")
     endif()
@@ -66,12 +74,12 @@ else()
         endif()
     endforeach()
 
-    # MSYS2 常见位置（PCL_ROOT 未设置时兜底）。
+    # MSYS2 常见位置（PCL_ROOT 未设置时兜底）：只在编译器前缀没命中时才用到。
     if(NOT _cv_pcl_include AND WIN32)
-        file(GLOB _cv_pcl_dirs "/mingw64/include/pcl-1.1[0-9]")
+        file(GLOB _cv_pcl_dirs "${_cv_mingw_prefix}/include/pcl-1.1[0-9]")
         if(_cv_pcl_dirs)
             list(GET _cv_pcl_dirs 0 _cv_pcl_include)
-            set(_cv_pcl_libdir "/mingw64/lib")
+            set(_cv_pcl_libdir "${_cv_mingw_prefix}/lib")
         endif()
     endif()
 
