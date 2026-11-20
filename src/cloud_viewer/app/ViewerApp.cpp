@@ -2390,6 +2390,30 @@ void ViewerApp::loadBetaCalibration(const std::filesystem::path &preselected)
     renderer_.render();
 }
 
+/// 目录是否可写：hgfs（VMware 共享盘）映射到 Windows 时默认不带写权限，
+/// 只靠 std::filesystem::status 的 perms 位判断并不可靠（noacl），
+/// 所以直接落一个探针文件试一次，失败即认为不可写。
+static bool directoryWritable(const std::filesystem::path &directory)
+{
+    std::error_code ec;
+    std::filesystem::create_directories(directory, ec);
+    const auto probe = directory / ".cv_write_probe";
+    {
+        std::ofstream out(probe, std::ios::binary | std::ios::trunc);
+        if (!out)
+        {
+            return false;
+        }
+        out << 'x';
+        if (!out.good())
+        {
+            return false;
+        }
+    }
+    std::filesystem::remove(probe, ec);
+    return true;
+}
+
 void ViewerApp::updateCalibTableFromDirectory()
 {
     if (!FileDialogService::available())
@@ -2430,8 +2454,17 @@ void ViewerApp::updateCalibTableFromDirectory()
 
     // 写回"用户选的那个目录"：Update Calib 的语义就是"用这个目录里的散表重算聚合表"。
     // 以前硬编码成 exe/calib，导致在 data/param 里更新永远看不到变化。
-    const auto primaryTarget = directory / "cs96beta_calibration.csv";
+    // 但标定包常放在共享盘/只读目录（hgfs 映射默认不可写），此时不要直接失败——
+    // 退化为只写运行时标定目录，用户至少这次能生效。
     const auto runtimeTarget = executableDirectory() / "calib" / "cs96beta_calibration.csv";
+    auto primaryTarget = directory / "cs96beta_calibration.csv";
+    if (!directoryWritable(directory))
+    {
+        logUi("Update Calib",
+              "所选目录不可写（" + directory.string() + "），已降级写入运行时标定目录 " +
+                  runtimeTarget.string());
+        primaryTarget = runtimeTarget;
+    }
     std::filesystem::create_directories(primaryTarget.parent_path(), ec);
 
     // 以所选目录里现有的聚合表为基底：目录包里没有的部分（反射率、角度曲线）继续沿用，
