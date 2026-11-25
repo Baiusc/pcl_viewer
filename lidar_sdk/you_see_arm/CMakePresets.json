@@ -1,0 +1,280 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "alpha-histogram",
+      "displayName": "CS96-alpha / histogram / 无算法 / Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/alpha-histogram",
+      "cacheVariables": {
+        "YS_REFLECTIVITY": "OFF",
+        "YS_SPOT_SLOPE": "OFF",
+        "CMAKE_BUILD_TYPE": "Release",
+        "MODEL": "CS96-alpha",
+        "DATA_MODE": "histogram"
+      }
+    },
+    {
+      "name": "alpha-histogram-debug",
+      "displayName": "CS96-alpha / histogram / 无算法 / Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/alpha-histogram-debug",
+      "cacheVariables": {
+        "YS_REFLECTIVITY": "OFF",
+        "YS_SPOT_SLOPE": "OFF",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MODEL": "CS96-alpha",
+        "DATA_MODE": "histogram"
+      }
+    },
+    {
+      "name": "alpha-pointcloud",
+      "displayName": "CS96-alpha / pointcloud / 无算法 / Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/alpha-pointcloud",
+      "cacheVariables": {
+        "YS_REFLECTIVITY": "OFF",
+        "YS_SPOT_SLOPE": "OFF",
+        "CMAKE_BUILD_TYPE": "Release",
+        "MODEL": "CS96-alpha",
+        "DATA_MODE": "pointcloud"
+      }
+    },
+    {
+      "name": "alpha-pointcloud-debug",
+      "displayName": "CS96-alpha / pointcloud / 无算法 / Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/alpha-pointcloud-debug",
+      "cacheVariables": {
+        "YS_REFLECTIVITY": "OFF",
+        "YS_SPOT_SLOPE": "OFF",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MODEL": "CS96-alpha",
+        "DATA_MODE": "pointcloud"
+      }
+    },
+    {
+      "name": "beta",
+      "displayName": "CS96-beta / runtime / 完整功能 / Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/beta",
+      "cacheVariables": {
+        "YS_REFLECTIVITY": "ON",
+        "YS_SPOT_SLOPE": "ON",
+        "CMAKE_BUILD_TYPE": "Release",
+        "MODEL": "CS96-beta"
+      }
+    },
+    {
+      "name": "beta-debug",
+      "displayName": "CS96-beta / runtime / 完整功能 / Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/beta-debug",
+      "cacheVariables": {
+        "YS_REFLECTIVITY": "ON",
+        "YS_SPOT_SLOPE": "ON",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MODEL": "CS96-beta"
+      }
+    },
+    {
+      "name": "gamma",
+      "displayName": "CS96-gamma / runtime / 完整功能 / Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/gamma",
+      "cacheVariables": {
+        "YS_REFLECTIVITY": "ON",
+        "YS_SPOT_SLOPE": "OFF",
+        "CMAKE_BUILD_TYPE": "Release",
+        "MODEL": "CS96-gamma"
+      }
+    },
+    {
+      "name": "gamma-debug",
+      "displayName": "CS96-gamma / runtime / 完整功能 / Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/gamma-debug",
+      "cacheVariables": {
+        "YS_REFLECTIVITY": "ON",
+        "YS_SPOT_SLOPE": "OFF",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MODEL": "CS96-gamma"
+      }
+    },
+    {
+      "name": "fl6031-histogram",
+      "displayName": "MF150-fl6031 / histogram / 无算法 / Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/fl6031-histogram",
+      "cacheVariables": {
+        "YS_REFLECTIVITY": "OFF",
+        "YS_SPOT_SLOPE": "OFF",
+        "CMAKE_BUILD_TYPE": "Release",
+        "MODEL": "MF150-fl6031",
+        "DATA_MODE": "histogram"
+      }
+    },
+    {
+      "name": "fl6031-histogram-debug",
+      "displayName": "MF150-fl6031 / histogram / 无算法 / Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/fl6031-histogram-debug",
+      "cacheVariables": {
+        "YS_REFLECTIVITY": "OFF",
+        "YS_SPOT_SLOPE": "OFF",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MODEL": "MF150-fl6031",
+        "DATA_MODE": "histogram"
+      }
+    },
+    {
+      "name": "fl6031-pointcloud",
+      "displayName": "MF150-fl6031 / pointcloud / 无算法 / Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/fl6031-pointcloud",
+      "cacheVariables": {
+        "YS_REFLECTIVITY": "OFF",
+        "YS_SPOT_SLOPE": "OFF",
+        "CMAKE_BUILD_TYPE": "Release",
+        "MODEL": "MF150-fl6031",
+        "DATA_MODE": "pointcloud"
+      }
+    },
+    {
+      "name": "fl6031-pointcloud-debug",
+      "displayName": "MF150-fl6031 / pointcloud / 无算法 / Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/fl6031-pointcloud-debug",
+      "cacheVariables": {
+        "YS_REFLECTIVITY": "OFF",
+        "YS_SPOT_SLOPE": "OFF",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MODEL": "MF150-fl6031",
+        "DATA_MODE": "pointcloud"
+      }
+    },
+    {
+      "name": "fl6532-histogram",
+      "displayName": "MF150-fl6532 / histogram / 无算法 / Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/fl6532-histogram",
+      "cacheVariables": {
+        "YS_REFLECTIVITY": "OFF",
+        "YS_SPOT_SLOPE": "OFF",
+        "CMAKE_BUILD_TYPE": "Release",
+        "MODEL": "MF150-fl6532",
+        "DATA_MODE": "histogram"
+      }
+    },
+    {
+      "name": "fl6532-histogram-debug",
+      "displayName": "MF150-fl6532 / histogram / 无算法 / Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/fl6532-histogram-debug",
+      "cacheVariables": {
+        "YS_REFLECTIVITY": "OFF",
+        "YS_SPOT_SLOPE": "OFF",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MODEL": "MF150-fl6532",
+        "DATA_MODE": "histogram"
+      }
+    },
+    {
+      "name": "fl6532-pointcloud",
+      "displayName": "MF150-fl6532 / pointcloud / 无算法 / Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/fl6532-pointcloud",
+      "cacheVariables": {
+        "YS_REFLECTIVITY": "OFF",
+        "YS_SPOT_SLOPE": "OFF",
+        "CMAKE_BUILD_TYPE": "Release",
+        "MODEL": "MF150-fl6532",
+        "DATA_MODE": "pointcloud"
+      }
+    },
+    {
+      "name": "fl6532-pointcloud-debug",
+      "displayName": "MF150-fl6532 / pointcloud / 无算法 / Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/fl6532-pointcloud-debug",
+      "cacheVariables": {
+        "YS_REFLECTIVITY": "OFF",
+        "YS_SPOT_SLOPE": "OFF",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MODEL": "MF150-fl6532",
+        "DATA_MODE": "pointcloud"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "alpha-histogram",
+      "configurePreset": "alpha-histogram"
+    },
+    {
+      "name": "alpha-histogram-debug",
+      "configurePreset": "alpha-histogram-debug"
+    },
+    {
+      "name": "alpha-pointcloud",
+      "configurePreset": "alpha-pointcloud"
+    },
+    {
+      "name": "alpha-pointcloud-debug",
+      "configurePreset": "alpha-pointcloud-debug"
+    },
+    {
+      "name": "beta",
+      "configurePreset": "beta"
+    },
+    {
+      "name": "beta-debug",
+      "configurePreset": "beta-debug"
+    },
+    {
+      "name": "gamma",
+      "configurePreset": "gamma"
+    },
+    {
+      "name": "gamma-debug",
+      "configurePreset": "gamma-debug"
+    },
+    {
+      "name": "fl6031-histogram",
+      "configurePreset": "fl6031-histogram"
+    },
+    {
+      "name": "fl6031-histogram-debug",
+      "configurePreset": "fl6031-histogram-debug"
+    },
+    {
+      "name": "fl6031-pointcloud",
+      "configurePreset": "fl6031-pointcloud"
+    },
+    {
+      "name": "fl6031-pointcloud-debug",
+      "configurePreset": "fl6031-pointcloud-debug"
+    },
+    {
+      "name": "fl6532-histogram",
+      "configurePreset": "fl6532-histogram"
+    },
+    {
+      "name": "fl6532-histogram-debug",
+      "configurePreset": "fl6532-histogram-debug"
+    },
+    {
+      "name": "fl6532-pointcloud",
+      "configurePreset": "fl6532-pointcloud"
+    },
+    {
+      "name": "fl6532-pointcloud-debug",
+      "configurePreset": "fl6532-pointcloud-debug"
+    }
+  ]
+}

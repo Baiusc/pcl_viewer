@@ -1,0 +1,1737 @@
+{
+  "fixture_version": 1,
+  "contract": "lidar-network-v1",
+  "description": "全部为构造数据，不是实机结果。完整网络快照的 simulation=true 用于标明模拟；发现数据也仅为构造示例。",
+  "usage": "requests 的值是 HTTP 请求体；responses 包含状态和响应体；scenarios 按 response_keys 顺序引用。client_context 与 expected 仅为测试说明，不能发给设备。客户端时序、网卡绑定及报文截断仍需独立测试。",
+  "endpoints": {
+    "business_path": "/cgi-bin/lidar_network.cgi",
+    "diagnostic_path": "/cgi-bin/lidar_network_status.cgi"
+  },
+  "requests": {
+    "auto": {
+      "op": "network_set",
+      "config": {
+        "mode": "auto"
+      }
+    },
+    "pool": {
+      "op": "network_set",
+      "config": {
+        "mode": "pool",
+        "start": "10.42.0.100",
+        "end": "10.42.0.150",
+        "netmask": "255.255.255.0",
+        "gateway": "10.42.0.1"
+      }
+    },
+    "static": {
+      "op": "network_set",
+      "config": {
+        "mode": "static",
+        "address": "10.42.0.120",
+        "netmask": "255.255.255.0",
+        "gateway": ""
+      }
+    },
+    "confirm": {
+      "op": "network_confirm",
+      "operation_id": "11111111111111111111111111111111"
+    },
+    "reset": {
+      "op": "network_reset"
+    }
+  },
+  "discovery": {
+    "udp": {
+      "description": "按本机接收接口记录上下文；body 不包含 epoch、pending 或 operation_id",
+      "destination_address": "255.255.255.255",
+      "destination_port": 5354,
+      "body": {
+        "schema_version": 1,
+        "protocol": "lidar-network",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "mac": "28:b5:e8:e2:60:19",
+        "model": "CS96-beta",
+        "address": "10.42.0.120",
+        "source": "pool",
+        "phase": "READY",
+        "ready": true,
+        "recovery": false,
+        "generation": 7,
+        "service": "http",
+        "path": "/cgi-bin/lidar_network.cgi",
+        "port": 80
+      }
+    },
+    "mdns": {
+      "description": "解析结果示意，实际实例名与 SRV 名称可能经冲突改名；不是需要客户端直接发出的 JSON 报文",
+      "service_type": "_lidar._tcp.local.",
+      "instance": "lidar-CS96000B0126020001._lidar._tcp.local.",
+      "srv": {
+        "target": "lidar-CS96000B0126020001.local.",
+        "port": 80
+      },
+      "ipv4": [
+        "10.42.0.120"
+      ],
+      "txt": {
+        "proto": "1",
+        "identity": "CS96000B0126020001",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "path": "/cgi-bin/lidar_network.cgi",
+        "modes": "auto,static,pool"
+      }
+    }
+  },
+  "responses": {
+    "idle_auto": {
+      "description": "构造的完整网络快照",
+      "http_status": 200,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 200,
+        "message": "网络状态",
+        "simulation": true,
+        "ready": true,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "READY",
+        "transaction_phase": "IDLE",
+        "pending": false,
+        "legacy": false,
+        "operation_id": "",
+        "operation_code": 200,
+        "error": "",
+        "interface": "eth0",
+        "address": "169.254.27.54",
+        "netmask": "255.255.0.0",
+        "gateway": "",
+        "candidate_address": "169.254.27.54",
+        "source": "linklocal",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "",
+        "attempt": 0,
+        "generation": 4,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 0,
+        "confirmed_config": {
+          "mode": "auto"
+        },
+        "desired_config": {
+          "mode": "auto"
+        }
+      }
+    },
+    "pool_accepted": {
+      "description": "构造的完整网络快照",
+      "http_status": 202,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 202,
+        "message": "网络设置已受理，探测和应用结果请查询任务状态",
+        "simulation": true,
+        "ready": false,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "PROBING",
+        "transaction_phase": "PROBING",
+        "pending": true,
+        "legacy": false,
+        "operation_id": "11111111111111111111111111111111",
+        "operation_code": 202,
+        "error": "",
+        "interface": "eth0",
+        "address": "169.254.27.54",
+        "netmask": "255.255.0.0",
+        "gateway": "",
+        "candidate_address": "10.42.0.105",
+        "source": "linklocal",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "",
+        "attempt": 0,
+        "generation": 5,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 0,
+        "confirmed_config": {
+          "mode": "auto"
+        },
+        "desired_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        }
+      }
+    },
+    "pool_wait_confirm": {
+      "description": "构造的完整网络快照",
+      "http_status": 200,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 200,
+        "message": "网络状态",
+        "simulation": true,
+        "ready": true,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "READY",
+        "transaction_phase": "WAIT_CONFIRM",
+        "pending": true,
+        "legacy": false,
+        "operation_id": "11111111111111111111111111111111",
+        "operation_code": 202,
+        "error": "",
+        "interface": "eth0",
+        "address": "10.42.0.120",
+        "netmask": "255.255.255.0",
+        "gateway": "10.42.0.1",
+        "candidate_address": "10.42.0.120",
+        "source": "pool",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "",
+        "attempt": 1,
+        "generation": 7,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 45000,
+        "confirmed_config": {
+          "mode": "auto"
+        },
+        "desired_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        }
+      }
+    },
+    "pool_confirmed": {
+      "description": "构造的完整网络快照",
+      "http_status": 200,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 200,
+        "message": "网络配置已确认并保存",
+        "simulation": true,
+        "ready": true,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "READY",
+        "transaction_phase": "COMMITTED",
+        "pending": false,
+        "legacy": false,
+        "operation_id": "11111111111111111111111111111111",
+        "operation_code": 200,
+        "error": "",
+        "interface": "eth0",
+        "address": "10.42.0.120",
+        "netmask": "255.255.255.0",
+        "gateway": "10.42.0.1",
+        "candidate_address": "10.42.0.120",
+        "source": "pool",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "",
+        "attempt": 1,
+        "generation": 7,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 0,
+        "confirmed_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "desired_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        }
+      }
+    },
+    "pool_confirm_post_ok": {
+      "description": "确认 POST 成功，与随后 GET 的 COMMITTED 状态同形",
+      "http_status": 200,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 200,
+        "message": "网络配置已确认并保存",
+        "simulation": true,
+        "ready": true,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "READY",
+        "transaction_phase": "COMMITTED",
+        "pending": false,
+        "legacy": false,
+        "operation_id": "11111111111111111111111111111111",
+        "operation_code": 200,
+        "error": "",
+        "interface": "eth0",
+        "address": "10.42.0.120",
+        "netmask": "255.255.255.0",
+        "gateway": "10.42.0.1",
+        "candidate_address": "10.42.0.120",
+        "source": "pool",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "",
+        "attempt": 1,
+        "generation": 7,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 0,
+        "confirmed_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "desired_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        }
+      }
+    },
+    "pool_exhausted_old_address_ready": {
+      "description": "构造的完整网络快照",
+      "http_status": 200,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 200,
+        "message": "网络状态",
+        "simulation": true,
+        "ready": true,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "READY",
+        "transaction_phase": "FAILED",
+        "pending": false,
+        "legacy": false,
+        "operation_id": "11111111111111111111111111111111",
+        "operation_code": 409,
+        "error": "指定地址范围已探测完毕，没有可用地址",
+        "interface": "eth0",
+        "address": "169.254.27.54",
+        "netmask": "255.255.0.0",
+        "gateway": "",
+        "candidate_address": "169.254.27.54",
+        "source": "linklocal",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "02:00:00:00:00:88",
+        "attempt": 0,
+        "generation": 9,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 0,
+        "confirmed_config": {
+          "mode": "auto"
+        },
+        "desired_config": {
+          "mode": "auto"
+        }
+      }
+    },
+    "confirm_timeout_old_address_ready": {
+      "description": "构造的完整网络快照",
+      "http_status": 200,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 200,
+        "message": "网络状态",
+        "simulation": true,
+        "ready": true,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "READY",
+        "transaction_phase": "FAILED",
+        "pending": false,
+        "legacy": false,
+        "operation_id": "11111111111111111111111111111111",
+        "operation_code": 408,
+        "error": "新地址未在期限内确认，恢复最后确认配置",
+        "interface": "eth0",
+        "address": "169.254.27.54",
+        "netmask": "255.255.0.0",
+        "gateway": "",
+        "candidate_address": "169.254.27.54",
+        "source": "linklocal",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "02:00:00:00:00:88",
+        "attempt": 0,
+        "generation": 9,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 0,
+        "confirmed_config": {
+          "mode": "auto"
+        },
+        "desired_config": {
+          "mode": "auto"
+        }
+      }
+    },
+    "restart_rolled_back": {
+      "description": "构造的完整网络快照",
+      "http_status": 200,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 200,
+        "message": "网络状态",
+        "simulation": true,
+        "ready": true,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "READY",
+        "transaction_phase": "ROLLED_BACK",
+        "pending": false,
+        "legacy": false,
+        "operation_id": "11111111111111111111111111111111",
+        "operation_code": 409,
+        "error": "上次改址未确认，恢复最后确认配置",
+        "interface": "eth0",
+        "address": "169.254.27.54",
+        "netmask": "255.255.0.0",
+        "gateway": "",
+        "candidate_address": "169.254.27.54",
+        "source": "linklocal",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "",
+        "attempt": 0,
+        "generation": 4,
+        "epoch": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 0,
+        "confirmed_config": {
+          "mode": "auto"
+        },
+        "desired_config": {
+          "mode": "auto"
+        }
+      }
+    },
+    "fault_recovery": {
+      "description": "查询成功，但持久配置无效；配置对象为结构占位，不能当作用户配置",
+      "http_status": 200,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 200,
+        "message": "网络状态",
+        "simulation": true,
+        "ready": false,
+        "recovery": true,
+        "configuration_valid": false,
+        "phase": "FAULT",
+        "transaction_phase": "IDLE",
+        "pending": false,
+        "legacy": false,
+        "operation_id": "",
+        "operation_code": 500,
+        "error": "持久网络配置损坏，保留原文件",
+        "interface": "eth0",
+        "address": "169.254.27.54",
+        "netmask": "255.255.0.0",
+        "gateway": "",
+        "candidate_address": "169.254.27.54",
+        "source": "recovery",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "",
+        "attempt": 0,
+        "generation": 4,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 0,
+        "confirmed_config": {
+          "mode": "auto"
+        },
+        "desired_config": {
+          "mode": "auto"
+        }
+      }
+    },
+    "business_address_recovery": {
+      "description": "构造的完整网络快照",
+      "http_status": 200,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 200,
+        "message": "网络状态",
+        "simulation": true,
+        "ready": false,
+        "recovery": true,
+        "configuration_valid": true,
+        "phase": "READY",
+        "transaction_phase": "IDLE",
+        "pending": false,
+        "legacy": false,
+        "operation_id": "",
+        "operation_code": 200,
+        "error": "保存的固定 IP 冲突，启用管理恢复地址；固定配置未改变",
+        "interface": "eth0",
+        "address": "169.254.27.54",
+        "netmask": "255.255.0.0",
+        "gateway": "",
+        "candidate_address": "169.254.27.54",
+        "source": "recovery",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "",
+        "attempt": 0,
+        "generation": 4,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 0,
+        "confirmed_config": {
+          "mode": "static",
+          "address": "10.42.0.120",
+          "netmask": "255.255.255.0",
+          "gateway": ""
+        },
+        "desired_config": {
+          "mode": "static",
+          "address": "10.42.0.120",
+          "netmask": "255.255.255.0",
+          "gateway": ""
+        }
+      }
+    },
+    "wrong_mac_wait_confirm": {
+      "description": "故意构造重复 SN、相同任务号但不同 MAC，不能认领",
+      "http_status": 200,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 200,
+        "message": "网络状态",
+        "simulation": true,
+        "ready": true,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "READY",
+        "transaction_phase": "WAIT_CONFIRM",
+        "pending": true,
+        "legacy": false,
+        "operation_id": "11111111111111111111111111111111",
+        "operation_code": 202,
+        "error": "",
+        "interface": "eth0",
+        "address": "10.42.0.120",
+        "netmask": "255.255.255.0",
+        "gateway": "10.42.0.1",
+        "candidate_address": "10.42.0.120",
+        "source": "pool",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:20",
+        "conflict_mac": "",
+        "attempt": 1,
+        "generation": 7,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 45000,
+        "confirmed_config": {
+          "mode": "auto"
+        },
+        "desired_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        }
+      }
+    },
+    "external_task_same_config": {
+      "description": "目标配置相同，但任务属于外部上下文",
+      "http_status": 200,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 200,
+        "message": "网络状态",
+        "simulation": true,
+        "ready": true,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "READY",
+        "transaction_phase": "WAIT_CONFIRM",
+        "pending": true,
+        "legacy": false,
+        "operation_id": "22222222222222222222222222222222",
+        "operation_code": 202,
+        "error": "",
+        "interface": "eth0",
+        "address": "10.42.0.120",
+        "netmask": "255.255.255.0",
+        "gateway": "10.42.0.1",
+        "candidate_address": "10.42.0.120",
+        "source": "pool",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "",
+        "attempt": 1,
+        "generation": 7,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 45000,
+        "confirmed_config": {
+          "mode": "auto"
+        },
+        "desired_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        }
+      }
+    },
+    "no_sn": {
+      "description": "构造的完整网络快照",
+      "http_status": 200,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 200,
+        "message": "网络状态",
+        "simulation": true,
+        "ready": true,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "READY",
+        "transaction_phase": "IDLE",
+        "pending": false,
+        "legacy": false,
+        "operation_id": "",
+        "operation_code": 200,
+        "error": "",
+        "interface": "eth0",
+        "address": "169.254.27.54",
+        "netmask": "255.255.0.0",
+        "gateway": "",
+        "candidate_address": "169.254.27.54",
+        "source": "linklocal",
+        "identity": "mac-28b5e8e26019",
+        "identity_source": "mac",
+        "sn": "",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "",
+        "attempt": 0,
+        "generation": 4,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 0,
+        "confirmed_config": {
+          "mode": "auto"
+        },
+        "desired_config": {
+          "mode": "auto"
+        }
+      }
+    },
+    "same_id_after_committed_restart": {
+      "description": "无 pending 的服务重启可保留任务号，但阶段为 IDLE；不能用来认定旧任务刚成功",
+      "http_status": 200,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 200,
+        "message": "网络状态",
+        "simulation": true,
+        "ready": true,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "READY",
+        "transaction_phase": "IDLE",
+        "pending": false,
+        "legacy": false,
+        "operation_id": "11111111111111111111111111111111",
+        "operation_code": 200,
+        "error": "",
+        "interface": "eth0",
+        "address": "10.42.0.120",
+        "netmask": "255.255.255.0",
+        "gateway": "10.42.0.1",
+        "candidate_address": "10.42.0.120",
+        "source": "pool",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "",
+        "attempt": 0,
+        "generation": 4,
+        "epoch": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 0,
+        "confirmed_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "desired_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        }
+      }
+    },
+    "future_phase": {
+      "description": "人为构造未知阶段，用于兼容处理，不代表设备现有枚举",
+      "http_status": 200,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 200,
+        "message": "网络状态",
+        "simulation": true,
+        "ready": true,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "FUTURE_PHASE",
+        "transaction_phase": "WAIT_CONFIRM",
+        "pending": true,
+        "legacy": false,
+        "operation_id": "11111111111111111111111111111111",
+        "operation_code": 202,
+        "error": "",
+        "interface": "eth0",
+        "address": "10.42.0.120",
+        "netmask": "255.255.255.0",
+        "gateway": "10.42.0.1",
+        "candidate_address": "10.42.0.120",
+        "source": "pool",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "",
+        "attempt": 1,
+        "generation": 7,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 45000,
+        "confirmed_config": {
+          "mode": "auto"
+        },
+        "desired_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        }
+      }
+    },
+    "future_schema": {
+      "description": "人为构造未来版本，客户端只读；不代表设备当前提供版本 2",
+      "http_status": 200,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 2,
+        "code": 200,
+        "message": "网络状态",
+        "simulation": true,
+        "ready": true,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "READY",
+        "transaction_phase": "WAIT_CONFIRM",
+        "pending": true,
+        "legacy": false,
+        "operation_id": "11111111111111111111111111111111",
+        "operation_code": 202,
+        "error": "",
+        "interface": "eth0",
+        "address": "10.42.0.120",
+        "netmask": "255.255.255.0",
+        "gateway": "10.42.0.1",
+        "candidate_address": "10.42.0.120",
+        "source": "pool",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "",
+        "attempt": 1,
+        "generation": 7,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 45000,
+        "confirmed_config": {
+          "mode": "auto"
+        },
+        "desired_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        }
+      }
+    },
+    "reset_accepted": {
+      "description": "network_reset 仍创建需要确认的 auto 任务",
+      "http_status": 202,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 202,
+        "message": "网络设置已受理，探测和应用结果请查询任务状态",
+        "simulation": true,
+        "ready": false,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "WAIT_DHCP",
+        "transaction_phase": "PROBING",
+        "pending": true,
+        "legacy": false,
+        "operation_id": "11111111111111111111111111111111",
+        "operation_code": 202,
+        "error": "",
+        "interface": "eth0",
+        "address": "169.254.27.54",
+        "netmask": "255.255.0.0",
+        "gateway": "",
+        "candidate_address": "169.254.27.54",
+        "source": "linklocal",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "",
+        "attempt": 0,
+        "generation": 5,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 0,
+        "confirmed_config": {
+          "mode": "auto"
+        },
+        "desired_config": {
+          "mode": "auto"
+        }
+      }
+    },
+    "confirm_storage_failed": {
+      "description": "构造的完整网络快照",
+      "http_status": 500,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 500,
+        "message": "确认结果无法持久化，任务仍等待确认",
+        "simulation": true,
+        "ready": true,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "READY",
+        "transaction_phase": "WAIT_CONFIRM",
+        "pending": true,
+        "legacy": false,
+        "operation_id": "11111111111111111111111111111111",
+        "operation_code": 202,
+        "error": "",
+        "interface": "eth0",
+        "address": "10.42.0.120",
+        "netmask": "255.255.255.0",
+        "gateway": "10.42.0.1",
+        "candidate_address": "10.42.0.120",
+        "source": "pool",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "",
+        "attempt": 1,
+        "generation": 7,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 45000,
+        "confirmed_config": {
+          "mode": "auto"
+        },
+        "desired_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        }
+      }
+    },
+    "bridge_unavailable": {
+      "description": "CGI 最小错误体，不是完整网络快照",
+      "http_status": 503,
+      "content_type": "application/json",
+      "body": {
+        "code": 503,
+        "message": "管理桥接不可用"
+      }
+    },
+    "mode_busy": {
+      "description": "只展示管理错误结构片段；phase 属于模式管理，不能按网络快照解析",
+      "http_status": 409,
+      "content_type": "application/json",
+      "body": {
+        "code": 409,
+        "message": "模式切换期间不接受网络设置",
+        "phase": "VERIFYING"
+      }
+    },
+    "invalid_config": {
+      "description": "参数无效，没有创建新任务；不能用保留的当前状态猜测本次已受理",
+      "http_status": 422,
+      "content_type": "application/json",
+      "body": {
+        "schema_version": 1,
+        "code": 422,
+        "message": "地址范围不符合约束",
+        "simulation": true,
+        "ready": true,
+        "recovery": false,
+        "configuration_valid": true,
+        "phase": "READY",
+        "transaction_phase": "IDLE",
+        "pending": false,
+        "legacy": false,
+        "operation_id": "",
+        "operation_code": 200,
+        "error": "",
+        "interface": "eth0",
+        "address": "169.254.27.54",
+        "netmask": "255.255.0.0",
+        "gateway": "",
+        "candidate_address": "169.254.27.54",
+        "source": "linklocal",
+        "identity": "CS96000B0126020001",
+        "identity_source": "sn",
+        "sn": "CS96000B0126020001",
+        "model": "CS96-beta",
+        "mac": "28:b5:e8:e2:60:19",
+        "conflict_mac": "",
+        "attempt": 0,
+        "generation": 4,
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mdns_running": false,
+        "management_port": 80,
+        "confirm_remaining_ms": 0,
+        "confirmed_config": {
+          "mode": "auto"
+        },
+        "desired_config": {
+          "mode": "auto"
+        }
+      }
+    },
+    "web_missing": {
+      "description": "未部署该路径时的构造示例；实际服务器错误页内容可不同",
+      "http_status": 404,
+      "content_type": "text/html",
+      "body": "<html><body>接口不存在</body></html>"
+    }
+  },
+  "scenarios": [
+    {
+      "name": "normal_pool",
+      "description": "按顺序提交、发现新地址、确认并完成",
+      "response_keys": [
+        "pool_accepted",
+        "pool_wait_confirm",
+        "pool_confirm_post_ok",
+        "pool_confirmed"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "SUCCEEDED",
+        "set_request_count": 1,
+        "confirm_request_count": 1,
+        "data_session_restored": false
+      }
+    },
+    {
+      "name": "ready_is_not_committed",
+      "description": "已有业务地址但仍待确认",
+      "response_keys": [
+        "pool_wait_confirm"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "AWAITING_CONFIRM",
+        "saved_success": false,
+        "automatic_confirm_allowed": true
+      }
+    },
+    {
+      "name": "generation_unchanged_commit",
+      "description": "WAIT_CONFIRM 与 COMMITTED 故意保持相同 generation，仍需处理新响应",
+      "response_keys": [
+        "pool_wait_confirm",
+        "pool_confirmed"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": true,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "SUCCEEDED",
+        "must_process_second_snapshot": true
+      }
+    },
+    {
+      "name": "pool_exhausted",
+      "description": "旧地址恢复 ready=true，目标池设置仍失败",
+      "response_keys": [
+        "pool_accepted",
+        "pool_exhausted_old_address_ready"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "FAILED",
+        "saved_success": false,
+        "old_address_reachable": true,
+        "requested_config_must_remain": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        }
+      }
+    },
+    {
+      "name": "confirm_timeout",
+      "description": "确认超时后恢复旧自动地址",
+      "response_keys": [
+        "pool_wait_confirm",
+        "confirm_timeout_old_address_ready"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "FAILED",
+        "saved_success": false,
+        "allow_automatic_set_retry": false
+      }
+    },
+    {
+      "name": "service_restarted",
+      "description": "同 operation_id，但网络 epoch 变化",
+      "response_keys": [
+        "pool_wait_confirm",
+        "restart_rolled_back"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "INTERRUPTED",
+        "automatic_confirm_allowed": false,
+        "saved_success": false
+      }
+    },
+    {
+      "name": "restart_after_saved",
+      "description": "保留相同任务号与目标配置也不能把 IDLE 当作当前任务完成",
+      "response_keys": [
+        "same_id_after_committed_restart"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "NEEDS_RECONCILIATION",
+        "automatic_confirm_allowed": false,
+        "saved_success": false
+      }
+    },
+    {
+      "name": "set_response_lost",
+      "description": "先模拟设置请求已经发出但响应丢失，随后只读 GET 看到相同目标；没有受理任务号不能认领",
+      "response_keys": [
+        "pool_wait_confirm"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": null,
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "UNKNOWN_RESULT",
+        "set_request_count": 1,
+        "confirm_request_count": 0,
+        "allow_automatic_set_retry": false
+      }
+    },
+    {
+      "name": "confirm_response_lost_committed",
+      "description": "确认响应丢失，后续 GET 可证明同任务已经保存",
+      "response_keys": [
+        "pool_confirmed"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": true,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "SUCCEEDED",
+        "additional_confirm_request_count": 0
+      }
+    },
+    {
+      "name": "confirm_response_lost_still_waiting",
+      "description": "已发出确认但结果未知，GET 仍显示待确认",
+      "response_keys": [
+        "pool_wait_confirm"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": true,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "CONFIRM_RESULT_UNKNOWN",
+        "additional_automatic_confirm_request_count": 0,
+        "user_explicit_retry_possible": true
+      }
+    },
+    {
+      "name": "external_task",
+      "description": "其他客户端发起相同配置，任务号不同",
+      "response_keys": [
+        "external_task_same_config"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "EXTERNAL_OPERATION",
+        "automatic_confirm_allowed": false,
+        "allow_automatic_set_retry": false
+      }
+    },
+    {
+      "name": "different_mac",
+      "description": "相同 SN、配置和任务号，但 MAC 不匹配",
+      "response_keys": [
+        "wrong_mac_wait_confirm"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "IDENTITY_MISMATCH",
+        "automatic_confirm_allowed": false,
+        "saved_success": false
+      }
+    },
+    {
+      "name": "fault",
+      "description": "HTTP 可达但持久配置无效",
+      "response_keys": [
+        "fault_recovery"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "CONFIGURATION_FAULT",
+        "allow_set": false,
+        "display_config_as_valid": false,
+        "saved_success": false
+      }
+    },
+    {
+      "name": "business_recovery",
+      "description": "业务地址冲突的管理恢复状态与配置损坏不同",
+      "response_keys": [
+        "business_address_recovery"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": null,
+        "requested_config": null,
+        "set_sent": false,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "MANAGEMENT_RECOVERY",
+        "allow_user_initiated_set": true,
+        "saved_success": false,
+        "keep_confirmed_config": {
+          "mode": "static",
+          "address": "10.42.0.120",
+          "netmask": "255.255.255.0",
+          "gateway": ""
+        }
+      }
+    },
+    {
+      "name": "no_sn",
+      "description": "缺少真实 SN，保留临时 MAC 身份",
+      "response_keys": [
+        "no_sn"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": null,
+        "requested_config": null,
+        "set_sent": false,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "READ_ONLY_STATUS",
+        "display_real_sn": false,
+        "device_key_uses_mac_and_interface": true
+      }
+    },
+    {
+      "name": "future_phase",
+      "description": "当前版本中遇到未知阶段",
+      "response_keys": [
+        "future_phase"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "UNSUPPORTED_STATE",
+        "automatic_confirm_allowed": false,
+        "allow_set": false
+      }
+    },
+    {
+      "name": "future_version",
+      "description": "未来版本只读",
+      "response_keys": [
+        "future_schema"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "UNSUPPORTED_VERSION",
+        "automatic_confirm_allowed": false,
+        "allow_set": false
+      }
+    },
+    {
+      "name": "reset_is_not_cancel",
+      "description": "恢复自动模式仍为待处理任务，不能当作取消",
+      "response_keys": [
+        "reset_accepted"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "auto"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "IN_PROGRESS",
+        "saved_success": false,
+        "device_task_cancelled": false
+      }
+    },
+    {
+      "name": "storage_failed_on_confirm",
+      "description": "确认保存失败，保持诊断与状态查询",
+      "response_keys": [
+        "confirm_storage_failed"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": true,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "CONFIRM_SAVE_FAILED",
+        "saved_success": false,
+        "automatic_confirm_retry": false
+      }
+    },
+    {
+      "name": "minimal_error",
+      "description": "错误体只有 code 和 message，不要求完整网络字段",
+      "response_keys": [
+        "bridge_unavailable"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "MANAGEMENT_UNAVAILABLE",
+        "clear_known_config": false,
+        "allow_automatic_set_retry": false
+      }
+    },
+    {
+      "name": "mode_shape_error",
+      "description": "管理层模式错误形状，不含网络 schema_version",
+      "response_keys": [
+        "mode_busy"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "BUSY",
+        "parse_as_network_snapshot": false,
+        "automatic_queue_set": false
+      }
+    },
+    {
+      "name": "missing_endpoint",
+      "description": "路径未部署，非 JSON 错误页",
+      "response_keys": [
+        "web_missing"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "API_UNAVAILABLE",
+        "allow_legacy_or_ssh_fallback": false,
+        "clear_known_config": false
+      }
+    },
+    {
+      "name": "invalid_parameters",
+      "description": "参数失败保持表单，不认领当前或历史任务",
+      "response_keys": [
+        "invalid_config"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": null,
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3
+      },
+      "expected": {
+        "result": "VALIDATION_FAILED",
+        "saved_success": false,
+        "keep_requested_form": true
+      }
+    },
+    {
+      "name": "stale_selection",
+      "description": "模拟请求发起后切换网卡或设备，响应上下文序号已过期",
+      "response_keys": [
+        "pool_wait_confirm"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 4,
+        "response_context_sequence": 3
+      },
+      "expected": {
+        "result": "IGNORED_STALE_RESPONSE",
+        "automatic_confirm_allowed": false,
+        "update_current_selection": false
+      }
+    },
+    {
+      "name": "different_interface_scope",
+      "description": "相同 MAC 与任务号但响应来自另一网卡作用域",
+      "response_keys": [
+        "pool_wait_confirm"
+      ],
+      "client_context": {
+        "anchor_mac": "28:b5:e8:e2:60:19",
+        "pc_interface_id": "fixture-ethernet-01",
+        "epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_operation_id": "11111111111111111111111111111111",
+        "requested_config": {
+          "mode": "pool",
+          "start": "10.42.0.100",
+          "end": "10.42.0.150",
+          "netmask": "255.255.255.0",
+          "gateway": "10.42.0.1"
+        },
+        "set_sent": true,
+        "confirm_sent": false,
+        "selected_context_sequence": 3,
+        "response_pc_interface_id": "fixture-ethernet-02"
+      },
+      "expected": {
+        "result": "SCOPE_MISMATCH",
+        "automatic_confirm_allowed": false
+      }
+    }
+  ]
+}

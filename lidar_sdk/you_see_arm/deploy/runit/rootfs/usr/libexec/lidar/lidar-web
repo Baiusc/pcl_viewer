@@ -1,0 +1,52 @@
+#!/bin/sh
+# 验证版本包后将 Web 复制到 RAM；包损坏时使用系统镜像中的诊断页。
+set -eu
+umask 077
+. "${LIDAR_SERVICE_CONFIG:-/etc/lidar/service.conf}"
+[ "${LIDAR_WEB_SOURCE:-system}" = release ] || exit 0
+[ "${1:-}" = prepare ] || exit 2
+run=${LIDAR_WEB_RUN:-/run/lidar-web}
+recovery=${LIDAR_WEB_RECOVERY:-/usr/share/lidar/web-recovery}
+case "$run" in /run/*|/tmp/*) ;; *) echo 'Web 运行目录必须位于 RAM 区域' >&2; exit 1 ;; esac
+[ ! -L "$run" ] || exit 1
+mkdir -p "$run"
+chmod 700 "$run"
+if [ -f "$run/current/www.pid" ]; then
+    read -r pid < "$run/current/www.pid" || pid=
+    case "$pid" in ''|*[!0-9]*) ;; *)
+        if kill -0 "$pid" 2>/dev/null; then
+            echo 'Web 仍在运行，请先停止再准备版本' >&2
+            exit 1
+        fi ;;
+    esac
+fi
+old=
+if [ -L "$run/current" ]; then
+    old=$(readlink "$run/current")
+    case "$old" in www.*) ;; *) exit 1 ;; esac
+    case "$old" in */*|*..*) exit 1 ;; esac
+elif [ -e "$run/current" ]; then
+    exit 1
+fi
+source=$recovery
+status='RECOVERY：应用签名、路径或 Web 文件不可用，当前提供系统诊断页面'
+if package=$("$LIDAR_BOOT" package-path "$LIDAR_BOOT_CONFIG" 2> "$run/verify-error"); then
+    if [ -f "$package/www/sbin/lighttpd" ] && [ -f "$package/www/config/lighttpd.conf" ]; then
+        source=$package/www
+        status="RELEASE：$package"
+    fi
+fi
+[ -x "$source/sbin/lighttpd" ] && [ -f "$source/config/lighttpd.conf" ] || exit 1
+stage=$run/www.$$
+[ ! -e "$stage" ] && [ ! -L "$stage" ] || exit 1
+mkdir "$stage"
+trap 'rm -rf "$stage"; rm -f "$run/current.new.$$"' EXIT HUP INT TERM
+cp -R "$source/." "$stage/"
+mkdir -p "$stage/log" "$stage/cache" "$stage/upload" "$stage/sockets" "$stage/vhosts"
+printf '%s\n' "$status" > "$stage/启动状态.txt"
+ln -s "www.$$" "$run/current.new.$$"
+# -T 防止 mv 将新链接放进旧链接所指向的目录。
+mv -Tf "$run/current.new.$$" "$run/current"
+trap - EXIT HUP INT TERM
+printf '%s\n' "$status"
+if [ -n "$old" ] && [ "$old" != "www.$$" ]; then rm -rf "$run/$old"; fi

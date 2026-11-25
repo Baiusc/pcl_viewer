@@ -1,0 +1,98 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "ninja-base",
+      "displayName": "Ninja Base Configuration",
+      "description": "Base configuration for Ninja builds",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "ninja-x64-debug-base",
+      "displayName": "Ninja x64 Debug Base",
+      "description": "Base for Ninja x64 Debug builds",
+      "hidden": true,
+      "inherits": "ninja-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "ninja-x64-release-base",
+      "displayName": "Ninja x64 Release Base",
+      "description": "Base for Ninja x64 Release builds — 无调试符号，极致优化，定义 NDEBUG",
+      "hidden": true,
+      "inherits": "ninja-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "ninja-x64-relwithdebinfo-base",
+      "displayName": "Ninja x64 RelWithDebInfo Base",
+      "description": "Base for Ninja x64 RelWithDebInfo builds — 含调试符号，兼顾优化，定义 NDEBUG",
+      "hidden": true,
+      "inherits": "ninja-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "ninja-x86-debug-base",
+      "displayName": "Ninja x86 Debug Base",
+      "description": "Base for Ninja x86 Debug builds",
+      "hidden": true,
+      "inherits": "ninja-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "ninja-x86-release-base",
+      "displayName": "Ninja x86 Release Base",
+      "description": "Base for Ninja x86 Release builds",
+      "hidden": true,
+      "inherits": "ninja-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "ninja-x86-relwithdebinfo-base",
+      "displayName": "Ninja x86 RelWithDebInfo Base",
+      "description": "Base for Ninja x86 RelWithDebInfo builds",
+      "hidden": true,
+      "inherits": "ninja-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "Qt",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{QTDIR}"
+      },
+      "vendor": {
+        "qt-project.org/Qt": {
+          "checksum": "wVa86FgEkvdCTVp1/nxvrkaemJc="
+        }
+      }
+    }
+  ],
+  "vendor": {
+    "qt-project.org/Presets": {
+      "checksum": "ikCmi6tn5RkzKvnfp1O+rI7xvHw="
+    }
+  }
+}

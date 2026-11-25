@@ -1,0 +1,2 @@
+#!/bin/sh
+exec "${LIDAR_SERVICE_EXEC:-/usr/libexec/lidar/lidar-service}" log

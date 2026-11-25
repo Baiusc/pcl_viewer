@@ -1,0 +1,24 @@
+software = {
+    version = "@RELEASE_VERSION@";
+    description = "CS96-beta FPGA 固件更新";
+    bootloader_transaction_marker = false;
+    bootloader_state_marker = false;
+    files: (
+        {
+            filename = "fpga-mode.tar.gz";
+            type = "archive";
+            path = "/run/lidar-fpga-stage";
+            installed-directly = false;
+            preserve-attributes = true;
+            sha256 = "@PAYLOAD_SHA256@";
+            properties: { create-destination = "true"; };
+        }
+    );
+    scripts: (
+        {
+            filename = "fpga-mode-hook.sh";
+            type = "shellscript";
+            sha256 = "@HOOK_SHA256@";
+        }
+    );
+};

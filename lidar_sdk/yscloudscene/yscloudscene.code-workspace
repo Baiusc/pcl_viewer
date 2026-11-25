@@ -1,0 +1,16 @@
+{
+  "folders": [
+    { "name": "yscloudscene", "path": "." },
+    { "name": "you_see_sdk", "path": "you_see_sdk" },
+    { "name": "repair_ground", "path": "algorithm/repair_ground" },
+    { "name": "matrix_lidar_sdk", "path": "matrix_lidar_sdk" },
+    { "name": "you_lib", "path": "you_lib" },
+    { "name": "lumosy", "path": "lumosy" },
+    { "name": "vendor/you_lib", "path": "you_see_sdk/vendor/you_lib" }
+  ],
+  "settings": {
+    "git.repositoryScanMaxDepth": 3,
+    "git.autoRepositoryDetection": true,
+    "git.repositoryScanIgnoredFolders": [".repo", ".vs", "out", "build", "node_modules"]
+  }
+}

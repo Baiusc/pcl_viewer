@@ -1,0 +1,85 @@
+{
+	"categories": [
+		{
+			"name": "基本设置",
+			"properties": [
+				{
+					"name": "fpga",
+					"fields": [
+						{
+							"key": "light_scale",
+							"display_name": "发光刻度值",
+							"type": "int",
+							"value": 0,
+							"operation": "读取",
+							"config": {
+								"min": 0,
+								"max": 239,
+								"step": 1
+							}
+						},
+						{
+							"key": "light_offset_enable",
+							"display_name": "发光偏移角使能",
+							"type": "bool",
+							"value": false,
+							"operation": "读取"
+						},
+						{
+							"key": "light_offset_angle",
+							"display_name": "发光偏移角度",
+							"type": "int",
+							"value": 0,
+							"operation": "读取",
+							"config": {
+								"min": 0,
+								"max": 255,
+								"step": 1
+							}
+						},
+						{
+							"key": "charge_time_enable",
+							"display_name": "充电时间使能",
+							"type": "bool",
+							"value": false,
+							"operation": "读取"
+						},
+						{
+							"key": "charge_time",
+							"display_name": "充电时间",
+							"type": "int",
+							"value": 0,
+							"operation": "读取",
+							"config": {
+								"min": 0,
+								"max": 65535,
+								"step": 1
+							}
+						}
+					]
+				},
+				{
+					"name": "版本信息",
+					"fields": [
+						{
+							"key": "fpga_version_date",
+							"display_name": "FPGA版本日期",
+							"type": "string",
+							"value": "--",
+							"read_only": true,
+							"operation": "读取"
+						},
+						{
+							"key": "fpga_version_time",
+							"display_name": "FPGA版本时间",
+							"type": "string",
+							"value": "--",
+							"read_only": true,
+							"operation": "读取"
+						}
+					]
+				}
+			]
+		}
+	]
+}

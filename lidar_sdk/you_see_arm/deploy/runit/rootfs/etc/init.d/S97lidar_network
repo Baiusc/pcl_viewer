@@ -1,0 +1,6 @@
+#!/bin/sh
+case "${1:-}" in
+start) exec /usr/libexec/lidar/lidar-network-service enable ;;
+stop) exec /usr/libexec/lidar/lidar-network-service stop ;;
+*) echo '用法：S97lidar_network start|stop' >&2; exit 2 ;;
+esac

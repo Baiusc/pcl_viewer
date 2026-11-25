@@ -1,0 +1,20 @@
+{
+  "model": "CS96-beta",
+  "interface": "eth0",
+  "state_path": "/run/lidar-data/lidar/config/network.json",
+  "runtime_dir": "/run/lidar-network",
+  "socket_path": "/run/lidar-network/control.sock",
+  "sn_path": "/dev/mtd3",
+  "legacy_interfaces": "/etc/network/interfaces",
+  "legacy_flash_interfaces": "/run/lidar-data/interfaces",
+  "udhcpc": "/sbin/udhcpc",
+  "dhcp_script": "/usr/libexec/lidar/lidar-dhcp-event",
+  "avahi": "/usr/sbin/avahi-daemon",
+  "avahi_dbus_supported": false,
+  "avahi_services": "/etc/avahi/services",
+  "mdns_directory": "/run/lidar-mdns",
+  "management_port": 80,
+  "broadcast_port": 5354,
+  "confirm_timeout_ms": 60000,
+  "dhcp_timeout_ms": 5000
+}

@@ -1,0 +1,8 @@
+# 合入当前有效 Buildroot 配置，再运行 olddefconfig 解析依赖。
+BR2_PACKAGE_AVAHI=y
+BR2_PACKAGE_AVAHI_DAEMON=y
+# 地址统一由 lidar_netd 管理，不启用另一套自动寻址守护进程。
+# BR2_PACKAGE_AVAHI_AUTOIPD is not set
+# BR2_PACKAGE_AVAHI_LIBDNSSD_COMPATIBILITY is not set
+# BR2_PACKAGE_AVAHI_DEFAULT_SERVICES is not set
+# 不修改其他组件所需的 D-Bus 配置；本服务运行时关闭 Avahi 的 D-Bus。

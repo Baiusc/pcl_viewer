@@ -1,6 +1,0 @@
-[submodule "lidar_sdk/you_see_arm"]
-	path = lidar_sdk/you_see_arm
-	url = git@10.42.0.10:ys_embedded_software/you_see_arm.git
-[submodule "lidar_sdk/yscloudscene"]
-	path = lidar_sdk/yscloudscene
-	url = git@10.42.0.10:ys_window/yscloudscene.git

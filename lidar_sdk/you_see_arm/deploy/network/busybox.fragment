@@ -1,0 +1,5 @@
+# 合入有效 BusyBox 配置；已有其他 applet 和默认 DHCP 脚本保持原值。
+CONFIG_UDHCPC=y
+CONFIG_RUNSV=y
+CONFIG_RUNSVDIR=y
+CONFIG_SV=y

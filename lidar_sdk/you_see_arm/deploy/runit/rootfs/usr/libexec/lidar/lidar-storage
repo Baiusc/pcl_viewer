@@ -1,0 +1,162 @@
+#!/bin/sh
+# Beta 启动时只读复制，运行时仅在提交文件期间挂载。
+set -eu
+. "${LIDAR_SERVICE_CONFIG:-/etc/lidar/service.conf}"
+mode=${LIDAR_STORAGE_MODE:-managed}
+fstype=${LIDAR_STORAGE_FSTYPE:-jffs2}
+
+storage_mount() {
+    [ ! -L "$LIDAR_STORAGE_MOUNT" ] || return 1
+    mkdir -p "$LIDAR_STORAGE_MOUNT"
+    if ! awk -v dev="$LIDAR_STORAGE_DEVICE" -v path="$LIDAR_STORAGE_MOUNT" '
+        $1 == dev || $2 == path { occupied = 1 }
+        END { exit occupied ? 1 : 0 }
+    ' "${LIDAR_STORAGE_MOUNTS:-/proc/mounts}"; then
+        echo '第三分区或挂载点已被占用' >&2
+        return 1
+    fi
+    stage=
+    mounted=0
+    trap storage_cleanup EXIT
+    trap 'exit 1' HUP INT TERM
+    mount -t "$fstype" -o "$1,nodev,nosuid,noexec" "$LIDAR_STORAGE_DEVICE" "$LIDAR_STORAGE_MOUNT"
+    mounted=1
+}
+
+storage_unmount() {
+    if umount "$LIDAR_STORAGE_MOUNT"; then
+        mounted=0
+        return 0
+    fi
+    echo '第三分区卸载失败，尝试切回只读' >&2
+    mount -t "$fstype" -o remount,ro,nodev,nosuid,noexec "$LIDAR_STORAGE_DEVICE" "$LIDAR_STORAGE_MOUNT" || :
+    return 1
+}
+
+storage_cleanup() {
+    result=$?
+    trap - EXIT HUP INT TERM
+    if [ "$mounted" = 1 ]; then storage_unmount || result=1; fi
+    if [ -n "$stage" ]; then rm -rf "$stage"; fi
+    exit "$result"
+}
+
+copy_file() {
+    if [ -e "$1" ] || [ -L "$1" ]; then
+        [ -f "$1" ] && [ ! -L "$1" ] || return 1
+        cp -p "$1" "$2"
+    fi
+}
+
+boot_copy() {
+    [ ! -L "$LIDAR_RAM_DATA" ] || return 1
+    [ ! -d "$LIDAR_RAM_DATA" ] || return 0
+    storage_mount ro
+    stage=$(mktemp -d "$LIDAR_RAM_DATA.tmp.XXXXXX")
+    flash=$LIDAR_STORAGE_MOUNT
+    mkdir -p "$stage/lidar/releases" "$stage/lidar/config" "$stage/lidar/state" \
+        "$stage/lidar/calibration" "$stage/legacy-config"
+    for dir in lidar lidar/releases lidar/config lidar/calibration lidar/state you_see_arm you_see_arm/config; do
+        [ ! -L "$flash/$dir" ] || return 1
+    done
+    if [ -L "$flash/lidar/current" ]; then
+        release=$(readlink -f "$flash/lidar/current") || return 1
+        case "$release" in "$flash"/lidar/releases/*) ;; *) return 1 ;; esac
+        name=${release##*/}
+        [ "$release" = "$flash/lidar/releases/$name" ] && [ -d "$release" ] || return 1
+        cp -pRP "$release" "$stage/lidar/releases/"
+        ln -s "releases/$name" "$stage/lidar/current"
+    elif [ -e "$flash/lidar/current" ]; then
+        return 1
+    fi
+    for file in config/ys_conf.ini config/user-settings.json config/network.json state/state.json \
+        state/fpga-profile \
+        calibration/ys_calibration.ini calibration/ys_encoder_angle.csv; do
+        copy_file "$flash/lidar/$file" "$stage/lidar/$file"
+    done
+    for file in ys_conf.ini ys_calibration.ini ys_encoder_angle.csv; do
+        copy_file "$flash/you_see_arm/config/$file" "$stage/legacy-config/$file"
+    done
+    copy_file "$flash/interfaces" "$stage/interfaces"
+    storage_unmount
+    mv -T "$stage" "$LIDAR_RAM_DATA"
+    stage=
+}
+
+save_file() {
+    [ -d "$LIDAR_RAM_DATA" ] && [ ! -L "$LIDAR_RAM_DATA" ] || return 1
+    [ -s "$2" ] && [ -f "$2" ] && [ ! -L "$2" ] || return 1
+    candidate=$(readlink -f "$2") || return 1
+    case "$1" in
+        user-settings) file=config/user-settings.json ;;
+        network) file=config/network.json ;;
+        state) file=state/state.json ;;
+        fpga-profile) file=state/fpga-profile ;;
+        base-config) file=config/ys_conf.ini ;;
+        calibration) file=calibration/ys_calibration.ini ;;
+        encoder-angle) file=calibration/ys_encoder_angle.csv ;;
+        *) return 2 ;;
+    esac
+    storage_mount rw
+    flash=$LIDAR_STORAGE_MOUNT/lidar
+    [ ! -L "$flash" ] && [ ! -L "$flash/${file%/*}" ] || return 1
+    mkdir -p "$flash/${file%/*}"
+    if ! "$LIDAR_BOOT" storage-replace "$candidate" "$flash/$file"; then
+        echo "第三分区文件提交失败：$file" >&2
+        return 1
+    fi
+    storage_unmount
+}
+
+case "$mode" in
+boot-copy)
+    umask 077
+    case "${1:-}" in
+        start) exec "$LIDAR_BOOT" storage-lock "$LIDAR_RAM_DATA.lock" "$0" copy-locked ;;
+        save)
+            [ "$#" = 3 ] || exit 2
+            exec "$LIDAR_BOOT" storage-lock "$LIDAR_RAM_DATA.lock" "$0" save-locked "$2" "$3" ;;
+        copy-locked) boot_copy ;;
+        save-locked) save_file "$2" "$3" ;;
+        stop) exit 0 ;;
+        *) exit 2 ;;
+    esac
+    exit
+    ;;
+directory)
+    # 复用系统已提供的目录，不取得其底层文件系统的挂载或卸载所有权。
+    [ -d "$LIDAR_STORAGE_MOUNT" ] && [ ! -L "$LIDAR_STORAGE_MOUNT" ] || {
+        echo '配置的存储目录不存在或为符号链接' >&2; exit 1;
+    }
+    case "${1:-}" in start|stop) exit 0 ;; *) exit 2 ;; esac
+    ;;
+managed) ;;
+*) echo '未知存储管理方式' >&2; exit 2 ;;
+esac
+case "${1:-}" in
+start)
+    mkdir -p "$LIDAR_STORAGE_MOUNT"
+    if grep -F " $LIDAR_STORAGE_MOUNT " /proc/mounts > /dev/null; then
+        grep -F "$LIDAR_STORAGE_DEVICE $LIDAR_STORAGE_MOUNT $fstype rw," /proc/mounts > /dev/null || {
+            echo '持久分区已被其他方式挂载，拒绝自动重挂载' >&2; exit 1;
+        }
+    else
+        mount -t "$fstype" "$LIDAR_STORAGE_DEVICE" "$LIDAR_STORAGE_MOUNT"
+    fi
+    ;;
+stop)
+    if [ "${LIDAR_NETWORK_ENABLED:-0}" = 1 ] &&
+        "$LIDAR_NETWORK_CTL" "$LIDAR_NETWORK_SOCKET" get >/dev/null 2>&1; then
+        echo '网络服务仍在运行，拒绝卸载持久分区' >&2; exit 1
+    fi
+    # 应由 rcK 先停止 S98；额外查询防止手工卸载正在使用的持久存储。
+    if "$LIDAR_BOOT" ready "$LIDAR_BOOT_CONFIG" >/dev/null 2>&1; then
+        echo '管理服务仍在运行，拒绝卸载持久分区' >&2; exit 1
+    fi
+    if grep -F " $LIDAR_STORAGE_MOUNT " /proc/mounts >/dev/null; then
+        sync
+        umount "$LIDAR_STORAGE_MOUNT"
+    fi
+    ;;
+*) echo '用法：lidar-storage start|stop' >&2; exit 2 ;;
+esac

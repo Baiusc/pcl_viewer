@@ -1,0 +1,112 @@
+{
+  "models": {
+    "CS96-alpha": {
+      "alias": "alpha",
+      "macro": "CS96_ALPHA",
+      "suffix": "cs96_alpha",
+      "toolchain": "aarch64-buildroot-linux-gnu",
+      "driver": "prebuilt",
+      "driver_platform": "xczu3eg",
+      "modes": {
+        "histogram": null,
+        "pointcloud": null
+      }
+    },
+    "CS96-beta": {
+      "alias": "beta",
+      "macro": "CS96_BETA",
+      "suffix": "cs96_beta",
+      "toolchain": "aarch64-buildroot-linux-gnu",
+      "driver": "source",
+      "driver_platform": "am6204",
+      "modes": {
+        "histogram": 4,
+        "pointcloud": 0,
+        "gray": 3,
+        "spot": null
+      },
+      "runtime_modes": true
+    },
+    "CS96-gamma": {
+      "alias": "gamma",
+      "macro": "CS96_GAMMA",
+      "suffix": "cs96_gamma",
+      "toolchain": "aarch64-buildroot-linux-gnu",
+      "driver": "source",
+      "driver_platform": "am6204",
+      "modes": {
+        "histogram": 5,
+        "pointcloud": 1,
+        "gray": 2
+      },
+      "runtime_modes": true
+    },
+    "MF150-fl6031": {
+      "alias": "fl6031",
+      "macro": "MF150_FL6031",
+      "suffix": "mf150_fl6031",
+      "toolchain": "aarch64-linux-gnu",
+      "driver": "v4l2",
+      "driver_platform": "t507",
+      "modes": {
+        "histogram": null,
+        "pointcloud": null
+      }
+    },
+    "MF150-fl6532": {
+      "alias": "fl6532",
+      "macro": "MF150_FL6532",
+      "suffix": "mf150_fl6532",
+      "toolchain": "aarch64-linux-gnu",
+      "driver": "sdk",
+      "driver_platform": "rv1126b",
+      "modes": {
+        "histogram": null,
+        "pointcloud": null
+      }
+    }
+  },
+  "modes": {
+    "histogram": {
+      "default_work_mode": 0,
+      "allowed_work_modes": [
+        0
+      ]
+    },
+    "pointcloud": {
+      "default_work_mode": 2,
+      "allowed_work_modes": [
+        1,
+        2
+      ]
+    },
+    "gray": {
+      "default_work_mode": 3,
+      "allowed_work_modes": [
+        3
+      ]
+    }
+  },
+  "algorithms": {
+    "reflectivity": {
+      "models": [
+        "CS96-alpha",
+        "CS96-beta",
+        "CS96-gamma"
+      ],
+      "modes": [
+        "pointcloud"
+      ],
+      "default": false
+    },
+    "spotslope": {
+      "models": [
+        "CS96-beta"
+      ],
+      "modes": [
+        "pointcloud"
+      ],
+      "default": false
+    }
+  }
+}

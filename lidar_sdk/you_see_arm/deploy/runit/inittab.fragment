@@ -1,0 +1,2 @@
+# 保留 BusyBox init；rcS 准备 RAM 服务目录后启动监督树。
+::respawn:/usr/libexec/lidar/lidar-service scan

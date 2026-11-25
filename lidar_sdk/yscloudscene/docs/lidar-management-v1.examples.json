@@ -1,0 +1,488 @@
+{
+  "contract_version": "v1-draft",
+  "http_endpoints_implemented": true,
+  "description": "所有样例均为模拟数据，供界面及桥接测试；不代表 221 实测切换结果。",
+  "scenarios": [
+    {
+      "name": "ready_mode_2",
+      "description": "仅开放点云 1/2，版本未标记，当前解算点云",
+      "http_status": 200,
+      "body": {
+        "code": 200,
+        "message": "状态",
+        "model": "CS96-beta",
+        "operation_id": "11111111111111111111111111111111",
+        "version": null,
+        "simulation": false,
+        "phase": "COMMITTED",
+        "confirmed_mode": 2,
+        "actual_mode": 2,
+        "desired_mode": 2,
+        "error": "",
+        "pid": 1234,
+        "initialized": true,
+        "pipeline_verified": true,
+        "supported_modes": [
+          "histogram",
+          "pointcloud",
+          "gray"
+        ],
+        "validated_work_modes": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "switch_accepted",
+      "description": "202 仅受理，不能提示成功",
+      "http_status": 202,
+      "body": {
+        "code": 202,
+        "message": "切换已受理",
+        "model": "CS96-beta",
+        "operation_id": "22222222222222222222222222222222",
+        "version": null,
+        "simulation": false,
+        "phase": "STOPPING",
+        "confirmed_mode": 2,
+        "actual_mode": -1,
+        "desired_mode": 1,
+        "error": "",
+        "pid": 1234,
+        "initialized": false,
+        "pipeline_verified": false,
+        "supported_modes": [
+          "histogram",
+          "pointcloud",
+          "gray"
+        ],
+        "validated_work_modes": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "preparing",
+      "description": "准备目标环境，旧 confirmed_mode 不代表仍在输出旧模式",
+      "http_status": 200,
+      "body": {
+        "code": 200,
+        "message": "状态",
+        "model": "CS96-beta",
+        "operation_id": "22222222222222222222222222222222",
+        "version": null,
+        "simulation": false,
+        "phase": "PREPARING",
+        "confirmed_mode": 2,
+        "actual_mode": -1,
+        "desired_mode": 1,
+        "error": "",
+        "pid": 0,
+        "initialized": false,
+        "pipeline_verified": false,
+        "supported_modes": [
+          "histogram",
+          "pointcloud",
+          "gray"
+        ],
+        "validated_work_modes": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "verifying",
+      "description": "初始化不等于数据验证成功",
+      "http_status": 200,
+      "body": {
+        "code": 200,
+        "message": "状态",
+        "model": "CS96-beta",
+        "operation_id": "22222222222222222222222222222222",
+        "version": null,
+        "simulation": false,
+        "phase": "VERIFYING",
+        "confirmed_mode": 2,
+        "actual_mode": -1,
+        "desired_mode": 1,
+        "error": "",
+        "pid": 1235,
+        "initialized": true,
+        "pipeline_verified": false,
+        "supported_modes": [
+          "histogram",
+          "pointcloud",
+          "gray"
+        ],
+        "validated_work_modes": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "switch_succeeded",
+      "description": "本次请求目标为 1，任务及模式匹配且无错误",
+      "http_status": 200,
+      "body": {
+        "code": 200,
+        "message": "状态",
+        "model": "CS96-beta",
+        "operation_id": "22222222222222222222222222222222",
+        "version": null,
+        "simulation": false,
+        "phase": "COMMITTED",
+        "confirmed_mode": 1,
+        "actual_mode": 1,
+        "desired_mode": 1,
+        "error": "",
+        "pid": 1235,
+        "initialized": true,
+        "pipeline_verified": true,
+        "supported_modes": [
+          "histogram",
+          "pointcloud",
+          "gray"
+        ],
+        "validated_work_modes": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "rolled_back",
+      "description": "本次请求目标为 1，但已恢复 2，不能被 COMMITTED 误导",
+      "http_status": 200,
+      "body": {
+        "code": 200,
+        "message": "状态",
+        "model": "CS96-beta",
+        "operation_id": "22222222222222222222222222222222",
+        "version": null,
+        "simulation": false,
+        "phase": "COMMITTED",
+        "confirmed_mode": 2,
+        "actual_mode": 2,
+        "desired_mode": 2,
+        "error": "数据验证超时",
+        "pid": 1236,
+        "initialized": true,
+        "pipeline_verified": true,
+        "supported_modes": [
+          "histogram",
+          "pointcloud",
+          "gray"
+        ],
+        "validated_work_modes": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "fault_query",
+      "description": "查询成功但设备故障，HTTP 和 code 均为 200",
+      "http_status": 200,
+      "body": {
+        "code": 200,
+        "message": "状态",
+        "model": "CS96-beta",
+        "operation_id": "22222222222222222222222222222222",
+        "version": null,
+        "simulation": false,
+        "phase": "FAULT",
+        "confirmed_mode": 2,
+        "actual_mode": -1,
+        "desired_mode": 2,
+        "error": "平台重配失败",
+        "pid": 0,
+        "initialized": false,
+        "pipeline_verified": false,
+        "supported_modes": [
+          "histogram",
+          "pointcloud",
+          "gray"
+        ],
+        "validated_work_modes": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "busy_switch",
+      "description": "已有操作时返回 409，不自动排队",
+      "http_status": 409,
+      "body": {
+        "code": 409,
+        "message": "当前不能切换",
+        "model": "CS96-beta",
+        "operation_id": "22222222222222222222222222222222",
+        "version": null,
+        "simulation": false,
+        "phase": "VERIFYING",
+        "confirmed_mode": 2,
+        "actual_mode": -1,
+        "desired_mode": 1,
+        "error": "",
+        "pid": 1234,
+        "initialized": true,
+        "pipeline_verified": false,
+        "supported_modes": [
+          "histogram",
+          "pointcloud",
+          "gray"
+        ],
+        "validated_work_modes": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "unsupported_switch",
+      "description": "模式分组在包内不等于设备白名单已开放",
+      "http_status": 422,
+      "body": {
+        "code": 422,
+        "message": "模式未包含或尚未通过平台验证",
+        "model": "CS96-beta",
+        "operation_id": "11111111111111111111111111111111",
+        "version": null,
+        "simulation": false,
+        "phase": "COMMITTED",
+        "confirmed_mode": 2,
+        "actual_mode": 2,
+        "desired_mode": 2,
+        "error": "",
+        "pid": 1234,
+        "initialized": true,
+        "pipeline_verified": true,
+        "supported_modes": [
+          "histogram",
+          "pointcloud",
+          "gray"
+        ],
+        "validated_work_modes": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "package_invalid",
+      "description": "422 也可能是包验证失败，不能都显示成模式不支持",
+      "http_status": 422,
+      "body": {
+        "code": 422,
+        "message": "包校验失败，保留当前采集",
+        "model": "CS96-beta",
+        "operation_id": "11111111111111111111111111111111",
+        "version": null,
+        "simulation": false,
+        "phase": "COMMITTED",
+        "confirmed_mode": 2,
+        "actual_mode": 2,
+        "desired_mode": 2,
+        "error": "",
+        "pid": 1234,
+        "initialized": true,
+        "pipeline_verified": true,
+        "supported_modes": [
+          "histogram",
+          "pointcloud",
+          "gray"
+        ],
+        "validated_work_modes": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "intent_failed",
+      "description": "入口失败时原采集可能仍正常运行",
+      "http_status": 500,
+      "body": {
+        "code": 500,
+        "message": "状态落盘失败",
+        "model": "CS96-beta",
+        "operation_id": "33333333333333333333333333333333",
+        "version": null,
+        "simulation": false,
+        "phase": "COMMITTED",
+        "confirmed_mode": 2,
+        "actual_mode": 2,
+        "desired_mode": 2,
+        "error": "切换意图无法落盘，保留现有采集",
+        "pid": 1234,
+        "initialized": true,
+        "pipeline_verified": true,
+        "supported_modes": [
+          "histogram",
+          "pointcloud",
+          "gray"
+        ],
+        "validated_work_modes": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "already_in_mode",
+      "description": "目标已是 2，不创建新任务",
+      "http_status": 200,
+      "body": {
+        "code": 200,
+        "message": "已在目标模式",
+        "model": "CS96-beta",
+        "operation_id": "11111111111111111111111111111111",
+        "version": null,
+        "simulation": false,
+        "phase": "COMMITTED",
+        "confirmed_mode": 2,
+        "actual_mode": 2,
+        "desired_mode": 2,
+        "error": "",
+        "pid": 1234,
+        "initialized": true,
+        "pipeline_verified": true,
+        "supported_modes": [
+          "histogram",
+          "pointcloud",
+          "gray"
+        ],
+        "validated_work_modes": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "operation_changed",
+      "description": "任务标识变化，原请求不能继续认领此操作结果",
+      "http_status": 200,
+      "body": {
+        "code": 200,
+        "message": "状态",
+        "model": "CS96-beta",
+        "operation_id": "44444444444444444444444444444444",
+        "version": null,
+        "simulation": false,
+        "phase": "COMMITTED",
+        "confirmed_mode": 2,
+        "actual_mode": 2,
+        "desired_mode": 2,
+        "error": "",
+        "pid": 1234,
+        "initialized": true,
+        "pipeline_verified": true,
+        "supported_modes": [
+          "histogram",
+          "pointcloud",
+          "gray"
+        ],
+        "validated_work_modes": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "simulation",
+      "description": "显著显示模拟环境，不能当成实机结果",
+      "http_status": 200,
+      "body": {
+        "code": 200,
+        "message": "状态",
+        "model": "CS96-beta",
+        "operation_id": "11111111111111111111111111111111",
+        "version": null,
+        "simulation": true,
+        "phase": "COMMITTED",
+        "confirmed_mode": 2,
+        "actual_mode": 2,
+        "desired_mode": 2,
+        "error": "",
+        "pid": 1234,
+        "initialized": true,
+        "pipeline_verified": true,
+        "supported_modes": [
+          "histogram",
+          "pointcloud",
+          "gray"
+        ],
+        "validated_work_modes": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "future_phase",
+      "description": "未知阶段禁用切换，不按成功处理",
+      "http_status": 200,
+      "body": {
+        "code": 200,
+        "message": "状态",
+        "model": "CS96-beta",
+        "operation_id": "11111111111111111111111111111111",
+        "version": null,
+        "simulation": false,
+        "phase": "FUTURE_PHASE",
+        "confirmed_mode": 2,
+        "actual_mode": -1,
+        "desired_mode": 2,
+        "error": "",
+        "pid": 1234,
+        "initialized": false,
+        "pipeline_verified": false,
+        "supported_modes": [
+          "histogram",
+          "pointcloud",
+          "gray"
+        ],
+        "validated_work_modes": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "manager_unavailable",
+      "description": "桥接错误不能伪造实时模式或 phase",
+      "http_status": 503,
+      "body": {
+        "code": 503,
+        "message": "设备管理服务不可用",
+        "source": "bridge"
+      }
+    },
+    {
+      "name": "bridge_timeout",
+      "description": "桥接错误不能伪造实时模式或 phase",
+      "http_status": 504,
+      "body": {
+        "code": 504,
+        "message": "等待管理服务响应超时，请查询确认操作结果",
+        "source": "bridge"
+      }
+    },
+    {
+      "name": "invalid_response",
+      "description": "桥接错误不能伪造实时模式或 phase",
+      "http_status": 502,
+      "body": {
+        "code": 502,
+        "message": "设备管理响应格式错误",
+        "source": "bridge"
+      }
+    }
+  ],
+  "http_endpoints_deployed_to_221": false
+}

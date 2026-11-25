@@ -1,0 +1,787 @@
+openapi: 3.0.3
+info:
+  title: 激光雷达模式管理 HTTP 桥接契约
+  version: 0.2.0
+  description: HTTP CGI 已通过主机测试和 Beta ARM64 构建，并在 221 的 RAM 环境完成真实 HTTP 模式切换联调。UDS 原生接口已实现。当前
+    221 测试只开放点云 1/2，详见开发指导手册。
+servers:
+- url: http://10.42.0.221
+  description: 仅用于约定的 221 临时测试环境；客户端应允许配置地址
+paths:
+  /cgi-bin/lidar_status.cgi:
+    get:
+      operationId: getLidarStatus
+      summary: 查询管理状态
+      description: 转发本地 op=status。FAULT 也返回 HTTP 200。禁止缓存。认证策略需复用部署环境，本文未宣称现有访问控制已实现。
+      responses:
+        '200':
+          description: 查询成功、设备已在目标模式；仍需检查 phase、实际模式和 error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples:
+                ready_mode_2:
+                  summary: 仅开放点云 1/2，版本未标记，当前解算点云
+                  value:
+                    code: 200
+                    message: 状态
+                    model: CS96-beta
+                    operation_id: '11111111111111111111111111111111'
+                    version: null
+                    simulation: false
+                    phase: COMMITTED
+                    confirmed_mode: 2
+                    actual_mode: 2
+                    desired_mode: 2
+                    error: ''
+                    pid: 1234
+                    initialized: true
+                    pipeline_verified: true
+                    supported_modes:
+                    - histogram
+                    - pointcloud
+                    - gray
+                    validated_work_modes:
+                    - 1
+                    - 2
+                rolled_back:
+                  summary: 本次请求目标为 1，但已恢复 2，不能被 COMMITTED 误导
+                  value:
+                    code: 200
+                    message: 状态
+                    model: CS96-beta
+                    operation_id: '22222222222222222222222222222222'
+                    version: null
+                    simulation: false
+                    phase: COMMITTED
+                    confirmed_mode: 2
+                    actual_mode: 2
+                    desired_mode: 2
+                    error: 数据验证超时
+                    pid: 1236
+                    initialized: true
+                    pipeline_verified: true
+                    supported_modes:
+                    - histogram
+                    - pointcloud
+                    - gray
+                    validated_work_modes:
+                    - 1
+                    - 2
+                fault_query:
+                  summary: 查询成功但设备故障，HTTP 和 code 均为 200
+                  value:
+                    code: 200
+                    message: 状态
+                    model: CS96-beta
+                    operation_id: '22222222222222222222222222222222'
+                    version: null
+                    simulation: false
+                    phase: FAULT
+                    confirmed_mode: 2
+                    actual_mode: -1
+                    desired_mode: 2
+                    error: 平台重配失败
+                    pid: 0
+                    initialized: false
+                    pipeline_verified: false
+                    supported_modes:
+                    - histogram
+                    - pointcloud
+                    - gray
+                    validated_work_modes:
+                    - 1
+                    - 2
+                already_in_mode:
+                  summary: 目标已是 2，不创建新任务
+                  value:
+                    code: 200
+                    message: 已在目标模式
+                    model: CS96-beta
+                    operation_id: '11111111111111111111111111111111'
+                    version: null
+                    simulation: false
+                    phase: COMMITTED
+                    confirmed_mode: 2
+                    actual_mode: 2
+                    desired_mode: 2
+                    error: ''
+                    pid: 1234
+                    initialized: true
+                    pipeline_verified: true
+                    supported_modes:
+                    - histogram
+                    - pointcloud
+                    - gray
+                    validated_work_modes:
+                    - 1
+                    - 2
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+        '405':
+          description: HTTP 方法不允许，附 Allow 头
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples: {}
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+            Allow:
+              description: 查询端点为 GET，切换端点为 POST
+              schema:
+                type: string
+        '502':
+          description: 管理服务响应无效
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples:
+                invalid_response:
+                  summary: 桥接错误不能伪造实时模式或 phase
+                  value:
+                    code: 502
+                    message: 设备管理响应格式错误
+                    source: bridge
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+        '503':
+          description: 本地服务不可用，或切换时设备已 FAULT；根据 JSON 区分来源
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples:
+                manager_unavailable:
+                  summary: 桥接错误不能伪造实时模式或 phase
+                  value:
+                    code: 503
+                    message: 设备管理服务不可用
+                    source: bridge
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+        '504':
+          description: 超时不表示操作取消，禁止自动重复提交
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples:
+                bridge_timeout:
+                  summary: 桥接错误不能伪造实时模式或 phase
+                  value:
+                    code: 504
+                    message: 等待管理服务响应超时，请查询确认操作结果
+                    source: bridge
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+  /cgi-bin/lidar_switch.cgi:
+    post:
+      operationId: switchLidarMode
+      summary: 请求切换工作模式
+      description: 单次转发本地 op=switch。202 后轮询查询端点。POST 结果未知时不重发。实际允许范围由设备能力交集裁决。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SwitchRequest'
+            example:
+              work_mode: 1
+      responses:
+        '200':
+          description: 查询成功、设备已在目标模式；仍需检查 phase、实际模式和 error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples:
+                ready_mode_2:
+                  summary: 仅开放点云 1/2，版本未标记，当前解算点云
+                  value:
+                    code: 200
+                    message: 状态
+                    model: CS96-beta
+                    operation_id: '11111111111111111111111111111111'
+                    version: null
+                    simulation: false
+                    phase: COMMITTED
+                    confirmed_mode: 2
+                    actual_mode: 2
+                    desired_mode: 2
+                    error: ''
+                    pid: 1234
+                    initialized: true
+                    pipeline_verified: true
+                    supported_modes:
+                    - histogram
+                    - pointcloud
+                    - gray
+                    validated_work_modes:
+                    - 1
+                    - 2
+                rolled_back:
+                  summary: 本次请求目标为 1，但已恢复 2，不能被 COMMITTED 误导
+                  value:
+                    code: 200
+                    message: 状态
+                    model: CS96-beta
+                    operation_id: '22222222222222222222222222222222'
+                    version: null
+                    simulation: false
+                    phase: COMMITTED
+                    confirmed_mode: 2
+                    actual_mode: 2
+                    desired_mode: 2
+                    error: 数据验证超时
+                    pid: 1236
+                    initialized: true
+                    pipeline_verified: true
+                    supported_modes:
+                    - histogram
+                    - pointcloud
+                    - gray
+                    validated_work_modes:
+                    - 1
+                    - 2
+                fault_query:
+                  summary: 查询成功但设备故障，HTTP 和 code 均为 200
+                  value:
+                    code: 200
+                    message: 状态
+                    model: CS96-beta
+                    operation_id: '22222222222222222222222222222222'
+                    version: null
+                    simulation: false
+                    phase: FAULT
+                    confirmed_mode: 2
+                    actual_mode: -1
+                    desired_mode: 2
+                    error: 平台重配失败
+                    pid: 0
+                    initialized: false
+                    pipeline_verified: false
+                    supported_modes:
+                    - histogram
+                    - pointcloud
+                    - gray
+                    validated_work_modes:
+                    - 1
+                    - 2
+                already_in_mode:
+                  summary: 目标已是 2，不创建新任务
+                  value:
+                    code: 200
+                    message: 已在目标模式
+                    model: CS96-beta
+                    operation_id: '11111111111111111111111111111111'
+                    version: null
+                    simulation: false
+                    phase: COMMITTED
+                    confirmed_mode: 2
+                    actual_mode: 2
+                    desired_mode: 2
+                    error: ''
+                    pid: 1234
+                    initialized: true
+                    pipeline_verified: true
+                    supported_modes:
+                    - histogram
+                    - pointcloud
+                    - gray
+                    validated_work_modes:
+                    - 1
+                    - 2
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+        '202':
+          description: 已受理；异步查询状态，不等于切换完成
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples:
+                switch_accepted:
+                  summary: 202 仅受理，不能提示成功
+                  value:
+                    code: 202
+                    message: 切换已受理
+                    model: CS96-beta
+                    operation_id: '22222222222222222222222222222222'
+                    version: null
+                    simulation: false
+                    phase: STOPPING
+                    confirmed_mode: 2
+                    actual_mode: -1
+                    desired_mode: 1
+                    error: ''
+                    pid: 1234
+                    initialized: false
+                    pipeline_verified: false
+                    supported_modes:
+                    - histogram
+                    - pointcloud
+                    - gray
+                    validated_work_modes:
+                    - 1
+                    - 2
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+        '400':
+          description: 请求格式、字段或整数模式值错误
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples: {}
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+        '405':
+          description: HTTP 方法不允许，附 Allow 头
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples: {}
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+            Allow:
+              description: 查询端点为 GET，切换端点为 POST
+              schema:
+                type: string
+        '413':
+          description: 请求体超出限制
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples: {}
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+        '415':
+          description: 仅接受 application/json
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples: {}
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+        '409':
+          description: 已有操作，客户端不得自动排队重试
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples:
+                busy_switch:
+                  summary: 已有操作时返回 409，不自动排队
+                  value:
+                    code: 409
+                    message: 当前不能切换
+                    model: CS96-beta
+                    operation_id: '22222222222222222222222222222222'
+                    version: null
+                    simulation: false
+                    phase: VERIFYING
+                    confirmed_mode: 2
+                    actual_mode: -1
+                    desired_mode: 1
+                    error: ''
+                    pid: 1234
+                    initialized: true
+                    pipeline_verified: false
+                    supported_modes:
+                    - histogram
+                    - pointcloud
+                    - gray
+                    validated_work_modes:
+                    - 1
+                    - 2
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+        '422':
+          description: 模式未开放或包验证失败
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples:
+                unsupported_switch:
+                  summary: 模式分组在包内不等于设备白名单已开放
+                  value:
+                    code: 422
+                    message: 模式未包含或尚未通过平台验证
+                    model: CS96-beta
+                    operation_id: '11111111111111111111111111111111'
+                    version: null
+                    simulation: false
+                    phase: COMMITTED
+                    confirmed_mode: 2
+                    actual_mode: 2
+                    desired_mode: 2
+                    error: ''
+                    pid: 1234
+                    initialized: true
+                    pipeline_verified: true
+                    supported_modes:
+                    - histogram
+                    - pointcloud
+                    - gray
+                    validated_work_modes:
+                    - 1
+                    - 2
+                package_invalid:
+                  summary: 422 也可能是包验证失败，不能都显示成模式不支持
+                  value:
+                    code: 422
+                    message: 包校验失败，保留当前采集
+                    model: CS96-beta
+                    operation_id: '11111111111111111111111111111111'
+                    version: null
+                    simulation: false
+                    phase: COMMITTED
+                    confirmed_mode: 2
+                    actual_mode: 2
+                    desired_mode: 2
+                    error: ''
+                    pid: 1234
+                    initialized: true
+                    pipeline_verified: true
+                    supported_modes:
+                    - histogram
+                    - pointcloud
+                    - gray
+                    validated_work_modes:
+                    - 1
+                    - 2
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+        '500':
+          description: 切换入口失败，查询确认当前状态
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples:
+                intent_failed:
+                  summary: 入口失败时原采集可能仍正常运行
+                  value:
+                    code: 500
+                    message: 状态落盘失败
+                    model: CS96-beta
+                    operation_id: '33333333333333333333333333333333'
+                    version: null
+                    simulation: false
+                    phase: COMMITTED
+                    confirmed_mode: 2
+                    actual_mode: 2
+                    desired_mode: 2
+                    error: 切换意图无法落盘，保留现有采集
+                    pid: 1234
+                    initialized: true
+                    pipeline_verified: true
+                    supported_modes:
+                    - histogram
+                    - pointcloud
+                    - gray
+                    validated_work_modes:
+                    - 1
+                    - 2
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+        '501':
+          description: 守护进程未实现该操作
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples: {}
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+        '502':
+          description: 管理服务响应无效
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples:
+                invalid_response:
+                  summary: 桥接错误不能伪造实时模式或 phase
+                  value:
+                    code: 502
+                    message: 设备管理响应格式错误
+                    source: bridge
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+        '503':
+          description: 本地服务不可用，或切换时设备已 FAULT；根据 JSON 区分来源
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples:
+                manager_unavailable:
+                  summary: 桥接错误不能伪造实时模式或 phase
+                  value:
+                    code: 503
+                    message: 设备管理服务不可用
+                    source: bridge
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+        '504':
+          description: 超时不表示操作取消，禁止自动重复提交
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ManagerSnapshot'
+                - $ref: '#/components/schemas/BridgeError'
+              examples:
+                bridge_timeout:
+                  summary: 桥接错误不能伪造实时模式或 phase
+                  value:
+                    code: 504
+                    message: 等待管理服务响应超时，请查询确认操作结果
+                    source: bridge
+          headers:
+            Cache-Control:
+              description: 所有响应禁止缓存
+              schema:
+                type: string
+                enum:
+                - no-store
+        '403':
+          description: 请求 Origin 不匹配；此检查不替代用户认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BridgeError'
+        '408':
+          description: 读取请求正文超时，尚未发送切换请求
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BridgeError'
+components:
+  schemas:
+    SwitchRequest:
+      type: object
+      required:
+      - work_mode
+      additionalProperties: false
+      properties:
+        work_mode:
+          type: integer
+          enum:
+          - 0
+          - 1
+          - 2
+          - 3
+          - 4
+          description: 0 连续直方图，1 原始点云，2 解算点云，3 灰度；221 当前只开放 1/2。布尔与非整数字段不能接受。
+    ManagerSnapshot:
+      type: object
+      required:
+      - code
+      - message
+      - model
+      - operation_id
+      - version
+      - simulation
+      - phase
+      - confirmed_mode
+      - actual_mode
+      - desired_mode
+      - error
+      - pid
+      - initialized
+      - pipeline_verified
+      - supported_modes
+      - validated_work_modes
+      properties:
+        code:
+          type: integer
+          description: 本次请求结果，不是设备健康结论
+        message:
+          type: string
+        model:
+          type: string
+        operation_id:
+          type: string
+          description: 只用于当前操作关联；不是幂等键或历史任务查询键
+        version:
+          type: string
+          nullable: true
+          description: 开发包可以为 null
+        simulation:
+          type: boolean
+        phase:
+          type: string
+          description: 当前为 STOPPING、PREPARING、VERIFYING、COMMITTED、FAULT；未知阶段必须禁用写操作
+        confirmed_mode:
+          type: integer
+          description: 最后确认模式，初始时可为 -1
+        actual_mode:
+          type: integer
+          description: 当前确认模式；-1 为未确认
+        desired_mode:
+          type: integer
+          description: 回滚时会改变，不等于客户端最初请求的目标
+        error:
+          type: string
+          description: COMMITTED 时也可能存在失败/恢复原因
+        pid:
+          type: integer
+          minimum: 0
+        initialized:
+          type: boolean
+        pipeline_verified:
+          type: boolean
+          description: 流水线数据包进展，不代表完整帧、上位机接收或硬件全面验证
+        supported_modes:
+          type: array
+          items:
+            type: string
+        validated_work_modes:
+          type: array
+          items:
+            type: integer
+      additionalProperties: true
+    BridgeError:
+      type: object
+      required:
+      - code
+      - message
+      - source
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+        source:
+          type: string
+          enum:
+          - bridge
+      additionalProperties: true

@@ -1,0 +1,60 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Given Directories
+.opencode/
+.sisyphus/
+.idea/
+.vscode/
+.vs/
+.cache/
+.claude/
+.out/
+./out/install
+build/
+out/
+release/
+deploy/*
+!/deploy/deploy_win_debug.bat
+!/deploy/deploy_win_release.bat
+
+# Repo 管理的子仓库
+.repo/
+
+#windows vs cmake local config files
+*.user
+/CMakeUserPresets.json
+/tree.txt
+/dir_tree.ps1
+.idea/
+

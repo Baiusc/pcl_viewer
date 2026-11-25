@@ -1,0 +1,4 @@
+# 按实际平台内核配置合入，保留原有网卡与 PHY 驱动。
+CONFIG_INET=y
+CONFIG_PACKET=y
+CONFIG_IP_MULTICAST=y

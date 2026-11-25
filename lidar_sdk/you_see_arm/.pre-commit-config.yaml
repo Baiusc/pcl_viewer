@@ -1,0 +1,45 @@
+---
+# This file configures https://pre-commit.com/
+# Based on pre-commit hooks in
+#   https://github.com/pre-commit/pre-commit-hooks
+#   https://github.com/pocc/pre-commit-hooks
+# to use specific hooks and options.
+fail_fast: true
+
+repos:
+  - repo: .git/hooks/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.output
+      - id: end-of-file-fixer
+        exclude: \.(cpp|output)$
+      - id: check-added-large-files
+      - id: check-yaml
+
+  - repo: .git/hooks/pocc-pre-commit-hooks
+    rev: v1.3.5
+    hooks:
+      - id: clang-format
+        args: [--style=file]
+        exclude: ^third_party/
+      - id: clang-tidy
+        args:
+          - "--checks=-*,readability-*,bugprone-*"
+          - "--header-filter=.*"
+        exclude: ^third_party/
+      - id: cppcheck
+        args:
+          - "--enable=warning,performance,portability"
+          - "--suppress=missingIncludeSystem"
+          - "--error-exitcode=1"
+        exclude: ^third_party/
+
+  # - repo: local
+  #   hooks:
+  #     - id: c-build-test
+  #       name: build-and-test
+  #       entry: bash -c "make clean && make && make test"
+  #       description: 编译项目并运行测试
+  #       language: system
+  #       types: [c]

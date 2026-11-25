@@ -1,0 +1,3 @@
+#!/bin/sh
+exec 2>&1
+exec "${LIDAR_SERVICE_EXEC:-/usr/libexec/lidar/lidar-service}" run

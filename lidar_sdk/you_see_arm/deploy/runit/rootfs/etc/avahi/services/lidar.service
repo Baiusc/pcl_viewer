@@ -1,0 +1,4 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!-- 网络服务启动后按本机真实身份生成内容，随后启动唯一的 Avahi 进程。 -->
+<service-group><name replace-wildcards="yes">%h</name><service protocol="ipv4"><type>_lidar._tcp</type><port>80</port><txt-record>proto=1</txt-record></service></service-group>

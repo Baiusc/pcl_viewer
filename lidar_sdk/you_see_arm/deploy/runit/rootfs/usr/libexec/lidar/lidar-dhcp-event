@@ -1,0 +1,9 @@
+#!/bin/sh
+# udhcpc 只报告租约事件，不直接执行 ifconfig 或添加路由。
+set -eu
+case "${1:-}" in
+bound|renew|deconfig|nak)
+    exec /usr/libexec/lidar/lidar_netctl "${LIDAR_NET_SOCKET:?}" "dhcp:$1"
+    ;;
+*) exit 0 ;;
+esac

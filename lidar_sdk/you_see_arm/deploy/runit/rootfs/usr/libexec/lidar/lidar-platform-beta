@@ -1,0 +1,119 @@
+#!/bin/sh
+# Beta 平台负责读取 FPGA 版本、控制电机及装卸采集模块。
+set -eu
+umask 077
+. "${LIDAR_SERVICE_CONFIG:-/etc/lidar/service.conf}"
+case "${1:-}" in
+    fpga-version)
+        [ "$#" = 1 ] || exit 2
+        if [ -c "$LIDAR_DEVICE" ] && "$LIDAR_FUSER" "$LIDAR_DEVICE" >&2; then
+            echo '采集设备仍在使用，无法读取 FPGA 版本' >&2
+            exit 1
+        fi
+        exec "$LIDAR_BOOT" fpga-version
+        ;;
+    prepare|recover)
+        active=${LIDAR_FPGA_ACTIVE_MODE:-}
+        if [ -z "$active" ]; then
+            profile=${LIDAR_RAM_DATA:-/run/lidar-data}/lidar/state/fpga-profile
+            active=2
+            if [ -e "$profile" ] || [ -L "$profile" ]; then
+                [ -f "$profile" ] && [ ! -L "$profile" ] || exit 1
+                IFS=' ' read -r active hash extra < "$profile"
+            fi
+        fi
+        case "$active:${2:-}" in
+            0:0|2:1|2:2|3:3|4:4) ;;
+            *) echo '工作模式与当前 FPGA 配套不匹配' >&2; exit 1 ;;
+        esac
+        case "${3:-}" in -1|0|1|2|3|4) ;; *) exit 2 ;; esac
+        ;;
+    quiesce) [ "$#" = 1 ] || exit 2 ;;
+    *) exit 2 ;;
+esac
+[ "$LIDAR_MODULE_ID" != UNPROVISIONED ] || { echo '硬件配套未配置' >&2; exit 1; }
+case "$LIDAR_MODULE_ID" in ''|*[!0-9a-f]*) exit 1 ;; esac
+[ "${#LIDAR_MODULE_ID}" -eq 64 ] || exit 1
+mkdir -p "$LIDAR_PLATFORM_STATE"
+[ ! -L "$LIDAR_PLATFORM_STATE" ] || exit 1
+chmod 700 "$LIDAR_PLATFORM_STATE"
+device_idle() {
+    if "$LIDAR_FUSER" "$LIDAR_DEVICE" > "$LIDAR_PLATFORM_STATE/device-users" 2>&1; then
+        cat "$LIDAR_PLATFORM_STATE/device-users" >&2
+        return 1
+    fi
+}
+
+motor_start() {
+    if [ ! -f "$LIDAR_PLATFORM_STATE/motor-running" ]; then
+        # 电机程序最多采样十秒，外层给 I2C 和 GPIO 操作留出余量。
+        "$LIDAR_BOOT" bounded 12 "$LIDAR_MOTOR"
+        : > "$LIDAR_PLATFORM_STATE/motor-running"
+    fi
+}
+
+motor_stop() {
+    # 旧电机程序会忽略参数并启动电机，必须在执行前检查启停接口标识。
+    if ! LC_ALL=C strings "$LIDAR_MOTOR" | grep -Fxq 'beta-i2c-motor start-stop v1'; then
+        echo '需要支持停转的 Beta 电机程序' >&2
+        return 1
+    fi
+    rm -f "$LIDAR_PLATFORM_STATE/motor-running"
+    "$LIDAR_BOOT" bounded 12 "$LIDAR_MOTOR" stop
+}
+
+verify_module() {
+    printf '%s  %s\n' "$LIDAR_MODULE_ID" "$LIDAR_MODULE_NOTE" | sha256sum -c -
+}
+
+module_loaded=0
+if [ -e "$LIDAR_MODULE_NOTE" ]; then
+    [ -f "$LIDAR_PLATFORM_STATE/initialized" ] || {
+        echo '内核模块已由其他入口加载，拒绝与旧启动流程混用' >&2; exit 1;
+    }
+    verify_module
+    device_idle
+    module_loaded=1
+fi
+
+if [ "$1" = quiesce ]; then
+    motor_stop
+    if [ "$module_loaded" = 1 ]; then
+        "$LIDAR_BOOT" bounded 10 "${LIDAR_RMMOD:-/sbin/rmmod}" yousee_lidar
+        [ ! -e "$LIDAR_MODULE_NOTE" ] || exit 1
+    fi
+    : > "$LIDAR_PLATFORM_STATE/reload"
+    exit 0
+fi
+
+if [ "$2" = 4 ]; then
+    [ "$module_loaded" = 0 ] || { echo '请先卸载采集模块再进入光斑模式' >&2; exit 1; }
+    motor_start
+    echo "Beta 平台：$1 -> $2；电机已启动，使用 SPI 读取光斑版本寄存器"
+    exit 0
+fi
+
+if [ "$module_loaded" = 0 ] && [ -e "$LIDAR_PLATFORM_STATE/initialized" ] &&
+    [ ! -f "$LIDAR_PLATFORM_STATE/reload" ]; then
+    echo '本轮已初始化后内核模块消失，拒绝重新配置硬件' >&2
+    exit 1
+fi
+if [ "$module_loaded" = 1 ] && [ ! -c "$LIDAR_DEVICE" ]; then
+    echo '采集设备节点未就绪' >&2
+    exit 1
+fi
+
+case "$2" in
+    0|3) motor_stop ;;
+    1|2) motor_start ;;
+esac
+
+if [ "$module_loaded" = 0 ]; then
+    "$LIDAR_BOOT" bounded 5 "$LIDAR_INSMOD" "$LIDAR_KERNEL_MODULE"
+    printf '%s\n' initialized > "$LIDAR_PLATFORM_STATE/initialized"
+    verify_module
+    [ -c "$LIDAR_DEVICE" ] || { echo '采集设备节点未就绪' >&2; exit 1; }
+    device_idle
+fi
+rm -f "$LIDAR_PLATFORM_STATE/reload"
+echo "Beta 平台：$1 -> $2；内核模块已核对，设备句柄无占用"

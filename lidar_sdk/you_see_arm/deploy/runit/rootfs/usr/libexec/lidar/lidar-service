@@ -1,0 +1,137 @@
+#!/bin/sh
+# 只管理已声明的 lidar_mgrd 服务；持久模式状态由管理进程独占。
+set -eu
+umask 077
+. "${LIDAR_SERVICE_CONFIG:-/etc/lidar/service.conf}"
+SERVICE=$LIDAR_SCAN/lidar_mgrd
+jtag=$LIDAR_RUN/fpga-jtag
+platform=${LIDAR_PLATFORM_EXEC:-/usr/libexec/lidar/lidar-platform-beta}
+
+uptime_seconds() {
+    read -r seconds rest < /proc/uptime
+    printf '%s\n' "${seconds%%.*}"
+}
+
+prepare() {
+    for tool in "$LIDAR_BOOT" "$LIDAR_RUNSV_DIR" "$LIDAR_SV" "$LIDAR_LOGGER"; do
+        [ -x "$tool" ] || { echo "缺少必要工具：$tool" >&2; return 1; }
+    done
+    [ ! -L "$LIDAR_RUN" ] && [ ! -L "$LIDAR_SCAN" ] || return 1
+    mkdir -p "$LIDAR_RUN" "$LIDAR_SCAN"
+    chmod 700 "$LIDAR_RUN" "$LIDAR_SCAN"
+    if [ ! -d "$SERVICE" ]; then
+        mkdir "$SERVICE" "$SERVICE/log"
+        cp "$LIDAR_TEMPLATE/run" "$LIDAR_TEMPLATE/finish" "$LIDAR_TEMPLATE/check" "$SERVICE/"
+        cp "$LIDAR_TEMPLATE/log/run" "$SERVICE/log/run"
+        chmod 700 "$SERVICE/run" "$SERVICE/finish" "$SERVICE/check" "$SERVICE/log/run"
+        : > "$SERVICE/down"
+    fi
+}
+
+case "${1:-}" in
+enable)
+    prepare
+    # 开机只准备服务；BusyBox init 在 rcS 返回后启动唯一的监督树。
+    rm -f "$SERVICE/down" "$LIDAR_RUN/failures" "$LIDAR_RUN/service-error"
+    if "$LIDAR_SV" status "$SERVICE" >/dev/null 2>&1; then
+        "$LIDAR_SV" up "$SERVICE"
+    fi
+    echo 'lidar_mgrd 已启用；系统监督器负责启动'
+    ;;
+start)
+    prepare
+    "$LIDAR_SV" status "$SERVICE" >/dev/null
+    rm -f "$SERVICE/down" "$LIDAR_RUN/failures" "$LIDAR_RUN/service-error"
+    "$LIDAR_SV" -w "$LIDAR_STOP_SECONDS" start "$SERVICE"
+    ;;
+stop)
+    [ -d "$SERVICE" ] || exit 0
+    : > "$SERVICE/down"
+    # stop 会等待主服务退出，保留 down，防止正常维护被误当作崩溃重启。
+    "$LIDAR_SV" -w "$LIDAR_STOP_SECONDS" stop "$SERVICE"
+    ;;
+restart)
+    "$0" stop
+    "$0" start
+    ;;
+jtag-prepare|jtag-resume|jtag-end)
+    [ "$#" = 1 ] || exit 2
+    exec "$LIDAR_BOOT" storage-lock "$LIDAR_RAM_DATA.ota-lock" "$0" "$1-locked"
+    ;;
+jtag-prepare-locked)
+    prepare
+    "$0" stop
+    "$platform" quiesce
+    printf 'pending\n' > "$jtag.new"
+    mv -f "$jtag.new" "$jtag"
+    ;;
+jtag-resume-locked)
+    [ -f "$jtag" ] && [ "$(cat "$jtag")" = pending ] || {
+        echo '请先执行 jtag-prepare 停采并卸载采集模块' >&2; exit 1;
+    }
+    rm -f "$LIDAR_RUN/fpga-jtag-state/state.json"
+    printf 'active\n' > "$jtag.new"
+    mv -f "$jtag.new" "$jtag"
+    "$0" start
+    ;;
+jtag-end-locked)
+    "$0" stop
+    "$platform" quiesce
+    rm -f "$jtag"
+    ;;
+status)
+    "$LIDAR_SV" status "$SERVICE"
+    "$LIDAR_BOOT" status "$LIDAR_BOOT_CONFIG"
+    ;;
+run)
+    if [ "${LIDAR_STORAGE_MODE:-managed}" = boot-copy ]; then
+        export LIDAR_PERSIST_COMMAND="$LIDAR_STORAGE_EXEC"
+    fi
+    if [ "${LIDAR_NETWORK_ENABLED:-0}" = 1 ]; then
+        # rcS 已返回，网络服务与本服务由同一 runsvdir 并行启动。
+        attempts=0
+        until "$LIDAR_NETWORK_CTL" "$LIDAR_NETWORK_SOCKET" get >/dev/null 2>&1; do
+            attempts=$((attempts + 1))
+            [ "$attempts" -lt 15 ] || { echo '等待网络管理接口超时' >&2; exit 1; }
+            sleep 1
+        done
+    fi
+    uptime_seconds > "$LIDAR_RUN/started-at"
+    exec "$LIDAR_BOOT" run "$LIDAR_BOOT_CONFIG"
+    ;;
+check)
+    # 就绪仅表示管理 API 可访问；FAULT 仍应允许诊断，不要求采集 COMMITTED。
+    exec "$LIDAR_BOOT" ready "$LIDAR_BOOT_CONFIG"
+    ;;
+finish)
+    [ ! -f "$SERVICE/down" ] || exit 0
+    failures=0
+    [ ! -f "$LIDAR_RUN/failures" ] || read -r failures < "$LIDAR_RUN/failures"
+    case "$failures" in ''|*[!0-9]*) failures=$LIDAR_MAX_FAILURES ;; esac
+    started=0
+    [ ! -f "$LIDAR_RUN/started-at" ] || read -r started < "$LIDAR_RUN/started-at"
+    case "$started" in ''|*[!0-9]*) started=0 ;; esac
+    now=$(uptime_seconds)
+    if [ "$((now - started))" -ge "$LIDAR_STABLE_SECONDS" ]; then failures=0; fi
+    failures=$((failures + 1))
+    printf '%s\n' "$failures" > "$LIDAR_RUN/failures"
+    if [ "$failures" -ge "$LIDAR_MAX_FAILURES" ]; then
+        printf '管理进程连续退出 %s 次，已停止自动拉起；请检查配置、签名和持久状态\n' "$failures" > "$LIDAR_RUN/service-error"
+        cat "$LIDAR_RUN/service-error" >&2
+        : > "$SERVICE/down"
+        "$LIDAR_SV" down "$SERVICE"
+    else
+        sleep "$LIDAR_RETRY_SECONDS"
+    fi
+    ;;
+log)
+    exec "$LIDAR_LOGGER" -t lidar_mgrd
+    ;;
+scan)
+    [ ! -L "$LIDAR_SCAN" ] || exit 1
+    mkdir -p "$LIDAR_SCAN"
+    chmod 700 "$LIDAR_SCAN"
+    exec "$LIDAR_RUNSV_DIR" "$LIDAR_SCAN"
+    ;;
+*) echo '用法：lidar-service enable|start|stop|restart|jtag-prepare|jtag-resume|jtag-end|status|run|check|finish|log|scan' >&2; exit 2 ;;
+esac

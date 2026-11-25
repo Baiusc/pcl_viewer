@@ -1,0 +1,80 @@
+# Prerequisites
+*.d
+
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+
+# Linker output
+*.ilk
+*.map
+*.exp
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.la
+*.lo
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Kernel Module Compile Results
+*.mod*
+*.cmd
+.tmp_versions/
+modules.order
+Module.symvers
+Mkfile.old
+dkms.conf
+
+# vscode
+.vscode/
+you_see*
+
+# Build
+build/
+compile_commands.json
+
+sh/pkg/
+pkg/
+
+# Python
+# 注意: 必须忽略, 否则运行 scripts/ 下的验证脚本后产生的 __pycache__ 属于未跟踪
+# 文件, 会让构建出来的固件被标记为 -dirty(不可复现)
+__pycache__/
+*.pyc
+
+# AI Agent
+AGENTS.md
+CLAUDE.md
+
+# 统一构建产物与个人预设
+dist/
+CMakeUserPresets.json
+
+# init.d 是设备启动脚本目录，不属于编译依赖文件。
+!deploy/runit/rootfs/etc/init.d/
+!deploy/runit/rootfs/etc/init.d/*

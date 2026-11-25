@@ -1,0 +1,17 @@
+{
+  "model": "CS96-beta",
+  "package_dir": "/opt/lidar/current",
+  "public_key": "/etc/lidar/release-public.pem",
+  "openssl": "/usr/bin/openssl",
+  "state_dir": "/mnt/user/lidar-state",
+  "runtime_dir": "/run/lidar",
+  "socket_path": "/run/lidar/control.sock",
+  "base_config": "/etc/ys_conf.ini",
+  "adapter": "/usr/libexec/lidar/platform-adapter",
+  "initial_work_mode": 2,
+  "validated_work_modes": [],
+  "verify_timeout_ms": 30000,
+  "stop_timeout_ms": 5000,
+  "adapter_timeout_ms": 10000,
+  "settle_ms": 1000
+}

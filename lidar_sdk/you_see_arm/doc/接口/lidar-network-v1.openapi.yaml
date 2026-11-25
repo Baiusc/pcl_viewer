@@ -1,0 +1,258 @@
+openapi: 3.0.3
+info:
+  title: 激光雷达网络配置接口
+  version: 1.0.0
+  description: >-
+    配置自动地址、指定范围选址和固定地址。202 仅表示受理；重新发现设备后
+    通过新 IP 确认，默认 60 秒未确认则回滚。真实网卡、多机与断电验收待完成。
+paths:
+  /cgi-bin/lidar_network.cgi:
+    get:
+      summary: 查询当前网络、用户配置和设置任务
+      responses:
+        '200':
+          description: 查询成功；设置任务是否成功仍需检查 operation_code、transaction_phase 和 ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Snapshot'
+        '503':
+          description: 管理桥接或系统网络服务不可用
+    post:
+      summary: 设置、确认或恢复自动模式
+      description: >-
+        不接受 URL 查询参数或额外请求字段。确认须连接实际新 IPv4，CGI 根据
+        SERVER_ADDR 填入可信目标地址；设置或确认响应丢失时，客户端不能自动重发。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/SetRequest'
+                - $ref: '#/components/schemas/ConfirmRequest'
+                - $ref: '#/components/schemas/ResetRequest'
+      responses:
+        '200':
+          description: 配置已确认并持久化
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Snapshot'
+        '202':
+          description: 任务已受理，尚未完成探测、应用及重连确认
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Snapshot'
+        '400':
+          description: 请求字段或格式错误
+        '403':
+          description: 浏览器请求来源不被允许
+        '408':
+          description: 读取请求体超时
+        '409':
+          description: 模式切换、网络设置或确认状态冲突
+        '422':
+          description: 配置参数不符合设备约束
+        '500':
+          description: 持久化或配置操作失败
+        '503':
+          description: 网络服务不可用或配置故障
+  /cgi-bin/lidar_network_status.cgi:
+    get:
+      summary: 系统基础诊断页直接查询网络服务
+      description: 不依赖业务管理服务，只读，不接受 POST 或查询参数
+      responses:
+        '200':
+          description: 网络服务可查询，包括业务地址故障和恢复地址状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Snapshot'
+components:
+  schemas:
+    AutoConfig:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [auto]
+    StaticConfig:
+      type: object
+      additionalProperties: false
+      required: [mode, address, netmask]
+      properties:
+        mode:
+          type: string
+          enum: [static]
+        address:
+          type: string
+          format: ipv4
+          description: 普通 IPv4 主机地址，不使用 Link-Local、回环、组播及保留地址
+        netmask:
+          type: string
+          format: ipv4
+          description: 连续掩码，前缀长度 1～30
+        gateway:
+          type: string
+          description: 同一子网的网关；省略、空字符串或 0.0.0.0 表示无网关
+    PoolConfig:
+      type: object
+      additionalProperties: false
+      required: [mode, start, end, netmask]
+      properties:
+        mode:
+          type: string
+          enum: [pool]
+        start:
+          type: string
+          format: ipv4
+          description: 包含在候选范围内的起始地址
+        end:
+          type: string
+          format: ipv4
+          description: 包含在候选范围内的末地址；与起始地址同一子网，最多 65534 个候选
+        netmask:
+          type: string
+          format: ipv4
+        gateway:
+          type: string
+          description: 可选网关，不能被分配给设备
+    Config:
+      oneOf:
+        - $ref: '#/components/schemas/AutoConfig'
+        - $ref: '#/components/schemas/StaticConfig'
+        - $ref: '#/components/schemas/PoolConfig'
+    SetRequest:
+      type: object
+      additionalProperties: false
+      required: [op, config]
+      properties:
+        op:
+          type: string
+          enum: [network_set]
+        config:
+          $ref: '#/components/schemas/Config'
+    ConfirmRequest:
+      type: object
+      additionalProperties: false
+      required: [op, operation_id]
+      properties:
+        op:
+          type: string
+          enum: [network_confirm]
+        operation_id:
+          type: string
+          pattern: '^[0-9a-f]{32}$'
+          description: 必须通过新设备 IP 提交；本机目标地址由 CGI 获取，客户端不能指定
+    ResetRequest:
+      type: object
+      additionalProperties: false
+      required: [op]
+      properties:
+        op:
+          type: string
+          enum: [network_reset]
+    Snapshot:
+      type: object
+      description: >-
+        完整网络快照；错误响应不保证符合此结构。ready=true 可能仍在 WAIT_CONFIRM。
+        本次成功需核对设备、连接作用域、epoch、任务号、确认配置和实际地址。
+      required: [schema_version, code, message, simulation, ready, recovery, configuration_valid, pending, operation_id, operation_code, phase, transaction_phase, mac, epoch, generation, address, source, confirm_remaining_ms, confirmed_config, desired_config]
+      properties:
+        schema_version:
+          type: integer
+          enum: [1]
+        code:
+          type: integer
+        message:
+          type: string
+        simulation:
+          type: boolean
+        ready:
+          type: boolean
+          description: 当前有经过探测的业务地址；恢复地址不算业务就绪
+        recovery:
+          type: boolean
+        configuration_valid:
+          type: boolean
+          description: 为 false 时持久配置无效或不可访问，配置对象不能视为有效用户数据
+        pending:
+          type: boolean
+        operation_id:
+          type: string
+          pattern: '^([0-9a-f]{32})?$'
+          description: 当前或最后任务号，空字符串表示没有；重启可能保留，不是客户端幂等键
+        operation_code:
+          type: integer
+          description: 202 处理中，200 确认成功，409 冲突，408 确认超时，500 操作失败
+        error:
+          type: string
+        phase:
+          type: string
+          enum: [WAIT_DHCP, PROBING, READY, LINK_DOWN, BACKOFF, NO_ADDRESS, FAULT]
+        transaction_phase:
+          type: string
+          enum: [IDLE, PROBING, PREPARED, APPLY_DELAY, WAIT_CONFIRM, COMMITTED, FAILED, ROLLED_BACK]
+        address:
+          type: string
+          description: 当前实际 IPv4；空字符串表示当前没有地址
+        interface:
+          type: string
+          description: 设备自身接口名，不是电脑接口索引
+        netmask:
+          type: string
+        gateway:
+          type: string
+          description: 当前实际网关；空字符串表示无网关
+        candidate_address:
+          type: string
+          description: 探测候选，不保证已应用或可连接
+        source:
+          type: string
+          enum: ['', dhcp, linklocal, static, pool, recovery]
+        identity:
+          type: string
+        identity_source:
+          type: string
+          enum: [sn, mac]
+        sn:
+          type: string
+        mac:
+          type: string
+        model:
+          type: string
+        legacy:
+          type: boolean
+          description: 旧协议适配状态，新 HTTP 客户端不设置此字段
+        conflict_mac:
+          type: string
+        attempt:
+          type: integer
+          minimum: 0
+        generation:
+          type: integer
+          minimum: 0
+          description: 部分状态变化计数；事务提交不保证递增，不能据此忽略新快照
+        epoch:
+          type: string
+          pattern: '^[0-9a-f]{32}$'
+          description: 本次网络服务进程实例标识；改变后停止旧任务的自动确认
+        mdns_running:
+          type: boolean
+          description: 子进程存在，不保证客户端收到 mDNS
+        management_port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        confirm_remaining_ms:
+          type: integer
+          minimum: 0
+          description: WAIT_CONFIRM 时的剩余确认窗口；其他阶段为 0，不表示其他阶段超时
+        confirmed_config:
+          $ref: '#/components/schemas/Config'
+        desired_config:
+          $ref: '#/components/schemas/Config'

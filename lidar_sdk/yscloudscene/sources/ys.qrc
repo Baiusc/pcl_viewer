@@ -1,0 +1,43 @@
+<RCC>
+    <qresource prefix="/">
+        <file>opengl/shader/shader_axis.fs</file>
+        <file>opengl/shader/shader_axis.vs</file>
+        <file>opengl/shader/shader_mesh.fs</file>
+        <file>opengl/shader/shader_mesh.vs</file>
+        <file>opengl/shader/shader_point.fs</file>
+        <file>opengl/shader/shader_point.vs</file>
+        <file>image/icons/fastforward.svg</file>
+        <file>image/icons/fastrewind.svg</file>
+        <file>image/icons/gotoend.svg</file>
+        <file>image/icons/gotostart.svg</file>
+        <file>image/icons/pause.svg</file>
+        <file>image/icons/play.svg</file>
+        <file>image/icons/record.svg</file>
+        <file>image/icons/record_stop.svg</file>
+        <file>image/icons/stop.svg</file>
+        <file>image/icons/record_pause.svg</file>
+        <file>image/icons/record_continue.svg</file>
+        <file>image/icons/list.svg</file>
+        <file>image/chromatography.png</file>
+        <file>Internationalization/YSCloudScene_en_US.qm</file>
+        <file>Internationalization/YSCloudScene_zh_CN.qm</file>
+        <file>image/icons/sun.svg</file>
+        <file>image/icons/record_settings.svg</file>
+        <file>image/icons/hide_left.svg</file>
+        <file>image/icons/show_right.svg</file>
+        <file>image/icons/pointcloud_save_available.svg</file>
+        <file>image/icons/pointcloud_save_unavailable.svg</file>
+        <file>image/icons/configure_tree_available.svg</file>
+        <file>image/icons/configure_tree_unavailable.svg</file>
+        <file>image/icons/pointcloud/icon_pointcloud_top.svg</file>
+        <file>image/icons/pointcloud/icon_pointcloud_bottom.svg</file>
+        <file>image/icons/pointcloud/icon_pointcloud_front.svg</file>
+        <file>image/icons/pointcloud/icon_pointcloud_back.svg</file>
+        <file>image/icons/pointcloud/icon_pointcloud_left.svg</file>
+        <file>image/icons/pointcloud/icon_pointcloud_right.svg</file>
+        <file>image/icons/pointcloud/icon_iso_pointcloud_front.svg</file>
+        <file>image/icons/pointcloud/icon_iso_pointcloud_back.svg</file>
+        <file>image/icons/pointcloud/icon_pointcloud_pick.svg</file>
+        <file>image/icons/pointcloud/icon_pointcloud_picklist.svg</file>
+    </qresource>
+</RCC>

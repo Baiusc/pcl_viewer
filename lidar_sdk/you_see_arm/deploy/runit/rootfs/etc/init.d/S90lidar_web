@@ -1,0 +1,30 @@
+#!/bin/sh
+# Web 独立于采集就绪状态；管理服务故障时仍保留诊断入口。
+set -eu
+DAEMON=/www/sbin/lighttpd
+PIDFILE=/www/www.pid
+case "${1:-}" in
+start)
+    if [ -f "$PIDFILE" ] && start-stop-daemon -K -t -p "$PIDFILE" -x "$DAEMON" >/dev/null 2>&1; then
+        exit 0
+    fi
+    if [ -x /usr/libexec/lidar/lidar-web ]; then
+        /usr/libexec/lidar/lidar-web prepare
+    fi
+    [ -x "$DAEMON" ] && [ -f /www/config/lighttpd.conf ] || exit 1
+    export LD_LIBRARY_PATH=/www/lib
+    start-stop-daemon -S -o -p "$PIDFILE" -x "$DAEMON" -- -f /www/config/lighttpd.conf -m /www/lib
+    ;;
+stop)
+    start-stop-daemon -K -o -p "$PIDFILE" -x "$DAEMON" -s TERM
+    count=0
+    while start-stop-daemon -K -t -p "$PIDFILE" -x "$DAEMON" >/dev/null 2>&1; do
+        count=$((count + 1))
+        [ "$count" -lt 50 ] || { echo 'Web 服务未按时停止' >&2; exit 1; }
+        sleep 0.1
+    done
+    rm -f "$PIDFILE"
+    ;;
+restart) "$0" stop; "$0" start ;;
+*) echo '用法：S90lidar_web start|stop|restart' >&2; exit 2 ;;
+esac
