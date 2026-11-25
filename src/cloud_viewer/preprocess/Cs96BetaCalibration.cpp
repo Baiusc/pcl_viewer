@@ -175,6 +175,26 @@ bool Cs96BetaCalibration::load(const std::filesystem::path &path, std::string &e
     return finalizeGeometry(error);
 }
 
+void Cs96BetaCalibration::normalizeStandardEncoder()
+{
+    // 旧标定包：[standard_encoder] 的 angle_face_N 是 PA 计数（0~240，1.5°/计数）。
+    // 2026-11 起的新 ARM 标定包改成了 20 位原始编码器值（0~65535，65536=360°）：
+    // 这台 CS96 Beta 为 3000/19384/35768/52152，恰好四个面各相差 90°。
+    // 只要有一个面超过 240 就按新量纲整体折算，避免同一份表里混用两种单位。
+    constexpr float kRawCountsPerRevolution = 65536.0f;
+    const bool rawScale =
+        std::any_of(standardEncoder_.begin(), standardEncoder_.end(),
+                    [](float value) { return value > kPaCountsPerRevolution; });
+    if (!rawScale)
+    {
+        return;
+    }
+    for (float &value : standardEncoder_)
+    {
+        value = value * kPaCountsPerRevolution / kRawCountsPerRevolution;
+    }
+}
+
 bool Cs96BetaCalibration::finalizeGeometry(std::string &error)
 {
     // 96×800（IMX459）与 120×800（SL100）共用同一套解算，只拒绝明显非法的尺寸。
@@ -183,6 +203,9 @@ bool Cs96BetaCalibration::finalizeGeometry(std::string &error)
         error = "标定尺寸非法: " + std::to_string(linesV_) + "x" + std::to_string(linesH_);
         return false;
     }
+
+    // 面起始粗刻度可能是旧 PA 计数（0~240）或新 20 位原始编码器值（0~65535）。
+    normalizeStandardEncoder();
 
     // 逐线数组按标定表声明的线数对齐（旧表 96，新表 120）。
     omegaDelta_.resize(static_cast<std::size_t>(linesV_), 0.0f);
@@ -399,6 +422,12 @@ bool Cs96BetaCalibration::parseIni(const std::filesystem::path &path, std::strin
             }
         }
     }
+
+    // 旧标定包：[standard_encoder] 的 angle_face_N 是 PA 计数（0~240，1.5°/计数）。
+    // 2026-11 起的新 ARM 标定包改成了 20 位原始编码器值（0~65535，65536=360°），
+    // 例如 3000/19384/35768/52152 恰为四个面间隔 90°。两种量纲都折算回 PA 计数，
+    // 后续几何公式、锚定表派生与打包写回都无需再区分。
+    normalizeStandardEncoder();
 
     // 传统目录布局（ini + 多 csv）仅用于旧的 96×800 标定包；
     // 120×800 请使用 tools/pack_cs96beta_calibration.py 生成的聚合 CSV。

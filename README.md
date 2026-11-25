@@ -119,6 +119,32 @@ cmake --build build-msys2 --target cloud_viewer -j 8
   `C:\Program Files\...` 会让 `export` 直接失败、`tail` 等命令丢失；用
   `bash --noprofile --norc <脚本>` 更稳。
 
+#### MSVC + Ninja（本机 Windows 迭代路径，PCL 1.14 AllInOne + VTK 9.3）
+
+`build-ninja` 是本机配置好的构建树，补好 MSVC 环境后一条命令即可：
+
+```bat
+tools\build-win-msvc.bat                  REM 编译到 build-ninja
+tools\build-win-msvc.bat build-ninja all  REM 编译全部目标
+```
+
+脚本只做两件事：`vcvars64` 补齐 `cl.exe` 的 INCLUDE/LIB/PATH，然后调用 ninja。
+编译完成后 CMake 的 POST_BUILD 规则会自动把 exe 与运行时 DLL 同步到 `dist-local\`，
+**所以永远只需要认 `dist-local\cloud_viewer.exe`**，不用管构建树里那份。
+
+#### 目录职责（为什么有两个 exe）
+
+| 目录 | 是什么 | 能不能直接运行 | 谁维护 |
+|---|---|---|---|
+| `build-ninja\` | CMake 构建树：.obj、.lib、编译缓存，也有一份链接产物 | 能，但**不是给用户用的** | `cmake` / `ninja`，随时可删可重建 |
+| `dist-local\` | 可直接运行/拷走的成品目录：exe + 全部 DLL + `calib\` + `plink.exe` | **是，认这一个** | 编译后自动同步；`tools\pack-release.ps1` 也读它 |
+| `dist-release\` | 便携包暂存目录，`pack-release.ps1` 生成的中间态 | 能，但只是 zip 的半成品 | 打包脚本，可随时删 |
+
+两者不是 Debug/Release 的关系：**构建树按需可以有多个**（`build-ninja`、要调试时再配一个
+`-DCMAKE_BUILD_TYPE=Debug` 的 `build-ninja-debug`），而 `dist-local` 始终只有一份，
+装的是当前想跑的那个构建的产物。用构建树里的 exe 直接跑，很容易出现「改了代码但跑的是旧
+exe」「DLL 与该目录里残留的副本版本不一致」这类问题，所以固定成「构建树只产出，dist 只运行」。
+
 #### 打包便携版（拷到另一台 Windows 电脑）
 
 ```bat
@@ -297,6 +323,60 @@ ctest --test-dir build --output-on-failure
 | 标定 | `Select Calib` 载入聚合 CSV；`Update Calib` 用目录散表重算聚合表（写回所选目录并同步到 `build/calib`） |
 | 帧率自检 | `CV_LIVE_FPS=1` 每 2 秒输出窗口帧率与 `gap_max`；`CV_FACE_TRACE=1` 打印面号轮转 |
 
+### 设备发现（多网口：有线 + 无线）
+
+笔记本通常同时有「有线以太网」和「无线 WLAN」两块物理网口，雷达可能接在其中任意一块上，
+两条链路的发现都要覆盖，且有线优先：
+
+1. **UDP 55000 广播**（绑定 `INADDR_ANY`，两块网口都能收到）；
+2. **系统邻居表**（Windows `GetIpNetTable2` / Linux `/proc/net/arp`）：最近通信过的设备直接命中；
+3. **已知地址定向探测**：上次连接的设备 + `CV_RADAR_IP` / `CV_BETA_IP`，可覆盖
+   「本机 169.254.222.6/16、雷达 169.254.7.30」这种同二层但跨 /24 的情况；
+4. **逐网口网段扫描**：ARP（Windows `SendARP` 按网口源地址发出，避免多网口走错网卡）
+   / Linux `ping -I <iface>`，按 MAC 前缀过滤。
+
+几个必须知道的细节：
+
+- `/24` 及更小的网段全量扫；更宽（如直连自动地址 `169.254/16`）只扫本机所在 `/24`，
+  跨 `/24` 的已知设备靠第 3 步定向探测——`/16` 全量是 6.5 万个地址，ARP 超时按秒计不可接受。
+- Wi-Fi Direct / Hyper-V / VMware 等虚拟网口（同样带 169.254 地址）会自动忽略。
+- 只从邻居表缓存命中的条目会补一次 ARP 确认，未回应的在日志里标「未确认在线」（可能已断电）。
+- 日志先打印 `本机网口: 有线 以太网 169.254.222.6/16；无线 WLAN 10.41.30.130/24`，
+  搜不到时先看这一行是否包含雷达所接的网口。
+
+### 新版 ARM 固件（lidar_mgrd）
+
+2026-11-24 起的 ARM 包把 `you_see` 交给 `lidar_mgrd`（runsv 守护）管理，操作入口整体变了。
+`cloud_viewer` 按设备是否暴露 `/cgi-bin/lidar_status.cgi` 自动分流，新旧固件都能连：
+
+| 操作 | 旧固件 | 新固件（lidar_mgrd） |
+|---|---|---|
+| 基准配置 | `/etc/ys_conf.ini` | `/run/lidar-data/lidar/config/ys_conf.ini` |
+| 运行期配置 | — | `/run/lidar/manager/ys_conf.ini`（mgrd 每次拉起 you_see 重新生成） |
+| 标定 | `/etc/ys_calibration.ini` | `/run/lidar-data/lidar/calibration/ys_calibration.ini`（`/etc/...` 是它的链接） |
+| 重启 | kill + `setsid /root/you_see` | `/usr/libexec/lidar/lidar-service restart` |
+| 切模式 | 改 `work_mode` 后重启 | `POST /cgi-bin/lidar_switch.cgi`，body `{"work_mode":N}` |
+| 状态 | 无 | `GET /cgi-bin/lidar_status.cgi`（phase / actual_mode / validated_work_modes） |
+
+必须注意的三点：
+
+- 新固件的 `work_mode` 由 mgrd 每次拉起 you_see 时重写，**改 INI 无效**，必须走 switch。
+- switch 返回 `202` 只表示受理，要等到 `phase=COMMITTED && actual_mode=N`；切换会中断推流几秒。
+- 改 `center_ip/center_data_port` 后要 restart，并以**运行期配置**为准校验；只写文件不算生效。
+  程序会在校验失败时回滚原配置。
+
+模式切换与状态查询走 HTTP，不需要 SSH 密码；只有改推流地址、走 lidar-service 重启才需要 SSH
+（Windows 下用同目录的 `plink.exe`）。完整实测记录见 `doc/cs96beta_mgrd_firmware.md`，
+给上位机同事的通讯协议见 `doc/pc_radar_protocol.md`。
+
+**新旧固件不是二选一**：设备探测到 `lidar_status.cgi` 就整条链路走新固件分支，探测不到
+（404 / HTML / 非 mgrd 形态的 JSON）就完全走原来那套 `/etc/ys_conf.ini` + kill/setsid 流程，
+旧固件的推流目标核对、模式切换、重启实现都原样保留。两边共用同一套 UDP 解析和标定解算。
+
+标定包也要兼容两代：2026-11 起 `ys_calibration.ini` 的 `[standard_encoder]` 从 PA 计数
+（`0~240`）改成了 20 位编码器值（`0~65535`），程序按「任一 `angle_face_*` > 240」自动折算，
+不需要手动改标定文件。
+
 ### 角度标定流程（四步）
 
 ```text
@@ -352,6 +432,36 @@ ctest --test-dir build --output-on-failure
 | `CV_LIVE_FPS` | 每 2 秒输出帧率 / `gap_max` / 分阶段耗时 |
 | `CV_FACE_TRACE` | 打印发布的面号，验证四面轮转 |
 | `CV_ANGLE_PROBE` | 打印首末 slot 的水平角与坐标，验证左手系方向 |
+| `CV_FORCE_SCAN` | 设为任意值则跳过广播，直接逐网口扫描（排障用） |
+| `CV_RADAR_MAC_PREFIX` | 扫描时过滤的 MAC 前缀，默认 `98:03:8a`；设为空格可列出全部邻居 |
+| `CV_SCAN_SUBNETS` | 额外补扫的 /24，逗号分隔，如 `169.254.7,192.168.1`（雷达不在本机网口 /24 内时用） |
+| `CV_BETA_SSH_PASS` | 设备 SSH 密码；不设则用配置文件的 `BETA_SSH_PASS`，都没有就用出厂默认 `111` |
+| `CV_BETA_KNOWN_HOSTS` | plink 主机密钥记录路径，默认 `~/.config/cloud_viewer/beta_known_hosts` |
+| `CV_BETA_HTTP_PORT` | 设备管理接口端口，默认 80（调试用） |
+| `CV_NO_AUTO_SEARCH` | 设为任意值则启动时不自动搜索设备（配合 `CV_BETA_IP` 直连，排障用） |
+
+### 上电后必须先改 center_ip（新固件的行为，不是 bug）
+
+新固件把配置放在 tmpfs（`/run/lidar-data/lidar/config/ys_conf.ini` 与运行期
+`/run/lidar/manager/ys_conf.ini`），**设备一重启就回落到镜像里的默认上位机**
+（本次实测为 `192.168.110.15:50027`），所以每次上电后都要重新把 `center_ip` /
+`center_data_port` 指向本机，否则表现就是「连上了、一直不出点云」。
+
+这段核对由「连接设备」自动完成，走 SSH（出厂 `root/111`，无需额外配置）：
+
+1. 取到设备的默认目标与期望目标不同 → 写基准配置 → `lidar-service restart`；
+2. 轮询运行期配置确认 mgrd 真的换了目标，超时则回滚并重启，不会留下指向别的上位机的雷达；
+3. 只有目标核对通过后才开始监听 UDP 50007。
+
+排障要点（都是实测踩坑）：
+
+- 设备刚上电时 web（80）先起来、sshd（22）晚十几秒才可用；程序会对 22 端口做有限轮询，
+  仍不行时日志会明确写出「web 可用但 22 未监听」。
+- 新固件的 `set_ssh.cgi` / `reboot.cgi` 均已停用（返回 501），SSH 只能靠设备自身启动。
+- 该固件的 sshd 主机密钥不持久化，**每次重启都会变**，程序会自动更新本机信任记录并重试，
+  日志里的 `[HOST-KEY]` 属正常现象。
+- `lidar-service` 连续重启失败累计后会进入 `phase=FAULT`（`actual_mode=-1`），
+  此时改配置不会生效，需要设备断电重启恢复。
 
 ## 与设计文档的偏差记录
 

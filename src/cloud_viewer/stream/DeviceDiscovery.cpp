@@ -6,13 +6,16 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <map>
 #include <mutex>
 #include <set>
 #include <sstream>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -34,6 +37,7 @@
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 #include <ipifcons.h> // IF_TYPE_SOFTWARE_LOOPBACK / IfOperStatusUp
+#include <netioapi.h> // GetIpNetTable2：读系统邻居表
 #endif
 
 namespace cloud_viewer
@@ -107,13 +111,82 @@ std::string classifyModel(const std::string &serial)
     return "LiDAR";
 }
 
-/// 本机所有已启用、非回环、掩码为 /24 的网段前缀（如 "10.42.0"）。
-std::vector<std::string> localSubnetPrefixes()
+/// 本机可用网口（已排除回环/虚拟网口）。多网口是笔记本的常态：
+/// 有线接雷达（常为 169.254.x.x/16 自动地址）、无线连公司网（10.x/24）。
+/// 只扫「唯一一个 /24」会漏掉接在另一块网口上的雷达，因此必须逐网口扫描。
+struct AdapterInfo
 {
-    std::vector<std::string> prefixes;
+    std::string name;
+    std::string description;
+    std::string address;
+    int prefixLength = 24;
+    std::uint32_t ifIndex = 0;
+    bool up = false;
+    bool linkLocal = false;
+    bool virtualAdapter = false;
+    bool wireless = false;
+};
+
+/// 网卡描述里的虚拟/隧道关键字：这些网口（Wi-Fi Direct、Hyper-V、VMware 等）
+/// 也会带 169.254/16 地址，混进来只会让扫描变慢并干扰网段判断。
+bool looksVirtualAdapter(const std::string &text)
+{
+    static const char *kKeywords[] = {
+        "wi-fi direct", "wifi direct", "virtual", "vmware", "virtualbox", "hyper-v",
+        "vethernet",   "loopback",    "tap-",    "tap adapter", "tunnel",   "teredo",
+        "bluetooth",   "npcap",       "wintun",  "zerotier",    "tailscale", "docker",
+        "veth",        "br-",         "virbr",   "default switch",
+    };
+    for (const char *keyword : kKeywords)
+    {
+        if (text.find(keyword) != std::string::npos)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool looksWirelessAdapter(const std::string &text)
+{
+    static const char *kKeywords[] = {"wi-fi", "wifi", "wireless", "wlan", "802.11", "wlp"};
+    for (const char *keyword : kKeywords)
+    {
+        if (text.find(keyword) != std::string::npos)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string toLower(std::string text)
+{
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return text;
+}
+
 #ifdef _WIN32
+std::string narrow(const wchar_t *text)
+{
+    if (text == nullptr)
+    {
+        return std::string();
+    }
+    const int size = ::WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+    if (size <= 1)
+    {
+        return std::string();
+    }
+    std::string out(static_cast<std::size_t>(size - 1), '\0');
+    ::WideCharToMultiByte(CP_UTF8, 0, text, -1, &out[0], size, nullptr, nullptr);
+    return out;
+}
+
+std::vector<AdapterInfo> enumerateAdapters()
+{
     ensureWinsock();
-    // GetAdaptersAddresses 需要先给定缓冲区，不够时会返回 ERROR_BUFFER_OVERFLOW 并回填所需大小。
     ULONG size = 16 * 1024;
     std::vector<unsigned char> buffer(size, 0);
     auto *addrs = reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buffer.data());
@@ -127,26 +200,32 @@ std::vector<std::string> localSubnetPrefixes()
     }
     if (status != NO_ERROR)
     {
-        return prefixes;
+        return {};
     }
 
-    std::set<std::string> seen;
+    std::vector<AdapterInfo> adapters;
     for (IP_ADAPTER_ADDRESSES *adapter = addrs; adapter != nullptr; adapter = adapter->Next)
     {
-        if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK || adapter->OperStatus != IfOperStatusUp)
+        if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK)
         {
             continue;
         }
+        AdapterInfo info;
+        info.name = narrow(adapter->FriendlyName);
+        info.description = narrow(adapter->Description);
+        info.ifIndex = adapter->IfIndex;
+        info.up = adapter->OperStatus == IfOperStatusUp;
+
+        const std::string haystack = toLower(info.name + " " + info.description);
+        info.virtualAdapter = looksVirtualAdapter(haystack) ||
+                              adapter->IfType == IF_TYPE_TUNNEL || adapter->IfType == IF_TYPE_PPP;
+        info.wireless = adapter->IfType == IF_TYPE_IEEE80211 || looksWirelessAdapter(haystack);
+
         for (IP_ADAPTER_UNICAST_ADDRESS *unicast = adapter->FirstUnicastAddress; unicast != nullptr;
              unicast = unicast->Next)
         {
             if (unicast->Address.lpSockaddr == nullptr ||
                 unicast->Address.lpSockaddr->sa_family != AF_INET)
-            {
-                continue;
-            }
-            // 只扫 /24：更宽的网段要探测的地址数量不可控。
-            if (unicast->OnLinkPrefixLength != 24)
             {
                 continue;
             }
@@ -156,24 +235,23 @@ std::vector<std::string> localSubnetPrefixes()
             {
                 continue;
             }
-            const std::string value(text);
-            const auto dot = value.find_last_of('.');
-            if (dot == std::string::npos)
-            {
-                continue;
-            }
-            const std::string prefix = value.substr(0, dot);
-            if (seen.insert(prefix).second)
-            {
-                prefixes.push_back(prefix);
-            }
+            AdapterInfo entry = info;
+            entry.address = text;
+            entry.prefixLength = static_cast<int>(unicast->OnLinkPrefixLength);
+            entry.linkLocal = entry.address.rfind("169.254.", 0) == 0;
+            adapters.push_back(entry);
         }
     }
+    return adapters;
+}
 #else
+std::vector<AdapterInfo> enumerateAdapters()
+{
+    std::vector<AdapterInfo> adapters;
     ifaddrs *list = nullptr;
     if (::getifaddrs(&list) != 0)
     {
-        return prefixes;
+        return adapters;
     }
     for (ifaddrs *it = list; it != nullptr; it = it->ifa_next)
     {
@@ -185,50 +263,261 @@ std::vector<std::string> localSubnetPrefixes()
         {
             continue;
         }
-        if ((it->ifa_flags & IFF_LOOPBACK) != 0 || (it->ifa_flags & IFF_UP) == 0)
+        if ((it->ifa_flags & IFF_LOOPBACK) != 0)
         {
             continue;
         }
         const auto *address = reinterpret_cast<const sockaddr_in *>(it->ifa_addr);
         const auto *mask = reinterpret_cast<const sockaddr_in *>(it->ifa_netmask);
-        // 只扫 /24：更宽的网段要 ping 的地址数量不可控。
-        if (ntohl(mask->sin_addr.s_addr) != 0xFFFFFF00u)
-        {
-            continue;
-        }
         char text[INET_ADDRSTRLEN] = {0};
         if (::inet_ntop(AF_INET, &address->sin_addr, text, sizeof(text)) == nullptr)
         {
             continue;
         }
-        const std::string value(text);
-        const auto dot = value.find_last_of('.');
-        if (dot == std::string::npos)
+        const std::uint32_t maskBits = ntohl(mask->sin_addr.s_addr);
+        int prefixLength = 0;
+        for (std::uint32_t bit = 0x80000000u; bit != 0 && (maskBits & bit) != 0; bit >>= 1)
+        {
+            ++prefixLength;
+        }
+
+        AdapterInfo info;
+        info.name = it->ifa_name != nullptr ? it->ifa_name : "";
+        info.address = text;
+        info.prefixLength = prefixLength;
+        info.ifIndex = ::if_nametoindex(info.name.c_str());
+        info.up = (it->ifa_flags & IFF_UP) != 0;
+        info.linkLocal = info.address.rfind("169.254.", 0) == 0;
+
+        const std::string haystack = toLower(info.name);
+        // Linux 用网口名前缀区分：wl* 无线、en*/eth* 有线；虚拟网桥与容器网口跳过。
+        info.virtualAdapter = haystack.rfind("lo", 0) == 0 || haystack.rfind("docker", 0) == 0 ||
+                              haystack.rfind("veth", 0) == 0 || haystack.rfind("br-", 0) == 0 ||
+                              haystack.rfind("virbr", 0) == 0 || haystack.rfind("tun", 0) == 0 ||
+                              haystack.rfind("tap", 0) == 0;
+        info.wireless = haystack.rfind("wl", 0) == 0;
+        // /sys/class/net/<if>/wireless 存在即为无线网卡（比名字更可靠）。
+        std::error_code ec;
+        if (!info.wireless && std::filesystem::exists("/sys/class/net/" + info.name + "/wireless", ec))
+        {
+            info.wireless = true;
+        }
+        adapters.push_back(info);
+    }
+    ::freeifaddrs(list);
+    return adapters;
+}
+#endif
+
+std::uint32_t ipToUint(const std::string &ip)
+{
+    in_addr address{};
+    if (::inet_pton(AF_INET, ip.c_str(), &address) != 1)
+    {
+        return 0;
+    }
+    return ntohl(address.s_addr);
+}
+
+std::string uintToIp(std::uint32_t value)
+{
+    in_addr address{};
+    address.s_addr = htonl(value);
+    char text[INET_ADDRSTRLEN] = {0};
+    if (::inet_ntop(AF_INET, &address, text, sizeof(text)) == nullptr)
+    {
+        return std::string();
+    }
+    return text;
+}
+
+bool sameSubnet(const std::string &ip, const std::string &localIp, int prefixLength)
+{
+    const std::uint32_t target = ipToUint(ip);
+    const std::uint32_t local = ipToUint(localIp);
+    if (target == 0 || local == 0)
+    {
+        return false;
+    }
+    const int prefix = std::min(std::max(prefixLength, 1), 32);
+    const std::uint32_t mask = (prefix == 32) ? 0xFFFFFFFFu : (0xFFFFFFFFu << (32 - prefix));
+    return (target & mask) == (local & mask);
+}
+
+/// 该网口要扫的主机地址。
+///
+/// /24 及更小的网段全量扫；更宽的网段（如直连自动地址 169.254/16）只扫本机所在
+/// /24 —— /16 全量是 6.5 万个地址，ARP 串行超时按秒计，不可接受。
+/// 跨 /24 的已知设备靠 hints 定向探测解决。
+std::vector<std::string> sweepTargetsFor(const AdapterInfo &adapter)
+{
+    std::vector<std::string> targets;
+    const std::int64_t hostBits = 32 - std::min(std::max(adapter.prefixLength, 1), 32);
+    const int effectivePrefix =
+        (hostBits <= 10) ? adapter.prefixLength : 24; // > 1022 台主机时退化为本机 /24
+    const std::uint32_t value = ipToUint(adapter.address);
+    if (value == 0)
+    {
+        return targets;
+    }
+    const std::uint32_t mask =
+        (effectivePrefix == 32) ? 0xFFFFFFFFu : (0xFFFFFFFFu << (32 - effectivePrefix));
+    const std::uint32_t network = value & mask;
+    const std::uint32_t broadcast = network | ~mask;
+    for (std::uint32_t host = network + 1; host < broadcast; ++host)
+    {
+        targets.push_back(uintToIp(host));
+    }
+    return targets;
+}
+
+/// 邻居表里的组播/广播/保留地址不是设备：224/4 组播、255 广播、x.x.x.255 子网广播。
+bool isUnicastHostAddress(const std::string &ip)
+{
+    in_addr address{};
+    if (::inet_pton(AF_INET, ip.c_str(), &address) != 1)
+    {
+        return false;
+    }
+    const std::uint32_t value = ntohl(address.s_addr);
+    const std::uint8_t first = static_cast<std::uint8_t>((value >> 24) & 0xFF);
+    const std::uint8_t last = static_cast<std::uint8_t>(value & 0xFF);
+    if (first == 0 || first >= 224 || last == 0 || last == 255)
+    {
+        return false;
+    }
+    return true;
+}
+
+/// 系统邻居表（缓存命中即可发现设备，成本为零）。
+struct NeighborRow
+{
+    std::string ip;
+    std::string mac;
+    std::uint32_t ifIndex = 0;
+    std::string interfaceName;
+};
+
+#ifdef _WIN32
+std::vector<NeighborRow> readNeighborTable()
+{
+    std::vector<NeighborRow> rows;
+    PMIB_IPNET_TABLE2 table = nullptr;
+    if (::GetIpNetTable2(AF_INET, &table) != NO_ERROR || table == nullptr)
+    {
+        return rows;
+    }
+    for (ULONG i = 0; i < table->NumEntries; ++i)
+    {
+        const MIB_IPNET_ROW2 &row = table->Table[i];
+        if (row.Address.si_family != AF_INET || row.PhysicalAddressLength < 6)
         {
             continue;
         }
-        prefixes.push_back(value.substr(0, dot));
+        // Unreachable/Incomplete 是「扫过但没人应答」的残留，不能当发现结果。
+        if (row.State == NlnsUnreachable || row.State == NlnsIncomplete)
+        {
+            continue;
+        }
+        char text[INET_ADDRSTRLEN] = {0};
+        if (::inet_ntop(AF_INET, &row.Address.Ipv4.sin_addr, text, sizeof(text)) == nullptr)
+        {
+            continue;
+        }
+        if (!isUnicastHostAddress(text))
+        {
+            continue;
+        }
+        NeighborRow entry;
+        entry.ip = text;
+        entry.mac = macToString(row.PhysicalAddress);
+        entry.ifIndex = row.InterfaceIndex;
+        rows.push_back(entry);
     }
-    ::freeifaddrs(list);
-#endif
-    return prefixes;
+    ::FreeMibTable(table);
+    return rows;
 }
+#else
+std::vector<NeighborRow> readNeighborTable()
+{
+    std::vector<NeighborRow> rows;
+    std::ifstream arp("/proc/net/arp");
+    std::string line;
+    bool headerSkipped = false;
+    while (std::getline(arp, line))
+    {
+        if (!headerSkipped)
+        {
+            headerSkipped = true;
+            continue;
+        }
+        std::istringstream fields(line);
+        std::string ip;
+        std::string hwType;
+        std::string flags;
+        std::string mac;
+        std::string mask;
+        std::string device;
+        if (!(fields >> ip >> hwType >> flags >> mac >> mask >> device))
+        {
+            continue;
+        }
+        if (flags != "0x2" || mac == "00:00:00:00:00:00")
+        {
+            continue;
+        }
+        if (!isUnicastHostAddress(ip))
+        {
+            continue;
+        }
+        NeighborRow entry;
+        entry.ip = ip;
+        entry.mac = mac;
+        entry.interfaceName = device;
+        entry.ifIndex = ::if_nametoindex(device.c_str());
+        rows.push_back(entry);
+    }
+    return rows;
+}
+#endif
 
 #ifdef _WIN32
-/// 对本机 /24 网段做一轮 SendARP 扫描，返回 (ip, mac)。
+/// 对单个地址发一次 ARP 请求。
+///
+/// SendARP 的第二个参数是「用哪个源地址发」。多网口机器上两块网卡常常都是
+/// 169.254/16（无线直连虚拟网卡 + 有线），不指定源地址时由系统按路由挑，
+/// 很容易从错误的网卡发出去而收不到回应，因此这里必须按网口绑定源地址。
+bool arpProbe(const std::string &ip, const std::string &sourceIp, std::string &mac)
+{
+    in_addr target{};
+    in_addr source{};
+    if (::inet_pton(AF_INET, ip.c_str(), &target) != 1)
+    {
+        return false;
+    }
+    const ULONG sourceAddress =
+        (::inet_pton(AF_INET, sourceIp.c_str(), &source) == 1) ? source.s_addr : 0;
+    ULONG macBytes[2] = {0, 0};
+    ULONG length = sizeof(macBytes);
+    if (::SendARP(target.s_addr, sourceAddress, macBytes, &length) != NO_ERROR || length < 6)
+    {
+        return false;
+    }
+    const auto *bytes = reinterpret_cast<const unsigned char *>(macBytes);
+    const std::string text = macToString(bytes);
+    if (text == "00:00:00:00:00:00")
+    {
+        return false;
+    }
+    mac = text;
+    return true;
+}
+
+/// 对本机一个网口的地址列表做 SendARP 扫描，返回 (ip, mac)。
 /// SendARP 走二层解析、不经过防火墙，适合作为「广播被拦截」时的兜底发现手段。
 std::vector<std::pair<std::string, std::string>>
-sendArpSweep(const std::vector<std::string> &subnets)
+sendArpSweep(const std::vector<std::string> &targets, const std::string &sourceIp)
 {
-    std::vector<std::string> targets;
-    for (const std::string &subnet : subnets)
-    {
-        for (int host = 1; host <= 254; ++host)
-        {
-            targets.push_back(subnet + "." + std::to_string(host));
-        }
-    }
-
     std::vector<std::pair<std::string, std::string>> rows;
     if (targets.empty())
     {
@@ -237,8 +526,8 @@ sendArpSweep(const std::vector<std::string> &subnets)
 
     std::mutex mutex;
     std::atomic<std::size_t> next{0};
-    // 并发度 32：ARP 请求本身很快，避免 254 个地址串行等待。
-    const std::size_t workerCount = std::min<std::size_t>(32, targets.size());
+    // SendARP 对不存在的地址要等 ARP 重传超时（约 3s），并发度决定了整轮耗时。
+    const std::size_t workerCount = std::min<std::size_t>(48, targets.size());
     std::vector<std::thread> workers;
     workers.reserve(workerCount);
     for (std::size_t i = 0; i < workerCount; ++i)
@@ -251,26 +540,13 @@ sendArpSweep(const std::vector<std::string> &subnets)
                 {
                     break;
                 }
-                const std::string &ip = targets[index];
-                in_addr address{};
-                if (::inet_pton(AF_INET, ip.c_str(), &address) != 1)
-                {
-                    continue;
-                }
-                ULONG mac[2] = {0, 0};
-                ULONG length = sizeof(mac);
-                if (::SendARP(address.s_addr, 0, mac, &length) != NO_ERROR || length < 6)
-                {
-                    continue;
-                }
-                const auto *bytes = reinterpret_cast<const unsigned char *>(mac);
-                const std::string macText = macToString(bytes);
-                if (macText == "00:00:00:00:00:00")
+                std::string mac;
+                if (!arpProbe(targets[index], sourceIp, mac))
                 {
                     continue;
                 }
                 std::lock_guard<std::mutex> lock(mutex);
-                rows.emplace_back(ip, macText);
+                rows.emplace_back(targets[index], mac);
             }
         });
     }
@@ -283,13 +559,25 @@ sendArpSweep(const std::vector<std::string> &subnets)
 #endif
 
 /// 非阻塞 connect，判断目标 TCP 端口是否能建立连接。
-bool tcpPortOpenImpl(const std::string &ip, std::uint16_t port, int timeoutMs)
+/// localIp 非空时把套接字绑定到该源地址，多网口下强制走对应网卡。
+bool tcpPortOpenImpl(const std::string &ip, std::uint16_t port, int timeoutMs,
+                     const std::string &localIp)
 {
 #ifndef _WIN32
     const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
     {
         return false;
+    }
+    if (!localIp.empty())
+    {
+        sockaddr_in local{};
+        local.sin_family = AF_INET;
+        local.sin_port = 0;
+        if (::inet_pton(AF_INET, localIp.c_str(), &local.sin_addr) == 1)
+        {
+            ::bind(fd, reinterpret_cast<sockaddr *>(&local), sizeof(local));
+        }
     }
     sockaddr_in address{};
     address.sin_family = AF_INET;
@@ -338,6 +626,17 @@ bool tcpPortOpenImpl(const std::string &ip, std::uint16_t port, int timeoutMs)
     if (fd == INVALID_SOCKET)
     {
         return false;
+    }
+    if (!localIp.empty())
+    {
+        sockaddr_in local{};
+        local.sin_family = AF_INET;
+        local.sin_port = 0;
+        if (::inet_pton(AF_INET, localIp.c_str(), &local.sin_addr) == 1)
+        {
+            // 绑定源地址即可固定出口网卡；失败不致命，退回系统默认路由。
+            ::bind(fd, reinterpret_cast<sockaddr *>(&local), sizeof(local));
+        }
     }
     u_long nonBlocking = 1;
     ::ioctlsocket(fd, FIONBIO, &nonBlocking);
@@ -652,9 +951,10 @@ bool DeviceDiscovery::parseBroadcast(const std::uint8_t *data, std::size_t size,
     return true;
 }
 
-bool DeviceDiscovery::tcpPortOpen(const std::string &ip, std::uint16_t port, int timeoutMs)
+bool DeviceDiscovery::tcpPortOpen(const std::string &ip, std::uint16_t port, int timeoutMs,
+                                  const std::string &localIp)
 {
-    return tcpPortOpenImpl(ip, port, timeoutMs);
+    return tcpPortOpenImpl(ip, port, timeoutMs, localIp);
 }
 
 std::vector<DiscoveredDevice>
@@ -671,7 +971,7 @@ DeviceDiscovery::probeFl6532(const std::vector<std::string> &candidates, std::st
             continue;
         }
         // 6508 是该型号的控制端口；CS96 Beta 不开放，可用于区分型号。
-        if (!tcpPortOpenImpl(ip, 6508, 500))
+        if (!tcpPortOpenImpl(ip, 6508, 500, std::string()))
         {
             continue;
         }
@@ -726,7 +1026,127 @@ DeviceDiscovery::parseArpTable(const std::string &text)
     return rows;
 }
 
+namespace
+{
+
+LinkKind kindOf(const AdapterInfo &adapter)
+{
+    if (adapter.wireless)
+    {
+        return LinkKind::Wireless;
+    }
+    // 有线的判据：非无线、且有实际物理链路（描述里带 Ethernet/以太网/Realtek/Intel 等）。
+    return LinkKind::Wired;
+}
+
+/// CV_SCAN_SUBNETS：额外要扫的 /24，逗号分隔，如 "169.254.7,192.168.1.0/24"。
+/// 用于雷达不在本机任何网口 /24 内、又确实同二层直连的场景。
+std::vector<std::string> extraScanSubnets()
+{
+    std::vector<std::string> prefixes;
+    const char *value = std::getenv("CV_SCAN_SUBNETS");
+    if (value == nullptr)
+    {
+        return prefixes;
+    }
+    std::stringstream stream(value);
+    std::string item;
+    while (std::getline(stream, item, ','))
+    {
+        std::string normalized;
+        for (char ch : item)
+        {
+            const auto uch = static_cast<unsigned char>(ch);
+            if (std::isdigit(uch) || ch == '.')
+            {
+                normalized.push_back(ch);
+            }
+        }
+        // 只取前三段：所有额外网段都按 /24 处理。
+        std::vector<int> parts;
+        std::stringstream octets(normalized);
+        std::string octet;
+        while (std::getline(octets, octet, '.') && parts.size() < 4)
+        {
+            if (!octet.empty())
+            {
+                parts.push_back(std::atoi(octet.c_str()));
+            }
+        }
+        if (parts.size() >= 3)
+        {
+            prefixes.push_back(std::to_string(parts[0]) + "." + std::to_string(parts[1]) + "." +
+                               std::to_string(parts[2]));
+        }
+    }
+    return prefixes;
+}
+
+std::vector<std::string> subnetHosts(const std::string &prefix)
+{
+    std::vector<std::string> targets;
+    for (int host = 1; host <= 254; ++host)
+    {
+        targets.push_back(prefix + "." + std::to_string(host));
+    }
+    return targets;
+}
+
+bool macMatches(const std::vector<std::string> &prefixes, const std::string &mac)
+{
+    if (prefixes.empty())
+    {
+        return true;
+    }
+    const std::string lower = toLower(mac);
+    for (const std::string &prefix : prefixes)
+    {
+        if (lower.rfind(prefix, 0) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+std::vector<LocalInterface> DeviceDiscovery::localInterfaces()
+{
+    std::vector<LocalInterface> result;
+    std::vector<AdapterInfo> adapters = enumerateAdapters();
+    std::stable_sort(adapters.begin(), adapters.end(),
+                     [](const AdapterInfo &a, const AdapterInfo &b) {
+                         return static_cast<int>(kindOf(a)) < static_cast<int>(kindOf(b));
+                     });
+    for (const AdapterInfo &adapter : adapters)
+    {
+        if (!adapter.up || adapter.virtualAdapter)
+        {
+            continue;
+        }
+        LocalInterface entry;
+        entry.name = adapter.name;
+        entry.description = adapter.description;
+        entry.address = adapter.address;
+        entry.prefixLength = adapter.prefixLength;
+        entry.ifIndex = adapter.ifIndex;
+        entry.kind = kindOf(adapter);
+        entry.linkLocal = adapter.linkLocal;
+        entry.virtualAdapter = adapter.virtualAdapter;
+        result.push_back(entry);
+    }
+    return result;
+}
+
 std::vector<DiscoveredDevice> DeviceDiscovery::scanSubnet(const std::string &macPrefix,
+                                                          std::string &note)
+{
+    return scanSubnet(macPrefix, {}, note);
+}
+
+std::vector<DiscoveredDevice> DeviceDiscovery::scanSubnet(const std::string &macPrefix,
+                                                          const std::vector<std::string> &hints,
                                                           std::string &note)
 {
     std::vector<DiscoveredDevice> devices;
@@ -755,66 +1175,224 @@ std::vector<DiscoveredDevice> DeviceDiscovery::scanSubnet(const std::string &mac
         }
     }
 
-    const std::vector<std::string> subnets = localSubnetPrefixes();
-    if (subnets.empty())
+    // 物理网口列表：有线优先，无线其次；Wi-Fi Direct / Hyper-V 等虚拟网口直接跳过
+    // （它们同样带 169.254/16 地址，混进来会误导网段判断并拖慢扫描）。
+    std::vector<AdapterInfo> adapters;
+    for (const AdapterInfo &adapter : enumerateAdapters())
     {
-        note = "没有可扫描的 /24 IPv4 网段";
+        if (!adapter.up || adapter.virtualAdapter)
+        {
+            continue;
+        }
+        adapters.push_back(adapter);
+    }
+    std::stable_sort(adapters.begin(), adapters.end(),
+                     [](const AdapterInfo &a, const AdapterInfo &b) {
+                         return static_cast<int>(kindOf(a)) < static_cast<int>(kindOf(b));
+                     });
+
+    if (adapters.empty())
+    {
+        note = "没有可用网口（回环/虚拟网卡已忽略）：请检查网线或无线连接";
         return devices;
     }
 
-    std::vector<std::pair<std::string, std::string>> rows;
-#ifndef _WIN32
-    // ping 只为让内核发出 ARP 请求；ICMP 被防火墙挡住也不影响邻居表，故不检查返回码。
-    for (const std::string &subnet : subnets)
+    // 已知地址（上次连接 / 环境变量）优先定向探测：可命中与网口不在同一 /24 的设备，
+    // 例如本机 169.254.222.6/16、雷达 169.254.7.30 这种同二层不同 /24 的情况。
+    std::vector<std::string> knownIps;
+    for (const std::string &hint : hints)
     {
-        const std::string command =
-            "for i in $(seq 1 254); do echo " + subnet + ".$i; done"
-            " | xargs -P 100 -n 1 sh -c 'ping -c 1 -W 1 -n \"$0\" >/dev/null 2>&1'";
-        if (FILE *pipe = ::popen(command.c_str(), "r"))
+        if (!hint.empty() && ipToUint(hint) != 0)
         {
-            ::pclose(pipe);
+            knownIps.push_back(hint);
         }
     }
 
-    std::ifstream arp("/proc/net/arp");
-    const std::string text((std::istreambuf_iterator<char>(arp)),
-                           std::istreambuf_iterator<char>());
-    rows = parseArpTable(text);
-#else
-    // Windows：/proc 不存在，且防火墙会丢弃入站广播；用 SendARP 直接取二层 MAC，
-    // 既不受防火墙影响，也不需要先 ping 一遍。
-    rows = sendArpSweep(subnets);
-#endif
+    const std::vector<NeighborRow> cache = readNeighborTable();
+    std::map<std::string, DiscoveredDevice> found; // 按 IP 去重
+    std::map<std::string, std::string> sourceByIp; // 命中设备的网口源地址，供事后确认
 
-    for (const auto &row : rows)
-    {
-        std::string mac = row.second;
-        std::transform(mac.begin(), mac.end(), mac.begin(),
-                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-        if (!prefixes.empty())
+    // confirmed=false 表示只从系统邻居表缓存里拿到 MAC，设备可能已经离线；
+    // 扫网段/定向探测拿到的都是当次有 ARP 回应的，直接算已确认。
+    auto addHit = [&](const std::string &ip, const std::string &mac, const AdapterInfo &adapter,
+                      bool confirmed) {
+        if (!macMatches(prefixes, mac))
         {
-            bool matched = false;
-            for (const std::string &prefix : prefixes)
-            {
-                if (mac.rfind(prefix, 0) == 0)
-                {
-                    matched = true;
-                    break;
-                }
-            }
-            if (!matched)
+            return false;
+        }
+        if (found.find(ip) != found.end())
+        {
+            return false;
+        }
+        DiscoveredDevice device;
+        device.ip = ip;
+        device.mac = toLower(mac);
+        device.model = "LiDAR";
+        device.fromScan = true;
+        device.interfaceName = adapter.name;
+        device.linkKind = kindOf(adapter);
+        device.arpConfirmed = confirmed;
+        device.sshReady = tcpPortOpenImpl(ip, 22, 400, adapter.address);
+        device.lastSeenMs = nowMs();
+        found.emplace(ip, device);
+        sourceByIp[ip] = adapter.address;
+        return true;
+    };
+
+    std::ostringstream ifaceDetail;
+    int ifaceIndex = 0;
+    for (const AdapterInfo &adapter : adapters)
+    {
+        if (ifaceIndex++ > 0)
+        {
+            ifaceDetail << "；";
+        }
+        ifaceDetail << linkKindName(kindOf(adapter)) << " " << adapter.name << " "
+                    << adapter.address << "/" << adapter.prefixLength;
+        std::size_t hitCount = 0;
+
+        // 1) 系统邻居表：只要最近有过二层通信，这里就有 MAC，零成本命中。
+        for (const NeighborRow &row : cache)
+        {
+#ifdef _WIN32
+            const bool sameIface = row.ifIndex == adapter.ifIndex;
+#else
+            const bool sameIface = row.interfaceName == adapter.name;
+#endif
+            if (!sameIface)
             {
                 continue;
             }
+            if (addHit(row.ip, row.mac, adapter, /*confirmed=*/false))
+            {
+                ++hitCount;
+            }
         }
-        DiscoveredDevice device;
-        device.ip = row.first;
-        device.mac = row.second;
-        device.model = "LiDAR";
-        device.fromScan = true;
-        device.sshReady = tcpPortOpen(device.ip, 22, 400);
-        device.lastSeenMs = nowMs();
-        devices.push_back(device);
+
+        // 2) 已知地址定向探测（跨 /24 也能探到）。
+        for (const std::string &ip : knownIps)
+        {
+            if (!sameSubnet(ip, adapter.address, adapter.prefixLength))
+            {
+                continue;
+            }
+            if (found.find(ip) != found.end())
+            {
+                continue;
+            }
+#ifdef _WIN32
+            std::string mac;
+            if (arpProbe(ip, adapter.address, mac) && addHit(ip, mac, adapter, /*confirmed=*/true))
+            {
+                ++hitCount;
+            }
+#else
+            const std::string command = "ping -c 1 -W 1 -n -I " + adapter.name + " " + ip +
+                                        " >/dev/null 2>&1";
+            if (FILE *pipe = ::popen(command.c_str(), "r"))
+            {
+                ::pclose(pipe);
+            }
+            for (const NeighborRow &row : readNeighborTable())
+            {
+                if (row.interfaceName == adapter.name && row.ip == ip &&
+                    addHit(row.ip, row.mac, adapter, /*confirmed=*/true))
+                {
+                    ++hitCount;
+                }
+            }
+#endif
+        }
+
+        // 3) 该网口还没命中才扫网段：ARP 全扫在死网段上要等超时，能省则省。
+        if (hitCount == 0)
+        {
+            std::vector<std::string> targets = sweepTargetsFor(adapter);
+            // 额外网段（CV_SCAN_SUBNETS）只在有线口上补扫。
+            if (kindOf(adapter) == LinkKind::Wired)
+            {
+                for (const std::string &extra : extraScanSubnets())
+                {
+                    const std::vector<std::string> hosts = subnetHosts(extra);
+                    targets.insert(targets.end(), hosts.begin(), hosts.end());
+                }
+            }
+#ifdef _WIN32
+            for (const auto &row : sendArpSweep(targets, adapter.address))
+            {
+                if (addHit(row.first, row.second, adapter, /*confirmed=*/true))
+                {
+                    ++hitCount;
+                }
+            }
+#else
+            // ping 只为让内核发出 ARP 请求；ICMP 被挡也不影响邻居表，故不检查返回码。
+            const std::string pingCommand = "xargs -P 100 -n 1 sh -c 'ping -c 1 -W 1 -n -I " +
+                                            adapter.name + " \"$0\" >/dev/null 2>&1'";
+            if (FILE *pipe = ::popen(pingCommand.c_str(), "w"))
+            {
+                for (const std::string &ip : targets)
+                {
+                    std::fprintf(pipe, "%s\n", ip.c_str());
+                }
+                ::pclose(pipe);
+            }
+            for (const NeighborRow &row : readNeighborTable())
+            {
+                if (row.interfaceName == adapter.name &&
+                    addHit(row.ip, row.mac, adapter, /*confirmed=*/true))
+                {
+                    ++hitCount;
+                }
+            }
+#endif
+        }
+
+        ifaceDetail << " → " << (hitCount > 0 ? "命中 " + std::to_string(hitCount) : std::string("无匹配"));
+    }
+
+    // 邻居表里的 MAC 可能来自几分钟前的缓存，设备断电后仍会残留。
+    // 对「只靠缓存命中」的条目补一次定向确认：ARP 有回应或端口能连上才算真在线。
+    std::size_t unconfirmed = 0;
+    for (auto &entry : found)
+    {
+        if (entry.second.arpConfirmed)
+        {
+            continue;
+        }
+        bool alive = entry.second.sshReady;
+        if (!alive)
+        {
+#ifdef _WIN32
+            std::string mac;
+            alive = arpProbe(entry.first, sourceByIp[entry.first], mac);
+#else
+            const std::string command = "ping -c 1 -W 1 -n -I " + entry.second.interfaceName + " " +
+                                        entry.first + " >/dev/null 2>&1";
+            if (FILE *pipe = ::popen(command.c_str(), "r"))
+            {
+                ::pclose(pipe);
+            }
+            for (const NeighborRow &row : readNeighborTable())
+            {
+                if (row.ip == entry.first && row.interfaceName == entry.second.interfaceName)
+                {
+                    alive = true;
+                    break;
+                }
+            }
+#endif
+        }
+        entry.second.arpConfirmed = alive;
+        if (!alive)
+        {
+            ++unconfirmed;
+        }
+    }
+
+    for (auto &entry : found)
+    {
+        devices.push_back(entry.second);
     }
 
     std::sort(devices.begin(), devices.end(),
@@ -825,12 +1403,7 @@ std::vector<DiscoveredDevice> DeviceDiscovery::scanSubnet(const std::string &mac
                              .count();
 
     std::ostringstream detail;
-    detail << "扫描 " << subnets.size() << " 个网段(";
-    for (std::size_t i = 0; i < subnets.size(); ++i)
-    {
-        detail << (i == 0 ? "" : ",") << subnets[i] << ".0/24";
-    }
-    detail << ")，ARP 邻居 " << rows.size() << " 台";
+    detail << "扫描 " << adapters.size() << " 个网口[" << ifaceDetail.str() << "]";
     if (!prefixes.empty())
     {
         detail << "，MAC 前缀 ";
@@ -840,10 +1413,27 @@ std::vector<DiscoveredDevice> DeviceDiscovery::scanSubnet(const std::string &mac
         }
         detail << " 匹配 " << devices.size() << " 台";
     }
+    if (unconfirmed > 0)
+    {
+        detail << "（其中 " << unconfirmed << " 台仅邻居表缓存命中、未回应 ARP，可能已离线）";
+    }
     detail << "，耗时 " << elapsed << " ms";
     note = detail.str();
 
     return devices;
+}
+
+const char *linkKindName(LinkKind kind)
+{
+    switch (kind)
+    {
+    case LinkKind::Wired:
+        return "有线";
+    case LinkKind::Wireless:
+        return "无线";
+    default:
+        return "其他";
+    }
 }
 
 } // namespace cloud_viewer

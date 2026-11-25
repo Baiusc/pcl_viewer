@@ -20,15 +20,39 @@ DISPLAY=:0 CV_BETA_IP=10.42.0.222 CV_SCREENSHOT_WAIT_MS=10000 \
   ./build/cloud_viewer --screenshot /tmp/x.png
 ```
 
+产物目录分工（别再问「跑哪个 exe」）：
+
+- `build-ninja/`：CMake 构建树，只产出，不当发布目录；Debug 需要时另配 `build-ninja-debug`。
+- `dist-local/`：唯一可直接运行/拷走的目录，编译后由 POST_BUILD 自动同步 exe + DLL。
+- `dist-release/`：`tools\pack-release.ps1` 的 zip 暂存，可删。
+
+本机（Windows 11 + MSVC 14.44 + PCL AllInOne）编译入口：`tools\build-win-msvc.bat`。
+
 ## 2. 硬约束
 
+- 设备发现**必须逐网口进行**：笔记本常同时有「有线接雷达（常为 169.254/16 自动地址）」和
+  「无线连公司网（如 10.x/24）」，只扫第一个 /24 会永远搜不到接在另一块网卡上的雷达。
+  `DeviceDiscovery::localInterfaces()` 已按有线→无线排序并过滤 Wi-Fi Direct / Hyper-V 等虚拟网口；
+  Windows 的 `SendARP`/TCP probe 都要带上网口源地址，否则多网口会走错网卡。
+  详见 README「设备发现（多网口：有线 + 无线）」。
 - 点类型统一用 `algo_lidar::PointData` / `PointMatrix`（`include/point_type.h`），**不要新建点结构**。
 - 不要引入 `pcl_io` / `pcl_visualization`（本机不可用）。
 - `10.42.0.221` 是**用户自用的 CS96 Beta（96×800）**，可正常 SSH、切 work_mode、改 center_ip。
   （早前记为"同事的设备"是误判，已作废。）
 - 设备 `work_mode` 必须与 `/mnt/mtdblock2/mode` 匹配，否则 `you_see` 启动即退出。
+  **新版 ARM 固件（lidar_mgrd）没有这个文件**，允许的模式看 `lidar_status.cgi` 的
+  `validated_work_modes`，切换必须走 `lidar_switch.cgi`（改 INI 会被 mgrd 覆盖）。
+  判断固件类型：`GET /cgi-bin/lidar_status.cgi` 能返回 JSON 就是新固件。
+  详见 `doc/cs96beta_mgrd_firmware.md`。
 - 96 线（IMX459 / `beta_rotating`）与 120 线（SL100 / `gamma_rotating`）的**标定表不可混用**，
   分别是 `data/param/cs96beta_calibration.csv` 与 `cs120gamma_calibration.csv`。
+- 标定包 `[standard_encoder]` 的 `angle_face_N` 有两代量纲：旧包是 PA 计数（`0~240`），
+  2026-11 起是 20 位编码器值（`0~65535`）。`normalizeStandardEncoder()` 按
+  「任一值 > 240」自动折算，**不要按固件版本或文件路径分支**，也不要删这段归一化，
+  否则新标定包会直接报「standard_encoder 不是 Beta PA 计数」。
+- 固件分流是**探测式**的：`queryLidarService` 成功才走新分支，失败一律回退旧流程。
+  加严判定条件时（`parseStatus` 要求 `code` + 至少一个 mgrd 特征字段）是为了避免
+  旧固件上别的 CGI 返回 `{"code":N}` 被误判成新固件。
 - 设备侧坐标是 `y+` 向左，viewer 统一 `x+` 前 / `y+` 右，翻转只在解析层做一次。
 - **单位**：转镜雷达（alpha/beta/gamma）的标定表与点云都是**米**，固态雷达（6532/6031）是**厘米**。
   换算只在固态侧做，转镜侧不要做任何换算。

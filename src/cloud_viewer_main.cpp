@@ -11,6 +11,16 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include <vtkAxesActor.h>
 #include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkOrientationMarkerWidget.h>
@@ -29,6 +39,17 @@ namespace
 
 constexpr const char *kAppName = "cloud_viewer Lite";
 constexpr const char *kVersion = "0.1.0";
+
+/// Windows 控制台默认按本地代码页（简体中文为 GBK）解释输出，而源码以 UTF-8
+/// 编译（/utf-8），中文字面量直接 cout 会显示成乱码。启动时把控制台的输入/输出
+/// 代码页切到 UTF-8 即可；重定向到文件或管道时仍是 UTF-8 字节，不改变原有行为。
+void enableUtf8Console()
+{
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
+}
 
 void printUsage()
 {
@@ -166,6 +187,7 @@ int runInspect(const std::string &file, const std::string &reportPath)
 
 int main(int argc, char **argv)
 {
+    enableUtf8Console();
     std::vector<std::string> args(argv + 1, argv + argc);
 
     if (args.empty())

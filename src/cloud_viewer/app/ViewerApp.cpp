@@ -42,6 +42,7 @@
 #include "cloud_viewer/preprocess/OnlineCalibration.h"
 #include "cloud_viewer/platform/FileDialog.h"
 #include "cloud_viewer/platform/AppSettings.h"
+#include "cloud_viewer/platform/LidarServiceClient.h"
 #include "cloud_viewer/platform/NetworkSetup.h"
 #include "cloud_viewer/platform/ProcessRunner.h"
 #include "cloud_viewer/platform/RadarLauncher.h"
@@ -642,9 +643,16 @@ static std::string betaSshFailureReason(const std::string &output)
     if (output.find("与当前固件数据模式不匹配") != std::string::npos ||
         output.find("load config fail") != std::string::npos)
         return "该固件不支持此 work_mode（配置与固件数据模式不一致），已回滚原模式";
+    // 新版固件（lidar_mgrd）的配置在 /run/lidar-data 下，/etc/ys_conf.ini 已不存在。
+    // 保留 CONFIG_MISSING 标记本身，调用方靠它把「固件分流判错了」识别出来并换路径重试。
+    if (output.find("CONFIG_MISSING") != std::string::npos)
+        return "CONFIG_MISSING 找不到设备配置文件（新固件为 /run/lidar-data/lidar/config/"
+               "ys_conf.ini，老固件为 /etc/ys_conf.ini），固件可能仍在启动";
+    if (output.find("TARGET_APPLY_FAILED") != std::string::npos)
+        return "lidar_mgrd 未按新地址重启（运行期配置仍指向旧上位机），已回滚";
     if (output.find("CONFIG_INVALID") != std::string::npos ||
         output.find("PORT_CONFIG_INVALID") != std::string::npos)
-        return "设备 /etc/ys_conf.ini 缺少 center_ip / center_data_port";
+        return "设备 ys_conf.ini 缺少 center_ip / center_data_port";
     if (output.find("START_FAILED") != std::string::npos ||
         output.find("RESTART_FAILED") != std::string::npos)
         return "设备 you_see 进程启动失败";
@@ -846,7 +854,7 @@ static bool runBetaSsh(const std::string &ip, const std::string &password,
     output = run.text;
     if (hostKeyChanged)
     {
-        output += "\n[HOST-KEY] 设备主机密钥已变更（换了雷达或设备重刷固件），已更新信任并自动重试";
+        output += "\n[HOST-KEY] 设备主机密钥已变更（换了雷达/重刷固件/设备重启都会），已更新信任并自动重试";
     }
     if (run.timedOut)
     {
@@ -877,7 +885,7 @@ static bool runBetaSsh(const std::string &ip, const std::string &password,
     output = run.text;
     if (forgotten)
     {
-        output += "\n[HOST-KEY] 设备主机密钥已变更（换了雷达或设备重刷固件），已更新信任并自动重试";
+        output += "\n[HOST-KEY] 设备主机密钥已变更（换了雷达/重刷固件/设备重启都会），已更新信任并自动重试";
     }
     return run.rc == 0;
 #endif
@@ -954,10 +962,14 @@ static bool httpPost(const std::string &ip, std::uint16_t port, const std::strin
 #endif
 }
 
-/// 确保设备 SSH 可用；不通时通过设备自带 set_ssh.cgi 打开。
+/// 确保设备 SSH 可用。
 ///
-/// 设备的 /www 由 lighttpd 提供，/cgi-bin/set_ssh.cgi 接受 POST "enable=true"，
-/// 内部执行 S50sshd start。这是 SSH 关闭后唯一可用的远程恢复通道。
+/// 两代固件的恢复通道不同：
+/// - 旧固件：/cgi-bin/set_ssh.cgi 接受 POST "enable=true"，内部拉起 sshd；
+/// - 新固件（lidar_mgrd）：该入口已停用（返回 501「此旧入口已停用」），sshd 由系统服务
+///   自行启动，但**比 web 慢**——刚上电时 80 已可用、22 还没监听，误判成「SSH 关闭」
+///   会让后面的 center_ip 核对整体跳过，表现就是连上了却一直不出点云。
+/// 因此这里对 22 端口做有限次轮询，并把「已停用」和「真的连不上」区分开。
 static bool ensureSshReady(const std::string &ip, std::string &message)
 {
     if (DeviceDiscovery::tcpPortOpen(ip, 22, 600))
@@ -966,39 +978,74 @@ static bool ensureSshReady(const std::string &ip, std::string &message)
         return true;
     }
 
+    bool webReachable = false;
+    bool cgiAccepted = false;
     std::string response;
-    if (!httpPost(ip, 80, "/cgi-bin/set_ssh.cgi", "enable=true", 3000, response))
+    if (httpPost(ip, 80, "/cgi-bin/set_ssh.cgi", "enable=true", 3000, response))
     {
-        message = "SSH 未开放，且 " + ip +
-                  " 的 web 接口（80）不可达；请稍后再试，或重新上电/现场处理";
-        return false;
-    }
-    if (response.find("\"code\": 0") == std::string::npos &&
-        response.find("\"code\":0") == std::string::npos)
-    {
-        message = "请求开启 SSH 失败，设备返回: " + response.substr(0, 120);
-        return false;
+        webReachable = true;
+        if (response.find("\"code\": 0") != std::string::npos ||
+            response.find("\"code\":0") != std::string::npos)
+        {
+            cgiAccepted = true;
+        }
+        else if (response.find("501") == std::string::npos &&
+                 response.find("旧入口") == std::string::npos)
+        {
+            message = "请求开启 SSH 失败，设备返回: " + response.substr(0, 120);
+            return false;
+        }
     }
 
-    // CGI 只负责拉起 sshd，真正监听 22 还需要一点时间。
-    for (int attempt = 0; attempt < 20; ++attempt)
+    // web 通就多等一会儿（设备启动顺序：web → sshd）；web 都不通说明设备没起来，
+    // 只做很短的重试，避免把「连接不上」拖成十几秒。
+    const int attempts = webReachable ? 30 : 6;
+    for (int attempt = 0; attempt < attempts; ++attempt)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         if (DeviceDiscovery::tcpPortOpen(ip, 22, 400))
         {
-            message = "SSH 未开放，已通过设备 web 接口开启（" + ip + "）";
+            message = cgiAccepted ? "SSH 未开放，已通过设备 web 接口开启（" + ip + "）"
+                                  : "SSH 已就绪（" + ip + "，等待设备启动完成）";
             return true;
         }
     }
-    message = "已请求开启 SSH，但 22 端口在 10 秒内仍不可用";
+
+    if (!webReachable)
+    {
+        message = "SSH 未开放，且 " + ip +
+                  " 的 web 接口（80）不可达；请稍后再试，或重新上电/现场处理";
+    }
+    else if (cgiAccepted)
+    {
+        message = "已请求开启 SSH，但 22 端口在 15 秒内仍不可用";
+    }
+    else
+    {
+        message = ip +
+                  " 的 web 可用但 22 端口未监听：新固件的 SSH 由系统服务管理（旧入口已停用），"
+                  "请等设备启动完成后重试，或在设备网页「服务配置」确认 SSH 已启用";
+    }
     return false;
 }
+
+/// 新版固件的重启实现（定义在推流目标核对之后）。
+static bool restartLidarServiceOn(const std::string &ip, const std::string &password,
+                                  const std::string &knownHosts, std::string &message);
 
 /// 重启设备上的 you_see：先 kill 已有进程，再拉起，最后用 pidof 校验。
 /// 只动进程，不修改任何配置；日志基线只用于失败时回显本次新增的错误行。
 static bool restartBetaProcessOn(const std::string &ip, const std::string &password,
                                  const std::string &knownHosts, std::string &message)
 {
+    // 新版固件：you_see 由 lidar_mgrd 守护，手工 kill 会和守护进程抢进程，
+    // 必须走 lidar-service；这里按设备是否暴露管理接口自动分流。
+    LidarServiceStatus probe;
+    if (queryLidarService(ip, lidarServiceHttpPort(), probe))
+    {
+        return restartLidarServiceOn(ip, password, knownHosts, message);
+    }
+
     const std::string script = R"SH(set -eu
 log=/var/log/ys.log
 before=0
@@ -1066,6 +1113,9 @@ static bool prepareBetaTarget(const std::string &ip, std::uint16_t dataPort,
 conf=/etc/ys_conf.ini
 expected="$1"
 expected_port="$2"
+# 老固件才有 /etc/ys_conf.ini；新固件（lidar_mgrd）根本没有这个文件。
+# 给出明确标记，让调用方能把「固件判错了」和真正的配置损坏区分开。
+[ -f "$conf" ] || { echo CONFIG_MISSING; exit 1; }
 # 设备 mode 文件决定加载哪套驱动/库，work_mode 必须与之匹配（point_cloud/histogram/point_cloud_gray）。
 dev_mode=$(cat /mnt/mtdblock2/mode 2>/dev/null || echo unknown)
 echo "DEVICE_MODE=$dev_mode"
@@ -1150,6 +1200,156 @@ echo CENTER_UPDATED="$old:$old_port"-"$expected:$expected_port"
     return true;
 }
 
+/// 新版 ARM 固件（lidar_mgrd）的推流目标核对。
+///
+/// 与旧固件的关键差异：
+///   · 基准配置在 /run/lidar-data/lidar/config/ys_conf.ini（不再有 /etc/ys_conf.ini）；
+///   · mgrd 每次拉起 you_see 都会用「基准配置 + 用户设置」重新生成
+///     /run/lidar/manager/ys_conf.ini，所以必须校验运行期配置，而不是写完文件就算成功；
+///   · 重启走 /usr/libexec/lidar/lidar-service restart，不能再去 kill /root/you_see。
+static bool prepareBetaTargetMgrd(const std::string &ip, std::uint16_t dataPort,
+                                  const std::string &password, std::string &message,
+                                  std::string &deviceMode, std::string &resolution)
+{
+    // 新固件由 mgrd 统一管理驱动，没有 /mnt/mtdblock2/mode；按 point_cloud 上报，
+    // 该固件实际允许的模式以 status 的 validated_work_modes 为准。
+    deviceMode = "point_cloud";
+
+    const std::string localIp = betaRouteSource(ip);
+    if (localIp.empty())
+    {
+        message = "无法从路由确定到 " + ip + " 的本机 IPv4";
+        return false;
+    }
+    if (password.empty())
+    {
+        message = "未配置 Beta SSH 密码：跳过推流目标核对（设备需已把数据发往本机 " + localIp + "）";
+        return false;
+    }
+    const std::string knownHosts = betaKnownHostsPath();
+    if (!ensureKnownHostsReady(knownHosts, message))
+    {
+        return false;
+    }
+
+    const std::string script = R"SH(set -eu
+conf=/run/lidar-data/lidar/config/ys_conf.ini
+runtime=/run/lidar/manager/ys_conf.ini
+calib=/run/lidar-data/lidar/calibration/ys_calibration.ini
+expected="$1"
+expected_port="$2"
+[ -f "$conf" ] || { echo CONFIG_MISSING; exit 1; }
+# 标定表里的分辨率：96x800（IMX459）或 120x800（SL100）。新固件标定目录已迁到
+# /run/lidar-data/lidar/calibration/，/etc/ys_calibration.ini 只是指向它的链接。
+[ -f "$calib" ] || calib=/etc/ys_calibration.ini
+lines_v=$(awk -F= '/^[[:space:]]*lines_v[[:space:]]*=/{v=$2; sub(/;.*/,"",v); gsub(/[^0-9]/,"",v); if (v != "") print v; exit}' "$calib" 2>/dev/null || true)
+lines_h=$(awk -F= '/^[[:space:]]*lines_h[[:space:]]*=/{v=$2; sub(/;.*/,"",v); gsub(/[^0-9]/,"",v); if (v != "") print v; exit}' "$calib" 2>/dev/null || true)
+if [ -n "$lines_v" ] && [ -n "$lines_h" ]; then echo "RESOLUTION=${lines_v}x${lines_h}"; fi
+old=$(awk -F '"' '/^[[:space:]]*center_ip[[:space:]]*=/{n++; v=$2} END{if(n==1) print v}' "$conf")
+old_port=$(awk -F '"' '/^[[:space:]]*center_data_port[[:space:]]*=/{n++; v=$2} END{if(n==1) print v}' "$conf")
+[ -n "$old" ] || { echo CONFIG_INVALID; exit 1; }
+[ -n "$old_port" ] || { echo PORT_CONFIG_INVALID; exit 1; }
+if [ "$old" = "$expected" ] && [ "$old_port" = "$expected_port" ]; then
+  echo CENTER_UNCHANGED="$old:$old_port"
+  exit 0
+fi
+backup=$(mktemp /tmp/cv_center_backup.XXXXXX)
+tmp=$(mktemp /tmp/cv_center_new.XXXXXX)
+cp -p "$conf" "$backup"
+awk -v ip="$expected" -v port="$expected_port" '
+/^[[:space:]]*center_ip[[:space:]]*=/{sub(/"[^"]*"/, "\"" ip "\"")}
+/^[[:space:]]*center_data_port[[:space:]]*=/{sub(/"[^"]*"/, "\"" port "\"")}
+{print}' "$conf" > "$tmp"
+cp "$tmp" "$conf"
+rm -f "$tmp"
+/usr/libexec/lidar/lidar-service restart >/tmp/cv_lidar_restart.log 2>&1 || true
+# mgrd 生成运行期配置 + 拉起 you_see 需要几秒，按实际生效结果判定成败。
+i=0
+while [ "$i" -lt 20 ]; do
+  now_ip=$(awk -F '"' '/^[[:space:]]*center_ip[[:space:]]*=/{n++; v=$2} END{if(n==1) print v}' "$runtime" 2>/dev/null || true)
+  now_port=$(awk -F '"' '/^[[:space:]]*center_data_port[[:space:]]*=/{n++; v=$2} END{if(n==1) print v}' "$runtime" 2>/dev/null || true)
+  if [ "$now_ip" = "$expected" ] && [ "$now_port" = "$expected_port" ]; then
+    echo CENTER_UPDATED="$old:$old_port"-"$expected:$expected_port"
+    rm -f "$backup"
+    exit 0
+  fi
+  i=$((i+1))
+  sleep 1
+done
+# 超时恢复原配置并重启，避免留下一个指向错误上位机的雷达。
+cp "$backup" "$conf"
+rm -f "$backup"
+/usr/libexec/lidar/lidar-service restart >/dev/null 2>&1 || true
+echo TARGET_APPLY_FAILED
+tail -n 3 /tmp/cv_lidar_restart.log 2>/dev/null || true
+exit 1
+)SH";
+
+    std::string output;
+    runBetaSsh(ip, password, knownHosts, script,
+               " -- " + shellQuote(localIp) + " " + std::to_string(dataPort), output);
+    if (output.find("CENTER_UNCHANGED=") == std::string::npos &&
+        output.find("CENTER_UPDATED=") == std::string::npos)
+    {
+        message = "设置 center_ip 失败: " + betaSshFailureReason(output);
+        return false;
+    }
+
+    const auto resolutionPos = output.find("RESOLUTION=");
+    if (resolutionPos != std::string::npos)
+    {
+        const std::size_t begin = resolutionPos + std::string("RESOLUTION=").size();
+        const std::size_t end = output.find_first_of("\r\n", begin);
+        resolution = output.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+    }
+    message = "目标 " + ip + "，本机 " + localIp + "（lidar_mgrd）：" + output;
+    return true;
+}
+
+/// 新版固件重启：交给 lidar-service（封装 lidar_mgrd 的停止/重拉），
+/// 再用 mgrctl status 确认真的回到 COMMITTED，而不是只看命令退出码。
+static bool restartLidarServiceOn(const std::string &ip, const std::string &password,
+                                  const std::string &knownHosts, std::string &message)
+{
+    const std::string script = R"SH(set -eu
+sock=/run/lidar/control.sock
+ctl=/run/lidar-data/lidar/current/bin/lidar_mgrctl
+before=""
+if [ -x "$ctl" ]; then before=$("$ctl" "$sock" status 2>/dev/null | sed -n 's/.*"pid":\([0-9-]*\).*/\1/p' || true); fi
+if ! /usr/libexec/lidar/lidar-service restart >/tmp/cv_lidar_restart.log 2>&1; then
+  echo RESTART_FAILED
+  tail -n 3 /tmp/cv_lidar_restart.log 2>/dev/null || true
+  exit 1
+fi
+i=0
+st=""
+while [ "$i" -lt 25 ]; do
+  st=$("$ctl" "$sock" status 2>/dev/null || true)
+  case "$st" in
+    *'"phase":"COMMITTED"'*)
+      pid=$(printf '%s' "$st" | sed -n 's/.*"pid":\([0-9]*\).*/\1/p')
+      echo RESTARTED="$before->$pid"
+      exit 0;;
+  esac
+  i=$((i+1))
+  sleep 1
+done
+echo RESTART_FAILED
+printf '%s' "$st" | head -c 200 || true
+exit 1
+)SH";
+
+    std::string output;
+    runBetaSsh(ip, password, knownHosts, script, "", output);
+    if (output.find("RESTARTED=") != std::string::npos)
+    {
+        message = "已重启设备端 lidar_mgrd（" + ip + "，you_see 由 mgrd 重新拉起）";
+        return true;
+    }
+    message = "重启 lidar_mgrd 失败: " + betaSshFailureReason(output);
+    return false;
+}
+
 void ViewerApp::connectBeta(const std::string &ip)
 {
     rememberDevice(ip);
@@ -1168,6 +1368,34 @@ void ViewerApp::connectBeta(const std::string &ip)
         }
     }
 
+    // 探测固件类型：新版 ARM 固件由 lidar_mgrd 管理 you_see，对外暴露
+    // /cgi-bin/lidar_status.cgi。它给出的实际模式/可用模式比广播更准确，
+    // 后面的推流目标核对与模式切换也要按固件分流。
+    //
+    // 设备刚上电、或 169.254 链路抖动时单次探测可能落空，一旦判成老固件就会去改
+    // 根本不存在的 /etc/ys_conf.ini，整条推流链路直接卡死。因此这里重试几次；
+    // 后面 prepareBetaTarget 还会按 CONFIG_MISSING 再做一次兜底换路径。
+    LidarServiceStatus lidarStatus;
+    bool mgrdFirmware = false;
+    for (int attempt = 0; attempt < 3 && !mgrdFirmware; ++attempt)
+    {
+        if (attempt > 0)
+        {
+            logUi("Connect Device", "固件状态接口未响应，重试 " + std::to_string(attempt) + "/2");
+            std::this_thread::sleep_for(std::chrono::milliseconds(600));
+        }
+        mgrdFirmware = queryLidarService(ip, lidarServiceHttpPort(), lidarStatus);
+    }
+    if (mgrdFirmware)
+    {
+        logUi("Connect Device", "设备固件: " + lidarStatus.describe());
+        if (lidarStatus.actualMode >= 0)
+        {
+            betaWorkMode_ = lidarStatus.actualMode;
+        }
+    }
+    betaMgrdFirmware_ = mgrdFirmware;
+
     // 模式 >2 只有灰度点云（work_mode=4，包长 1165B），本解析器没有实现。
     // 设备驱动本身就是 point_cloud，所以不必换固件，只要把配置里的 work_mode
     // 改回 2 并重启 you_see 即可。applyBetaWorkMode 会备份配置、重启后 pidof 校验，
@@ -1178,7 +1406,7 @@ void ViewerApp::connectBeta(const std::string &ip)
         logUi("Connect Device", "设备处于灰度和模式 " + std::to_string(grayMode) +
                                     "，正在自动切回 work_mode=2（真实点云）…");
         std::string switchMessage;
-        if (!applyBetaWorkMode(ip, 2, switchMessage))
+        if (!applyBetaWorkMode(ip, 2, switchMessage, mgrdFirmware))
         {
             radarState_ = RadarState::Error;
             {
@@ -1232,11 +1460,52 @@ void ViewerApp::connectBeta(const std::string &ip)
     std::string targetMessage;
     std::string deviceMode;
     std::string deviceResolution;
-    const bool targetReady = prepareBetaTarget(ip, config.localPort, betaSshPassword(),
-                                               targetMessage, deviceMode, deviceResolution);
+    bool targetReady = false;
+    if (mgrdFirmware)
+    {
+        targetReady = prepareBetaTargetMgrd(ip, config.localPort, betaSshPassword(), targetMessage,
+                                            deviceMode, deviceResolution);
+    }
+    else
+    {
+        targetReady = prepareBetaTarget(ip, config.localPort, betaSshPassword(), targetMessage,
+                                        deviceMode, deviceResolution);
+        // 老路径只有在设备根本没有 /etc/ys_conf.ini 时才报 CONFIG_MISSING，
+        // 而这正是新固件的特征：说明前面那次固件探测因为设备刚启动而判错了。
+        // 这里改走 lidar_mgrd 路径再试一次，成功后按新固件继续后面的流程。
+        if (!targetReady && targetMessage.find("CONFIG_MISSING") != std::string::npos)
+        {
+            std::string retryMessage;
+            if (prepareBetaTargetMgrd(ip, config.localPort, betaSshPassword(), retryMessage,
+                                      deviceMode, deviceResolution))
+            {
+                logUi("Beta Target", "设备没有 /etc/ys_conf.ini，已自动改走 lidar_mgrd 路径");
+                mgrdFirmware = true;
+                betaMgrdFirmware_ = true;
+                targetReady = true;
+                targetMessage = retryMessage;
+                // 兜底时可能没拿到状态接口数据，这里再探一次，只用于模式集合。
+                LidarServiceStatus retryStatus;
+                if (queryLidarService(ip, lidarServiceHttpPort(), retryStatus))
+                {
+                    lidarStatus = retryStatus;
+                }
+            }
+            else
+            {
+                targetMessage = retryMessage;
+            }
+        }
+    }
     // 记录设备 mode，后续 work_mode 切换只在该驱动支持的集合内循环。
     betaDeviceMode_ = deviceMode;
     betaAllowedModes_ = betaAllowedModesForDeviceMode(deviceMode);
+    if (mgrdFirmware && !lidarStatus.validatedWorkModes.empty())
+    {
+        // 新固件没有 mode 文件，允许集合由 mgrd 的 validated_work_modes 决定
+        // （当前发布包为 1/2；直方图与灰度是另一套驱动，不在其中）。
+        betaAllowedModes_ = lidarServiceModeMask(lidarStatus);
+    }
     logUi("Beta Target", targetMessage, targetReady);
     if (!targetReady && targetMessage.find("UNSUPPORTED_MODE=") != std::string::npos)
     {
@@ -1447,7 +1716,7 @@ void ViewerApp::connectBeta(const std::string &ip)
         if (mode >= 0 && mode <= 2 && mode != betaWorkMode_)
         {
             std::string modeMessage;
-            if (applyBetaWorkMode(ip, mode, modeMessage))
+            if (applyBetaWorkMode(ip, mode, modeMessage, betaMgrdFirmware_))
             {
                 betaWorkMode_ = mode;
                 logUi("Mode", "已按 CV_BETA_WORK_MODE 切到 work_mode=" + std::to_string(mode));
@@ -1515,6 +1784,50 @@ void ViewerApp::connectBetaManual()
 #endif
 }
 
+namespace
+{
+
+/// 本机物理网口摘要：排查「雷达明明插着网线却搜不到」时，先看这一行对不对。
+std::string localInterfaceSummary()
+{
+    std::ostringstream detail;
+    const auto interfaces = DeviceDiscovery::localInterfaces();
+    for (std::size_t i = 0; i < interfaces.size(); ++i)
+    {
+        const LocalInterface &entry = interfaces[i];
+        detail << (i == 0 ? "" : "；") << linkKindName(entry.kind) << " " << entry.name << " "
+               << entry.address << "/" << entry.prefixLength;
+        if (entry.linkLocal)
+        {
+            detail << "(直连自动地址)";
+        }
+    }
+    return interfaces.empty() ? std::string("无可用物理网口") : detail.str();
+}
+
+/// 回环地址只可能来自本机模拟测试，不应该当作「上次连接的设备」。
+bool isLoopbackOrInvalid(const std::string &ip)
+{
+    return ip.empty() || ip.rfind("127.", 0) == 0 || ip == "0.0.0.0";
+}
+
+/// 逐个网口绑定源地址探测端口：多网口时目标可能只从某一块网卡可达，
+/// 让系统按默认路由选网卡往往会挑到无线，导致有线设备被误判为离线。
+bool probePortOnAnyInterface(const std::string &ip, std::uint16_t port, std::string &via)
+{
+    for (const LocalInterface &entry : DeviceDiscovery::localInterfaces())
+    {
+        if (DeviceDiscovery::tcpPortOpen(ip, port, 350, entry.address))
+        {
+            via = std::string(linkKindName(entry.kind)) + " " + entry.name;
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
 void ViewerApp::searchDevices()
 {
     // CV_FORCE_SCAN=1 跳过广播直接扫网段，便于排障与验证主动发现。
@@ -1550,6 +1863,11 @@ void ViewerApp::searchDevices()
     }
     fl6532Candidates.emplace_back("192.168.137.200");
 
+    // 笔记本常同时有「有线（接雷达）」和「无线（连公司网）」两块网口，
+    // 广播/扫描都必须覆盖两块，并在日志里明确当前用了哪些网口。
+    const std::string interfaceSummary = localInterfaceSummary();
+    logUi("Search Device", "本机网口: " + interfaceSummary);
+
     std::string probeNote;
     const auto fl6532 = DeviceDiscovery::probeFl6532(fl6532Candidates, probeNote);
     logUi("Probe Device", probeNote, !fl6532.empty());
@@ -1565,16 +1883,22 @@ void ViewerApp::searchDevices()
     }
     // 上次连接的设备若不在结果里，单独确认一次可达性：
     // 它可能只是 you_see 没运行（因此没有广播），设备本身仍在线。
-    if (!lastDeviceIp_.empty())
+    if (!isLoopbackOrInvalid(lastDeviceIp_))
     {
         const bool listed = std::any_of(
             discoveredDevices_.begin(), discoveredDevices_.end(),
             [this](const DiscoveredDevice &device) { return device.ip == lastDeviceIp_; });
         if (!listed)
         {
-            const bool sshOpen = DeviceDiscovery::tcpPortOpen(lastDeviceIp_, 22, 400);
-            const bool ctrlOpen = DeviceDiscovery::tcpPortOpen(lastDeviceIp_, 6508, 400);
-            if (sshOpen || ctrlOpen)
+            std::string viaSsh;
+            std::string viaCtrl;
+            std::string viaHttp;
+            const bool sshOpen = probePortOnAnyInterface(lastDeviceIp_, 22, viaSsh);
+            // 6508 是 FL6532 控制口；80 是新版 ARM 固件（lidar_mgrd）的 Web 管理口。
+            const bool ctrlOpen = !sshOpen && probePortOnAnyInterface(lastDeviceIp_, 6508, viaCtrl);
+            const bool httpOpen =
+                !sshOpen && !ctrlOpen && probePortOnAnyInterface(lastDeviceIp_, 80, viaHttp);
+            if (sshOpen || ctrlOpen || httpOpen)
             {
                 DiscoveredDevice device;
                 device.ip = lastDeviceIp_;
@@ -1583,12 +1907,16 @@ void ViewerApp::searchDevices()
                 device.fromProbe = true;
                 device.lastSeenMs = nowMs();
                 discoveredDevices_.push_back(device);
+                const std::string via = sshOpen ? viaSsh : (ctrlOpen ? viaCtrl : viaHttp);
                 logUi("Probe Device", "上次设备 " + lastDeviceIp_ + " 在线（" + device.model +
-                                          "），当前没有广播");
+                                          "，经 " + via + "），当前没有广播");
             }
             else
             {
-                logUi("Probe Device", "上次设备 " + lastDeviceIp_ + " 不可达（未上电或掉线）", false);
+                logUi("Probe Device",
+                      "上次设备 " + lastDeviceIp_ + " 不可达（未上电或掉线；已试 " + interfaceSummary +
+                          "）",
+                      false);
             }
         }
     }
@@ -1599,13 +1927,33 @@ void ViewerApp::searchDevices()
     if (discoveredDevices_.empty())
     {
         // 广播由设备端 you_see 发出，进程没跑就完全搜不到；而 ARP 由内核应答，
-        // 只要设备网络栈起来了就能被看见。因此扫描本机网段作为兜底。
-        logUi("Search Device", "未收到广播，改扫本机网段（ARP + MAC 前缀）");
+        // 只要设备网络栈起来了就能被看见。因此逐网口扫描作为兜底。
+        logUi("Search Device", "未收到广播，改为逐网口扫描（有线 + 无线，邻居表 + ARP + MAC 前缀）");
         const char *configuredPrefix = std::getenv("CV_RADAR_MAC_PREFIX");
         const std::string macPrefix =
             (configuredPrefix != nullptr) ? std::string(configuredPrefix) : std::string("98:03:8a");
+
+        // 已知地址：上次连接的设备 + 命令行/环境变量指定的地址。
+        // 它们会在对应网口上定向探测，可覆盖「本机 169.254.222.6/16、雷达 169.254.7.30」
+        // 这种同二层但不同 /24 的情况（纯 /24 扫描永远扫不到）。
+        std::vector<std::string> hints;
+        if (!isLoopbackOrInvalid(lastDeviceIp_))
+        {
+            hints.push_back(lastDeviceIp_);
+        }
+        for (const char *name : {"CV_RADAR_IP", "CV_BETA_IP", "CV_BETA_MANUAL_IP"})
+        {
+            if (const char *value = std::getenv(name))
+            {
+                if (!isLoopbackOrInvalid(value))
+                {
+                    hints.emplace_back(value);
+                }
+            }
+        }
+
         std::string scanNote;
-        const auto scanned = DeviceDiscovery::scanSubnet(macPrefix, scanNote);
+        const auto scanned = DeviceDiscovery::scanSubnet(macPrefix, hints, scanNote);
         logUi("Scan Device", scanNote, !scanned.empty());
 
         if (!scanned.empty())
@@ -1614,8 +1962,17 @@ void ViewerApp::searchDevices()
             std::ostringstream detail;
             for (const auto &device : scanned)
             {
-                detail << "[" << device.ip << " mac=" << device.mac
-                       << (device.sshReady ? " ssh" : " no-ssh") << "] ";
+                detail << "[" << device.ip << " mac=" << device.mac;
+                if (!device.interfaceName.empty())
+                {
+                    detail << " via " << linkKindName(device.linkKind) << " " << device.interfaceName;
+                }
+                detail << (device.sshReady ? " ssh" : " no-ssh");
+                if (!device.arpConfirmed)
+                {
+                    detail << " 未确认在线";
+                }
+                detail << "] ";
             }
             logUi("Scan Device", "扫描到 " + std::to_string(scanned.size()) + " 台候选: " +
                                      detail.str());
@@ -1623,8 +1980,9 @@ void ViewerApp::searchDevices()
         else
         {
             logUi("Search Device",
-                  "未发现设备：广播无响应，网段内也没有匹配 MAC 前缀的雷达"
-                  "（可设 CV_RADAR_MAC_PREFIX= 列出全部邻居）", false);
+                  "未发现设备：广播无响应，网口内也没有匹配 MAC 前缀的雷达"
+                  "（可设 CV_RADAR_MAC_PREFIX= 列出全部邻居、CV_SCAN_SUBNETS= 补扫指定 /24）",
+                  false);
         }
     }
     else
@@ -1645,6 +2003,29 @@ void ViewerApp::searchDevices()
             logUi("Search Device", detail.str());
         }
     }
+
+    // 有线口发现的设备排最前（雷达基本都接网线），无线口发现的后置。
+    auto linkRank = [](LinkKind kind) {
+        switch (kind)
+        {
+        case LinkKind::Wired:
+            return 0;
+        case LinkKind::Other:
+            return 1;
+        default:
+            return 2;
+        }
+    };
+    std::stable_sort(discoveredDevices_.begin(), discoveredDevices_.end(),
+                     [&linkRank](const DiscoveredDevice &a, const DiscoveredDevice &b) {
+                         const int rankA = linkRank(a.linkKind);
+                         const int rankB = linkRank(b.linkKind);
+                         if (rankA != rankB)
+                         {
+                             return rankA < rankB;
+                         }
+                         return a.ip < b.ip;
+                     });
 
     rebuildDeviceButtons();
     updateHud();
@@ -1669,7 +2050,28 @@ void ViewerApp::restartBetaProcess()
         return;
     }
 
+    // 新版固件：mgrd 自己守护 you_see，没有 SSH 密码也能让它重拉一次
+    // （把当前模式再下发一遍，本身就是一次停采 + 重启）。
+    LidarServiceStatus lidarStatus;
+    const bool mgrdFirmware = queryLidarService(ip, lidarServiceHttpPort(), lidarStatus);
     const std::string password = betaSshPassword();
+    if (mgrdFirmware && password.empty())
+    {
+        const int mode = lidarStatus.actualMode >= 0 ? lidarStatus.actualMode : 2;
+        LidarServiceStatus finalStatus;
+        std::string error;
+        const bool ok =
+            switchLidarServiceMode(ip, lidarServiceHttpPort(), mode, finalStatus, error);
+        lastDeviceIp_ = ip;
+        logUi("Restart you_see",
+              ok ? "已通过 lidar_mgrd 重启 you_see（" + ip + "，work_mode=" +
+                       std::to_string(finalStatus.actualMode) + "）"
+                 : "重启 you_see 失败: " + error,
+              ok);
+        updateHud();
+        renderer_.render();
+        return;
+    }
     if (password.empty())
     {
         logUi("Restart you_see",
@@ -1727,8 +2129,12 @@ void ViewerApp::rebuildDeviceButtons()
         std::string label;
         if (device.fromScan)
         {
-            // 无广播元数据，只能显示 IP 与服务可达性。
-            label = device.ip + (device.sshReady ? " [scan+ssh]" : " [scan/no-ssh]");
+            // 无广播元数据，只能显示 IP、服务可达性与所在网口（UI 字体仅 ASCII，用 eth/wifi）。
+            label = device.ip + (device.sshReady ? " [ssh]" : " [no-ssh]");
+            if (!device.interfaceName.empty())
+            {
+                label += (device.linkKind == LinkKind::Wired) ? " [eth]" : " [wifi]";
+            }
         }
         else if (device.fromProbe)
         {
@@ -2022,11 +2428,10 @@ std::string ViewerApp::betaSshPassword()
         }
     }
 
-    const char *home = std::getenv("HOME");
-    if ((home == nullptr || home[0] == '\0') && userHomeDirectory().empty())
-    {
-        return {};
-    }
+    // 设备出厂账户是 root/111，且新固件把配置放在 tmpfs（重启回落），
+    // 每次上电后都必须靠 SSH 重写 center_ip；所以没显式配置时直接用出厂密码，
+    // 不再退化成空值导致「未配置密码」把整条推流链路卡死。
+    static const std::string kFactoryPassword = "111";
     const std::string configPath =
         userHomeDirectory() + "/.config/cloud_viewer/beta_ssh.conf";
     std::ifstream input(configPath);
@@ -2040,14 +2445,55 @@ std::string ViewerApp::betaSshPassword()
         }
         if (line.substr(0, equal) == "BETA_SSH_PASS")
         {
-            return line.substr(equal + 1);
+            const std::string configured = line.substr(equal + 1);
+            return configured.empty() ? kFactoryPassword : configured;
         }
     }
-    return {};
+    return kFactoryPassword;
 }
 
-bool ViewerApp::applyBetaWorkMode(const std::string &ip, int mode, std::string &message)
+bool ViewerApp::applyBetaWorkMode(const std::string &ip, int mode, std::string &message,
+                                  bool mgrdFirmware)
 {
+    // 新版 ARM 固件：模式由 lidar_mgrd 统一管理，INI 里的 work_mode 每次拉起
+    // you_see 都会被重写，改配置既无效又容易和 mgrd 打架。直接走管理接口切换，
+    // 并等 mgrd 确认 COMMITTED —— 这一步不需要 SSH 密码。
+    LidarServiceStatus lidarStatus;
+    if (queryLidarService(ip, lidarServiceHttpPort(), lidarStatus))
+    {
+        if (!lidarStatus.validatedWorkModes.empty() && !lidarStatus.supports(mode))
+        {
+            std::ostringstream allowed;
+            for (std::size_t i = 0; i < lidarStatus.validatedWorkModes.size(); ++i)
+            {
+                allowed << (i == 0 ? "" : "/") << lidarStatus.validatedWorkModes[i];
+            }
+            message = "该固件不支持 work_mode=" + std::to_string(mode) + "（可用 " + allowed.str() +
+                      "）";
+            return false;
+        }
+        std::string error;
+        if (!switchLidarServiceMode(ip, lidarServiceHttpPort(), mode, lidarStatus, error))
+        {
+            message = "CS96 Beta work_mode=" + std::to_string(mode) + " 切换失败: " + error;
+            return false;
+        }
+        message = "lidar_mgrd 已确认 work_mode=" + std::to_string(mode) + "（pid " +
+                  std::to_string(lidarStatus.pid) + "）";
+        return true;
+    }
+
+    // 连接时已确认是新固件，但此刻管理接口不可达（设备重启中 / 网络抖动）。
+    // 此时不能退回「改 INI + 重启 you_see」——新固件的 /etc/ys_conf.ini 不存在，
+    // 且 work_mode 每次都会被 mgrd 重写，退回旧流程只会产生无效操作。
+    if (mgrdFirmware)
+    {
+        message = "lidar_mgrd 管理接口暂时不可达（" + ip +
+                  "，状态查询已重试 3 次）：设备可能正在重启（断电重启后 web 约 20 秒才可用），"
+                  "请等 phase 回到 COMMITTED 后重试；新固件不会回退到修改 INI 的方式";
+        return false;
+    }
+
     const std::string password = betaSshPassword();
     if (password.empty())
     {
@@ -2190,15 +2636,18 @@ void ViewerApp::switchBetaMode()
         return;
     }
 
+    const bool mgrdFirmware = betaMgrdFirmware_;
     requestedBetaMode_ = next;
     betaModeSwitch_ = true;
     controlState_ = "Switching Beta work mode...";
     logUi("Mode", "CS96 Beta: " + std::to_string(betaWorkMode_) + " -> " +
-                      std::to_string(next) + "（SSH 改配置并重启设备）");
+                      std::to_string(next) +
+                      (mgrdFirmware ? "（lidar_mgrd 管理接口切换，设备会自动重启 you_see）"
+                                    : "（SSH 改配置并重启 you_see）"));
 
-    modeFuture_ = std::async(std::launch::async, [ip, next] {
+    modeFuture_ = std::async(std::launch::async, [ip, next, mgrdFirmware] {
         std::string message;
-        const bool ok = applyBetaWorkMode(ip, next, message);
+        const bool ok = applyBetaWorkMode(ip, next, message, mgrdFirmware);
         return ok ? std::string{} : message;
     });
 
@@ -2270,6 +2719,13 @@ void ViewerApp::rememberDevice(const std::string &ip)
 {
     if (ip.empty())
     {
+        return;
+    }
+    // 回环地址来自本机模拟测试（mock 管理接口），记进配置只会在下次搜索时
+    // 冒出一条「上次连接的设备 127.0.0.1 不可达」的噪声。
+    if (isLoopbackOrInvalid(ip))
+    {
+        lastDeviceIp_ = ip;
         return;
     }
     lastDeviceIp_ = ip;
@@ -3752,7 +4208,7 @@ int ViewerApp::run(const std::vector<std::string> &files, double fps,
             else if (mode >= 0 && mode <= 2)
             {
                 std::string message;
-                const bool ok = applyBetaWorkMode(betaIp, mode, message);
+                const bool ok = applyBetaWorkMode(betaIp, mode, message, betaMgrdFirmware_);
                 logUi("Mode", ok ? "已设置 work_mode=" + std::to_string(mode)
                                  : "设置失败: " + message, ok);
                 if (ok)

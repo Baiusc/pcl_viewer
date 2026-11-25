@@ -212,6 +212,8 @@ private:
     std::uint8_t betaUnsupportedModes_ = 0;
     /// 设备 /mnt/mtdblock2/mode 的内容（histogram / point_cloud / point_cloud_gray）。
     std::string betaDeviceMode_;
+    /// 新版 ARM 固件（lidar_mgrd）标记：配置路径、重启方式、模式切换接口都与旧固件不同。
+    bool betaMgrdFirmware_ = false;
     /// 该 mode 下允许的 work_mode 位图（bit N 表示 work_mode N）；默认 1/2。
     std::uint8_t betaAllowedModes_ = static_cast<std::uint8_t>((1u << 1) | (1u << 2));
 
@@ -224,7 +226,10 @@ private:
     /// 重启设备端 you_see：先 kill 已有进程，再拉起，最后用 pidof 校验。
     void restartBetaProcess();
     void switchBetaMode();
-    static bool applyBetaWorkMode(const std::string &ip, int mode, std::string &message);
+    /// mgrdFirmware：连接时探测到的新固件标记。新固件上管理接口瞬时不可达时
+    /// 不应退回「改 INI + kill you_see」的旧流程（该流程在新固件上无效）。
+    static bool applyBetaWorkMode(const std::string &ip, int mode, std::string &message,
+                                  bool mgrdFirmware = false);
     static std::string betaSshPassword();
 
     vtkSmartPointer<vtkTextActor> hudActor_;

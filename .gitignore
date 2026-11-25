@@ -101,3 +101,8 @@ build-msys2/
 dist-msys2/
 # 发行打包暂存目录
 dist-release/
+build-ninja
+dist-local
+
+# 残留：cmd 里误写的 >nul 在外壳层落成了实体文件（Windows 保留名，删不掉也不该提交）
+nul

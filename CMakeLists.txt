@@ -134,6 +134,7 @@ target_link_libraries(cv_preprocess PUBLIC cv_core)
 add_library(cv_platform STATIC
     src/cloud_viewer/platform/AppSettings.cpp
     src/cloud_viewer/platform/FileDialog.cpp
+    src/cloud_viewer/platform/LidarServiceClient.cpp
     src/cloud_viewer/platform/NetworkSetup.cpp
     src/cloud_viewer/platform/ProcessRunner.cpp
     src/cloud_viewer/platform/RadarLauncher.cpp
@@ -141,7 +142,8 @@ add_library(cv_platform STATIC
 target_include_directories(cv_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(cv_platform PUBLIC cv_core Threads::Threads)
 if(WIN32)
-    target_link_libraries(cv_platform PUBLIC comdlg32 shell32 ole32)
+    # ws2_32：新版固件的 HTTP 管理接口（状态查询 / work_mode 切换）。
+    target_link_libraries(cv_platform PUBLIC comdlg32 shell32 ole32 ws2_32)
 endif()
 
 # ------------------------------------------------------------------------------
@@ -173,6 +175,26 @@ if(WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_RUNTIME_DLLS:cloud_viewer> $<TARGET_FILE_DIR:cloud_viewer>
         COMMAND_EXPAND_LISTS)
+endif()
+
+# 构建树只放中间产物；能直接运行/拷走的目录是 dist（默认 dist-local）。
+# 每次编译顺手同步，避免出现「build-ninja 里的 exe 比 dist-local 新」这种歧义。
+# 置空 -DCLOUD_VIEWER_DIST_DIR= 可关闭同步。
+set(CLOUD_VIEWER_DIST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dist-local" CACHE PATH
+    "构建后把 exe 与运行时 DLL 同步到该目录（空=不同步）")
+if(CLOUD_VIEWER_DIST_DIR)
+    add_custom_command(TARGET cloud_viewer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CLOUD_VIEWER_DIST_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:cloud_viewer> "${CLOUD_VIEWER_DIST_DIR}/cloud_viewer.exe"
+        COMMAND_EXPAND_LISTS
+        COMMENT "同步 cloud_viewer.exe -> ${CLOUD_VIEWER_DIST_DIR}")
+    if(WIN32)
+        add_custom_command(TARGET cloud_viewer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:cloud_viewer> "${CLOUD_VIEWER_DIST_DIR}"
+            COMMAND_EXPAND_LISTS)
+    endif()
 endif()
 
 # ------------------------------------------------------------------------------

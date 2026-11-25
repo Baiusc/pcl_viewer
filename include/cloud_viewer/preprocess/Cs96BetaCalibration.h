@@ -168,6 +168,10 @@ private:
     int faceOfScale(int scale) const;
 
     bool parseIni(const std::filesystem::path &path, std::string &error);
+    /// [standard_encoder] 的 angle_face_N 有两代量纲：旧包是 PA 计数（0~240），
+    /// 2026-11 起的新 ARM 包是 20 位原始编码器值（0~65535）。统一折算回 PA 计数，
+    /// 使后续几何公式、锚定表派生与写回只有一种表示。幂等，可重复调用。
+    void normalizeStandardEncoder();
     bool parseEncoderAngle(const std::filesystem::path &path, std::string &error);
     /// 读取 time_intervals.txt：每个粗刻度到下一个刻度的实测耗时（us，240 项）。
     /// 可接受 239 行（末格用均值补）、241 行（首行是 FPGA t0，自动丢弃）。
