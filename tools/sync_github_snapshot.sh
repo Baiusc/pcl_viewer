@@ -113,6 +113,15 @@ if [ "${#nested_skipped[@]}" -gt 0 ]; then
 	echo "  跳过 ${#nested_skipped[@]} 个嵌套子模块（本仓库只分析协议/控制源码，算法实现不进快照）: ${nested_skipped[*]}"
 fi
 
+# 嵌套子模块已跳过，子项目自带的 .gitmodules 在快照里没有对应目录，删掉避免误导读图
+# （只有仓库根目录的 .gitmodules 会被 git 解析，这里纯粹是清理，不影响 clone）
+for d in "${SUBMODULES[@]}"; do
+	if [ -f "$d/.gitmodules" ]; then
+		rm -f "$d/.gitmodules"
+		echo "  已移除 $d/.gitmodules（其嵌套子模块未内联）"
+	fi
+done
+
 # 3) 主仓库 .gitignore 有 *.jpg / *.pcd / data/ 这类规则，会误伤子项目源码，用 -f 强制入库
 for d in "${SUBMODULES[@]}"; do
 	if [ -d "$d" ]; then
