@@ -23,14 +23,17 @@ SUBMODULES=(lidar_sdk/you_see_arm lidar_sdk/yscloudscene)
 
 PUSH=0
 FULL=0
+WITH_NESTED=0
 for arg in "$@"; do
 	case "$arg" in
 	--push) PUSH=1 ;;
 	--full) FULL=1 ;;
+	--with-nested) WITH_NESTED=1 ;;
 	-h | --help)
-		echo "用法: $0 [--push] [--full]"
-		echo "  --push  生成后推送到 \$GH_REMOTE/$DST_BRANCH（默认 github）"
-		echo "  --full  内联全部入库文件（含数据/PDF/压缩包，约 68M）；默认只内联源码，约 25M"
+		echo "用法: $0 [--push] [--full] [--with-nested]"
+		echo "  --push         生成后推送到 \$GH_REMOTE/$DST_BRANCH（默认 github）"
+		echo "  --full         内联全部入库文件（含数据/PDF/压缩包，约 68M）；默认只内联源码，约 25M"
+		echo "  --with-nested  连同 you_see_arm 的嵌套子模块一起内联（默认跳过，见下方说明）"
 		exit 0
 		;;
 	*)
@@ -85,12 +88,15 @@ for d in "${SUBMODULES[@]}"; do
 		fi
 		src="$ROOT/$d/$f"
 		if [ -n "${nested[$f]:-}" ]; then
-			if [ -d "$src" ] && [ -n "$(ls -A "$src" 2>/dev/null)" ]; then
+			# 嵌套子模块默认一律跳过：lidar_sdk 在本项目里只用于分析 SDK 的协议与控制流程，
+			# 不需要算法实现细节（algo/calib_reflectivity、algo/spot_slope_alog、cc、driver）。
+			# 确实需要时加 --with-nested 递归展开。
+			if [ "$WITH_NESTED" -eq 1 ] && [ -d "$src" ] && [ -n "$(ls -A "$src" 2>/dev/null)" ]; then
 				mkdir -p "$d/$f"
 				rsync -a --exclude=.git "$src/" "$d/$f/"
 				count=$((count + 1))
 			else
-				nested_skipped+=("$d/$f")
+				nested_skipped+=("$f")
 			fi
 			continue
 		fi
@@ -104,8 +110,7 @@ for d in "${SUBMODULES[@]}"; do
 done
 
 if [ "${#nested_skipped[@]}" -gt 0 ]; then
-	echo "  注意: 以下嵌套子模块本地未初始化，快照里会被跳过（需要时在 you_see_arm 里 git submodule update --init）"
-	printf '    - %s\n' "${nested_skipped[@]}"
+	echo "  跳过 ${#nested_skipped[@]} 个嵌套子模块（本仓库只分析协议/控制源码，算法实现不进快照）: ${nested_skipped[*]}"
 fi
 
 # 3) 主仓库 .gitignore 有 *.jpg / *.pcd / data/ 这类规则，会误伤子项目源码，用 -f 强制入库
