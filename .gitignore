@@ -93,7 +93,7 @@ build_gdb/
 data/
 # 忽略 python 目录下所有包含 round 的 py 文件
 python/*_round*.py
-lidar_sdk/
+
 build-rel/
 # Windows/MSYS2 本地构建与运行时部署目录（约 160MB，由 build-win-msys2.sh 重建）
 build-msys2/
@@ -101,3 +101,6 @@ build-msys2/
 dist-msys2/
 # 发行打包暂存目录
 dist-release/
+# 第三方雷达 SDK：单体几十~几百 MB、随版本变动，不入库（各机器本地放置）
+/lidar_sdk/FsLidar_FL6031_SDK/
+/lidar_sdk/FsLidar_SDK-C_20260611-200248-18bcc7c2-15491_FL6532/
